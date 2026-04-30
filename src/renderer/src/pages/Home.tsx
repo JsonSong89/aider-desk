@@ -558,7 +558,7 @@ export const Home = () => {
             <ExtensionComponentWrapper placement="header-right" />
             {showUpdateIcon && (
               <IconButton
-                icon={<MdUpload className="h-5 w-5 text-text-primary animate-pulse animate-slow" />}
+                icon={<MdUpload className="h-5 w-5 text-text-primary " />}
                 tooltip={getUpdateTooltip()}
                 onClick={handleOpenAboutSettings}
                 className="px-4 py-2 hover:bg-bg-tertiary-emphasis transition-colors duration-200"

@@ -23,13 +23,13 @@ export const loadAnthropicModels = async (profile: ProviderProfile, settings: Se
   const provider = profile.provider;
   const apiKey = provider.apiKey || '';
   const apiKeyEnv = getEffectiveEnvironmentVariable('ANTHROPIC_API_KEY', settings);
-
+  const apiKeyBase = getEffectiveEnvironmentVariable('ANTHROPIC_API_BASE', settings)?.value || 'https://api.anthropic.com/v1';
   if (!apiKey && !apiKeyEnv?.value) {
     return { models: [], success: false };
   }
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/models', {
+    const response = await fetch(`${apiKeyBase}/models`, {
       headers: {
         'x-api-key': apiKey || apiKeyEnv?.value || '',
         'anthropic-version': '2023-06-01',
@@ -96,9 +96,10 @@ export const createAnthropicLlm = (profile: ProviderProfile, model: Model, setti
   if (!apiKey) {
     throw new Error('Anthropic API key is required in Providers settings or Aider environment variables (ANTHROPIC_API_KEY)');
   }
-
+  const baseURL = getEffectiveEnvironmentVariable('ANTHROPIC_API_BASE', settings)?.value || 'https://api.anthropic.com/v1';
   const anthropicProvider = createAnthropic({
     apiKey,
+    baseURL,
     headers: profile.headers,
   });
   return anthropicProvider(model.id);
