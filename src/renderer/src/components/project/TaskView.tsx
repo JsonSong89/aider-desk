@@ -273,6 +273,9 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
     const handleModeChange = useCallback(
       (mode: Mode) => {
         updateTask(task.id, { currentMode: mode });
+        if (mode === 'architect') {
+          //setAiderModelsData(task.id, {mainModel:"hono/editor"});
+        }
       },
       [updateTask, task.id],
     );
