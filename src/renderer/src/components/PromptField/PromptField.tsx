@@ -798,10 +798,10 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
             run: toggleVoice,
           },
           {
-            key: 'Shift-Enter',
+            key: 'Enter',
             preventDefault: true,
             run: (view) => {
-              // On desktop, Shift+Enter inserts a new line
+              // Enter inserts a new line (for CJK input method compatibility)
               const cursorPos = view.state.selection.main.head;
               view.dispatch({
                 changes: { from: cursorPos, insert: '\n' },
@@ -811,15 +811,22 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
             },
           },
           {
-            key: 'Enter',
+            key: 'Shift-Enter',
+            preventDefault: true,
             run: (view) => {
-              // On mobile, Enter inserts a new line (default behavior)
-              // On desktop, Enter submits the prompt
-              if (isMobile) {
-                return false; // Allow default behavior (new line)
-              }
-
-              // Desktop behavior: submit or handle special cases
+              // Shift+Enter also inserts a new line
+              const cursorPos = view.state.selection.main.head;
+              view.dispatch({
+                changes: { from: cursorPos, insert: '\n' },
+                selection: { anchor: cursorPos + 1 },
+              });
+              return true;
+            },
+          },
+          {
+            key: 'Mod-Enter',
+            run: (view) => {
+              // Ctrl+Enter (or Cmd+Enter on macOS) submits the prompt
               if (question && selectedAnswer) {
                 const answers = question.answers?.map((answer) => answer.shortkey.toLowerCase()) || ANSWERS;
                 if (answers.includes(selectedAnswer.toLowerCase())) {
