@@ -82,11 +82,21 @@
       "capabilities": ["context"]
     },
     {
+      "id": "external-skills",
+      "name": "External Skills",
+      "description": "Includes skill files from Cursor, Claude Code, and other external AI coding assistants",
+      "folder": "external-skills",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": ["context"]
+    },
+    {
       "id": "sound-notification",
       "name": "Sound Notification",
-      "description": "Plays a 'Jobs Done' sound when a prompt finishes",
-      "file": "sound-notification.ts",
-      "type": "single",
+      "description": "Plays sound notifications using packs from og-packs",
+      "folder": "sound-notification",
+      "type": "folder",
+      "hasDependencies": false,
       "capabilities": ["notifications"]
     },
     {
@@ -233,6 +243,15 @@
       "capabilities": ["metrics"]
     },
     {
+      "id": "verifier",
+      "name": "Verifier",
+      "description": "Adds a 'Proceed & Verify' button that starts implementation with automatic review against the plan, with configurable max retries",
+      "folder": "verifier",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": ["workflows", "ui"]
+    },
+    {
       "id": "bmad",
       "name": "BMAD Method",
       "description": "Provides BMAD mode with structured workflows for planning, designing, and implementing software projects",
@@ -240,6 +259,15 @@
       "type": "folder",
       "hasDependencies": true,
       "capabilities": ["modes", "ui"]
+    },
+    {
+      "id": "cursor-sdk",
+      "name": "Cursor SDK",
+      "description": "Integrates the Cursor SDK as a provider with cursor/ prefix, overriding the agent loop to run Cursor agents",
+      "folder": "cursor-sdk",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": ["providers", "agent-loop"]
     }
   ]
 }

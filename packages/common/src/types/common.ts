@@ -322,11 +322,12 @@ export const ProjectSettingsSchema = z.object({
   reasoningEffort: z.string().optional(),
   thinkingTokens: z.string().optional(),
   currentMode: z.string(),
-  contextCompactingThreshold: z.number().optional(),
   weakModelLocked: z.boolean().optional(),
   autoApproveLocked: z.boolean().optional(),
   updatedFilesGroupMode: z.enum(['grouped', 'flat']).default('flat'),
   disabledRuleFiles: z.array(z.string()).default([]),
+  contextSidebarSectionsOrder: z.array(z.string()).default([]),
+  contextSidebarSectionsHidden: z.array(z.string()).default([]),
 });
 
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;
@@ -418,9 +419,9 @@ export interface AgentProfile {
   provider: string;
   model: string;
   maxIterations: number;
-  maxTokens?: number; // Optional: overrides model maxOutputTokens when set
+  maxTokens?: number; // overrides model maxOutputTokens when set
   minTimeBetweenToolCalls: number; // in milliseconds
-  temperature?: number; // Optional: overrides model temperature when set
+  temperature?: number; // overrides model temperature when set
   enabledServers: string[];
   toolApprovals: Record<string, ToolApprovalState>;
   toolSettings: Record<string, ToolSettings>;
@@ -438,6 +439,9 @@ export interface AgentProfile {
   subagent: SubagentConfig;
   isSubagent?: boolean; // flag to indicate if this profile is being used as a subagent
   ruleFiles?: string[]; // Array of absolute paths to rule files for this agent profile
+  autoCompactThresholdPercentage?: number; // overrides global auto-compact threshold percentage when set
+  autoCompactThresholdTokens?: number; // overrides global auto-compact threshold tokens when set
+  autoCompactionType?: ContextCompactionType; // overrides global compaction type when set
 }
 
 export interface EnvironmentVariable {
@@ -549,6 +553,7 @@ export enum MemoryEmbeddingProvider {
 export enum ContextCompactionType {
   Compact = 'compact',
   Handoff = 'handoff',
+  Smart = 'smart',
 }
 
 export interface TaskSettings {
@@ -556,7 +561,7 @@ export interface TaskSettings {
   autoGenerateTaskName: boolean;
   showTaskStateActions: boolean;
   worktreeSymlinkFolders: string[];
-  contextCompactingThreshold: number;
+  contextCompactingThreshold: { percentage: number; tokens: number };
   contextCompactionType: ContextCompactionType;
   taskNameModel?: string | null;
   taskStateModel?: string | null;
@@ -841,7 +846,7 @@ export const TaskDataSchema = z.object({
   reasoningEffort: z.string().optional(),
   thinkingTokens: z.string().optional(),
   currentMode: z.string().optional(),
-  contextCompactingThreshold: z.number().optional(),
+  contextCompactingThresholdTokens: z.number().optional(),
   weakModelLocked: z.boolean().optional(),
   handoff: z.boolean().optional(),
   lastAgentProviderMetadata: z.unknown().optional(),
@@ -954,6 +959,7 @@ export interface CustomCommand extends Command {
   template: string;
   includeContext?: boolean;
   autoApprove?: boolean;
+  skills?: string[];
 }
 
 export interface TerminalData {
@@ -1079,19 +1085,6 @@ export interface ModalOverlayUrlData {
   url: string;
 }
 
-// Aider connector status (covers both Python installation and per-task connector lifecycle)
-export type AiderConnectorState =
-  | 'idle'
-  | 'checking-uv'
-  | 'downloading-uv'
-  | 'creating-venv'
-  | 'installing-packages'
-  | 'setting-up-connector'
-  | 'setting-up-mcp'
-  | 'starting-connector'
-  | 'ready'
-  | 'failed';
-
 export type AiderConnectorStatus =
   | { state: 'idle' }
   | { state: 'checking-uv' }
@@ -1118,5 +1111,12 @@ export interface SkillDefinition {
   location: SkillLocation;
   dirPath?: string;
   content?: string;
+  activated?: boolean;
+}
+
+export interface SkillsUpdatedData {
+  baseDir: string;
+  taskId: string;
+  skills: SkillDefinition[];
 }
 

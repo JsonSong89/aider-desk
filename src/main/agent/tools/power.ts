@@ -1,8 +1,8 @@
 import fs from 'fs/promises';
-import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import { ChildProcess } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 
 import treeKill from 'tree-kill';
 import { tool, type ToolSet } from 'ai';
@@ -22,8 +22,6 @@ import {
   POWER_TOOL_SEMANTIC_SEARCH as TOOL_SEMANTIC_SEARCH,
   TOOL_GROUP_NAME_SEPARATOR,
 } from '@common/tools';
-// @ts-expect-error istextorbinary is not typed properly
-import { isBinary } from 'istextorbinary';
 import { isURL } from '@common/utils';
 
 import { ApprovalManager } from './approval-manager';
@@ -34,6 +32,7 @@ import logger from '@/logger';
 import { filterIgnoredFiles, scrapeWeb } from '@/utils';
 import { isAbortError, isFileNotFoundError } from '@/utils/errors';
 import { getShellCommandArgs, getShellPath } from '@/utils/shell';
+import { expandTilde, readFileContent, truncateToolResult } from '@/agent/utils';
 
 /**
  * File lock map to prevent race conditions when multiple edits target the same file.
@@ -58,54 +57,6 @@ const withFileLock = <T>(filePath: string, operation: () => Promise<T>): Promise
     }
   });
   return newLock;
-};
-
-/**
- * Expands a tilde (~) at the beginning of a path to the user's home directory.
- * @param filePath - The file path to expand
- * @returns The expanded path with ~ replaced by the home directory
- */
-const expandTilde = (filePath: string): string => {
-  if (filePath.startsWith('~/') || filePath === '~') {
-    return filePath.replace('~', os.homedir());
-  }
-  return filePath;
-};
-
-/**
- * Reads a file and returns its content with optional line numbering and line range.
- * @param absolutePath - The absolute path to the file
- * @param withLines - Whether to return the file content with line numbers in format "lineNumber|content"
- * @param lineOffset - The starting line number (0-based) to begin reading from
- * @param lineLimit - The maximum number of lines to read
- * @returns The file content as a string, formatted according to the parameters
- * @throws Error if the file is binary or cannot be read
- */
-export const readFileContent = async (absolutePath: string, withLines = false, lineOffset = 0, lineLimit = 1000): Promise<string> => {
-  const fileContentBuffer = await fs.readFile(absolutePath);
-
-  if (isBinary(absolutePath, fileContentBuffer)) {
-    throw new Error('Binary files cannot be read.');
-  }
-
-  const fileContent = fileContentBuffer.toString('utf8');
-  const lines = fileContent.split('\n');
-  const totalLines = lines.length;
-
-  const startIndex = Math.max(0, lineOffset);
-  const endIndex = Math.min(totalLines, startIndex + lineLimit);
-  let limitedLines = lines.slice(startIndex, endIndex);
-
-  if (withLines) {
-    limitedLines = limitedLines.map((line, index) => `${startIndex + index + 1}|${line}`);
-  }
-
-  if (endIndex < totalLines) {
-    limitedLines.push('...');
-    limitedLines.push(`Total lines in the file: ${totalLines}`);
-  }
-
-  return limitedLines.join('\n');
 };
 
 export const createPowerToolset = (task: Task, profile: AgentProfile, promptContext?: PromptContext, abortSignal?: AbortSignal): ToolSet => {
@@ -552,7 +503,46 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         if (results.length === 0) {
           return `No matches found for pattern '${searchTerm}' in files matching '${filePattern}'.`;
         }
-        return results;
+
+        // Group results by file path
+        const grouped: Record<string, typeof results> = {};
+        for (const r of results) {
+          if (!grouped[r.filePath]) {
+            grouped[r.filePath] = [];
+          }
+          grouped[r.filePath].push(r);
+        }
+
+        const lines: string[] = [];
+        lines.push(`## Grep Results: \`${searchTerm}\` in \`${filePattern}\` (${results.length} matches)`);
+        lines.push('');
+
+        for (const [filePath, matches] of Object.entries(grouped)) {
+          lines.push(`### ${filePath} (${matches.length} ${matches.length === 1 ? 'match' : 'matches'})`);
+          for (const match of matches) {
+            const escapedContent = match.lineContent.replace(/`/g, '\\`');
+            lines.push(`- **L${match.lineNumber}:** \`${escapedContent}\``);
+            if (match.context && match.context.length > 0) {
+              lines.push('  ```');
+              for (const ctxLine of match.context) {
+                lines.push(`  ${ctxLine}`);
+              }
+              lines.push('  ```');
+            }
+          }
+          lines.push('');
+        }
+
+        const notices: string[] = [];
+        if (results.length >= maxResults) {
+          notices.push(`${maxResults} matches limit reached. Use maxResults=${maxResults * 2} for more, or refine pattern`);
+        }
+        if (notices.length > 0) {
+          lines.push('---');
+          lines.push(`[${notices.join('. ')}]`);
+        }
+
+        return lines.join('\n');
       } catch (error) {
         if (isAbortError(error)) {
           return 'Operation was cancelled by user.';
@@ -640,14 +630,17 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           }
         };
 
-        const resolveWithResult = () => {
+        const resolveWithResult = async () => {
           if (isResolved) {
             return;
           }
           isResolved = true;
           cleanup();
 
-          resolve({ stdout, stderr, exitCode });
+          const truncatedStdout = await truncateToolResult(stdout, 1000, 50, 10000);
+          const truncatedStderr = await truncateToolResult(stderr, 1000, 50, 10000);
+
+          resolve({ stdout: truncatedStdout, stderr: truncatedStderr, exitCode });
         };
 
         abortListener = () => {
@@ -662,7 +655,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           // Use the standard resolution method with proper type
           stderr = 'Operation was cancelled by user.';
           exitCode = 130; // Standard cancel exit code (128 + SIGINT=2)
-          resolveWithResult();
+          void resolveWithResult();
         };
 
         // Listen for abort signal
@@ -688,7 +681,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
             }
             stderr = `Error: Command timed out after ${timeout}ms. Consider increasing the timeout parameter.`;
             exitCode = 124;
-            resolveWithResult();
+            void resolveWithResult();
           }, timeout);
 
           childProcess.stdout?.on('data', (data: Buffer) => {
@@ -739,7 +732,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
             if (!isResolved) {
               stderr = error.message;
               exitCode = 1;
-              resolveWithResult();
+              void resolveWithResult();
             }
           });
 
@@ -752,14 +745,14 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
               } else {
                 exitCode = 1;
               }
-              resolveWithResult();
+              void resolveWithResult();
             }
           });
         } catch (error: unknown) {
           if (!isResolved) {
             stderr = error instanceof Error ? error.message : String(error);
             exitCode = 1;
-            resolveWithResult();
+            void resolveWithResult();
           }
         }
       });

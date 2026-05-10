@@ -128,9 +128,7 @@ export class Project {
     }
 
     const projectSettings = this.getProjectSettings();
-    const taskSettings = this.store.getSettings().taskSettings;
     const taskData: Partial<TaskData> = {
-      contextCompactingThreshold: taskSettings.contextCompactingThreshold,
       autoApprove: projectSettings.autoApproveLocked ? true : initialTaskData.autoApprove,
       ...initialTaskData,
     };
@@ -157,7 +155,15 @@ export class Project {
     return task.task;
   }
 
-  private async prepareTask(taskId: string = uuidv4(), initialTaskData?: Partial<TaskData>) {
+  private generateShortTaskId(): string {
+    let id: string;
+    do {
+      id = uuidv4().substring(0, 8);
+    } while (this.tasks.has(id));
+    return id;
+  }
+
+  private async prepareTask(taskId: string = this.generateShortTaskId(), initialTaskData?: Partial<TaskData>) {
     const task = new Task(
       this,
       taskId,
@@ -366,6 +372,10 @@ export class Project {
 
   public getAgentProfiles(): AgentProfile[] {
     return this.agentProfileManager.getProjectProfiles(this);
+  }
+
+  public resolveAgentProfile(id: string): AgentProfile | null {
+    return this.agentProfileManager.resolveAgentProfile(id);
   }
 
   /**

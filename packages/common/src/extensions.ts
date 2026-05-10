@@ -211,7 +211,6 @@ export type UIComponentPlacement =
  * - React: React object with hooks (useState, useEffect, useCallback, useMemo, useRef, etc.)
  * - task: Current TaskData
  * - projectDir: Project directory path
- * - api: ApplicationAPI reference
  * - mode: Current mode string
  *
  * @example
@@ -549,6 +548,14 @@ export interface AiderPromptStartedEvent {
 /** Event payload for aider prompt finished events */
 export interface AiderPromptFinishedEvent {
   responses: ResponseCompletedData[];
+}
+
+/** Event payload for interrupt events */
+export interface InterruptedEvent {
+  /** Optional interrupt ID for targeting a specific subagent or conflict-resolution agent */
+  interruptId?: string;
+  /** Set to true by extension to skip the default interrupt cleanup */
+  blocked?: boolean;
 }
 
 /** Event payload for before commit events */
@@ -1620,6 +1627,15 @@ export interface Extension {
    * @returns void or partial event to modify reminders content
    */
   onImportantReminders?(event: ImportantRemindersEvent, context: ExtensionContext): Promise<void | Partial<ImportantRemindersEvent>>;
+
+  // Interrupt Events
+
+  /**
+   * Called when a response is interrupted (e.g., user clicks Stop)
+   * Set event.blocked = true to skip the default interrupt cleanup — the extension handles cancellation itself
+   * @returns void or partial event to modify interrupt behavior
+   */
+  onInterrupted?(event: InterruptedEvent, context: ExtensionContext): Promise<void | Partial<InterruptedEvent>>;
 
   // Tool Events
 

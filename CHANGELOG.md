@@ -2,6 +2,25 @@
 
 ## [UNRELEASED]
 
+- added onInterrupted extension hook to allow blocking or customizing interrupt behavior
+- added token-based truncation to tool results
+- fixed 'process is not defined' error in renderer
+- added flexible agent profile resolution and improved task creation tool
+- added support for activating skills in custom commands
+- correctly using the partial file content when using read_file tool with offset and limit
+- added support for both percentage and token count thresholds for context compaction
+- added Smart context compation type
+- shortened task ID for better management
+- added task state filtering to sidebar
+- added auto-compact overrides for agent profiles
+- added retry logic for network errors during agent streaming
+- updated loading of model token limits from openai-compatible providers
+- added worker pool for diff rendering for better Updated Files diff viewer loading performance
+- correctly getting the model parameters and triggering compaction for custom providers
+- added support for AIDER_DESK_DISABLE_MENU=true to disable Electron app menu
+
+## [0.64.0]
+
 - added onBeforeCommit and onAfterCommit extension hooks for commit lifecycle
 - added support for extension-provided skills
 - using baseCommit when rebasing the worktree on different branch
@@ -10,6 +29,11 @@
 - added support for redoing any user prompt
 - initializing symlink folders on new task when worktree mode is set
 - changed order of the buttons in Switch To Local confirm dialog
+- optimized grep tool output to use markdown format
+- added tool output truncation for bash power tool and MCP tools
+- promoting right sidebar to Workspace sidebar
+- added Skills to Workspace sidebar and support for manually activating/deactivating them
+- added ability to reorder and hide context sidebar sections
 
 ## [0.63.0]
 

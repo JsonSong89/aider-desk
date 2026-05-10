@@ -128,7 +128,6 @@ type ExtensionsHookResult = {
 export const useExtensions = (): ExtensionsHookResult => {
   const { projectDir, task, agentProfile } = useExtensionsContext();
   const { models, providers } = useModelProviders();
-
   const componentProps = useMemo<UIComponentProps>(
     () => ({
       projectDir,

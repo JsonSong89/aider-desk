@@ -34,6 +34,7 @@ import {
   TokensInfoData,
   ToolData,
   UpdatedFilesUpdatedData,
+  SkillsUpdatedData,
   UserMessageData,
   VersionsInfo,
   WorktreeIntegrationStatusUpdatedData,
@@ -104,6 +105,10 @@ const api: ApplicationAPI = {
   scrapeWeb: (baseDir, taskId, url, filePath) => ipcRenderer.invoke('scrape-web', baseDir, taskId, url, filePath),
   initProjectRulesFile: (baseDir, taskId, args) => ipcRenderer.invoke('init-project-rules-file', baseDir, taskId, args),
 
+  getSkills: (baseDir, taskId) => ipcRenderer.invoke('get-skills', baseDir, taskId),
+  activateSkill: (baseDir, taskId, skillName) => ipcRenderer.invoke('activate-skill', baseDir, taskId, skillName),
+  deactivateSkill: (baseDir, taskId, skillName) => ipcRenderer.invoke('deactivate-skill', baseDir, taskId, skillName),
+
   getTodos: (baseDir, taskId) => ipcRenderer.invoke('get-todos', baseDir, taskId),
   addTodo: (baseDir, taskId, name) => ipcRenderer.invoke('add-todo', baseDir, taskId, name),
   updateTodo: (baseDir, taskId, name, updates) => ipcRenderer.invoke('update-todo', baseDir, taskId, name, updates),
@@ -173,6 +178,7 @@ const api: ApplicationAPI = {
   removeMessage: (baseDir, taskId, messageId) => ipcRenderer.invoke('remove-message', baseDir, taskId, messageId),
   removeMessagesUpTo: (baseDir, taskId, messageId) => ipcRenderer.invoke('remove-messages-up-to', baseDir, taskId, messageId),
   compactConversation: (baseDir, taskId, mode, customInstructions) => ipcRenderer.invoke('compact-conversation', baseDir, taskId, mode, customInstructions),
+  smartCompactConversation: (baseDir, taskId) => ipcRenderer.invoke('smart-compact-conversation', baseDir, taskId),
   handoffConversation: (baseDir, taskId, focus) => ipcRenderer.invoke('handoff-conversation', baseDir, taskId, focus),
   runCodeChangeRequests: (baseDir, taskId, requests, createNewTask?) => ipcRenderer.send('run-code-change-requests', baseDir, taskId, requests, createNewTask),
   setZoomLevel: (level) => ipcRenderer.invoke('set-zoom-level', level),
@@ -253,6 +259,19 @@ const api: ApplicationAPI = {
     ipcRenderer.on('updated-files-updated', listener);
     return () => {
       ipcRenderer.removeListener('updated-files-updated', listener);
+    };
+  },
+
+  addSkillsUpdatedListener: (baseDir, taskId, callback) => {
+    const listener = (_: Electron.IpcRendererEvent, data: SkillsUpdatedData) => {
+      if (!compareBaseDirs(data.baseDir, baseDir) || data.taskId !== taskId) {
+        return;
+      }
+      callback(data);
+    };
+    ipcRenderer.on('skills-updated', listener);
+    return () => {
+      ipcRenderer.removeListener('skills-updated', listener);
     };
   },
 

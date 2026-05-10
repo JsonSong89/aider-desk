@@ -313,6 +313,16 @@ export class ContextManager {
     return this.removeByToolCallId(messageId);
   }
 
+  removeMessagesByIds(ids: string[]): void {
+    for (const id of ids) {
+      const index = this.messages.findIndex((msg) => msg.id === id);
+      if (index !== -1) {
+        this.messages.splice(index, 1);
+      }
+    }
+    this.autosave();
+  }
+
   private removeMessageByIndex(index: number, messageId: string): string[] {
     const removedIds: string[] = [];
     removedIds.push(messageId);
@@ -644,6 +654,37 @@ export class ContextManager {
     }
   }
 
+  /**
+   * Creates a backup of the current context.json file before a destructive operation
+   * (e.g., smart compaction). Backups are named context.backup.001.json, context.backup.002.json, etc.
+   * For debugging purposes only.
+   */
+  async backupContext(): Promise<void> {
+    try {
+      const dir = path.dirname(this.storagePath);
+      const files = await fs.readdir(dir);
+      const backupPattern = /^context\.backup\.(\d+)\.json$/;
+      let maxNumber = 0;
+      for (const file of files) {
+        const match = backupPattern.exec(file);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxNumber) {
+            maxNumber = num;
+          }
+        }
+      }
+
+      const nextNumber = String(maxNumber + 1).padStart(3, '0');
+      const backupPath = path.join(dir, `context.backup.${nextNumber}.json`);
+      await fs.copyFile(this.storagePath, backupPath);
+
+      logger.debug(`Task context backed up to ${backupPath}`, { taskId: this.taskId });
+    } catch (error) {
+      logger.error('Failed to backup task context:', { error, taskId: this.taskId });
+    }
+  }
+
   private async cleanupContext(): Promise<void> {
     // Filter out files that no longer exist
     const existingFiles: ContextFile[] = [];
@@ -741,9 +782,9 @@ export class ContextManager {
     await this.cleanupContext();
   }
 
-  async loadMessages(messages: ContextMessage[]): Promise<void> {
+  async loadMessages(messages: ContextMessage[], updateTaskState = true): Promise<void> {
     // Clear all current messages
-    await this.task.clearContext(false, false);
+    await this.task.clearContext(false, false, updateTaskState);
 
     this.messages = messages;
 

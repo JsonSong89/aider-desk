@@ -235,6 +235,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     return await eventsHandler.compactConversation(baseDir, taskId, mode, customInstructions);
   });
 
+  ipcMain.handle('smart-compact-conversation', async (_event, baseDir: string, taskId: string) => {
+    return await eventsHandler.smartCompactConversation(baseDir, taskId);
+  });
+
   ipcMain.handle('handoff-conversation', async (_event, baseDir: string, taskId: string, focus?: string) => {
     return await eventsHandler.handoffConversation(baseDir, taskId, focus);
   });
@@ -366,6 +370,18 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle('init-project-rules-file', async (_, baseDir: string, taskId: string, args?: string) => {
     return await eventsHandler.initProjectRulesFile(baseDir, taskId, args);
+  });
+
+  ipcMain.handle('get-skills', async (_, baseDir: string, taskId: string) => {
+    return await eventsHandler.getSkills(baseDir, taskId);
+  });
+
+  ipcMain.handle('activate-skill', async (_, baseDir: string, taskId: string, skillName: string) => {
+    await eventsHandler.activateSkill(baseDir, taskId, skillName);
+  });
+
+  ipcMain.handle('deactivate-skill', async (_, baseDir: string, taskId: string, skillName: string) => {
+    await eventsHandler.deactivateSkill(baseDir, taskId, skillName);
   });
 
   ipcMain.handle('get-todos', async (_, baseDir: string, taskId: string) => {
