@@ -216,6 +216,7 @@ src/
       index.ts
       langfuse.ts
       open-telemetry.ts
+      posthog.ts
       telemetry-manager.ts
     terminal/
       index.ts
@@ -1380,6 +1381,8 @@ langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
 langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
 langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 ⋮----
+posthog_api_key = os.getenv("POSTHOG_API_KEY")
+⋮----
 # Set OpenRouter site and app name
 
 ================
@@ -2182,9 +2185,8 @@ import {
   type TypedToolResult,
   wrapLanguageModel,
 } from 'ai';
-import { delay, extractProviderModel, extractServerNameToolName } from '@common/utils';
+import { delay, extractProviderModel, extractServerNameToolName, extractTextContent } from '@common/utils';
 import { LlmProviderName } from '@common/agent';
-import { countTokens } from 'gpt-tokenizer/model/gpt-4o';
 import { Client as McpSdkClient } from '@modelcontextprotocol/sdk/client/index.js';
 // @ts-expect-error istextorbinary is not typed properly
 import { isBinary } from 'istextorbinary';
@@ -2210,6 +2212,7 @@ import { MCP_CLIENT_TIMEOUT, McpConnector, McpManager } from './mcp-manager';
 import { ApprovalManager } from './tools/approval-manager';
 import {
   ANSWER_RESPONSE_START_TAG,
+  estimateMessageTokens,
   extractPromptContextFromToolResult,
   findLastUserMessage,
   isNetworkError,
@@ -2306,7 +2309,7 @@ return; // Do not add the tool if it's never approved
 ⋮----
 // Add extension tools
 ⋮----
-private wrapToolsWithHooks(task: Task, toolSet: ToolSet, abortSignal?: AbortSignal, promptContext?: PromptContext): ToolSet
+private wrapToolsWithHooks(task: Task, profile: AgentProfile, toolSet: ToolSet, abortSignal?: AbortSignal, promptContext?: PromptContext): ToolSet
 ⋮----
 // Use modified input from extension if provided
 ⋮----
@@ -2380,6 +2383,7 @@ async runAgent(
     systemPrompt?: string,
     includeInContext = true,
     abortSignal?: AbortSignal,
+    images?: string[],
 ): Promise<ContextMessage[]>
 ⋮----
 // Store resolved provider for use in retry logic
@@ -2500,9 +2504,6 @@ async estimateTokens(task: Task, profile: AgentProfile): Promise<number>
 inputSchema: tool.inputSchema ? tool.inputSchema : '', // Get Zod schema description
 ⋮----
 // Add tool definitions and system prompt to the beginning
-⋮----
-role: msg.role === 'tool' ? 'user' : msg.role, // Map 'tool' role to user message as gpt-tokenizer does not support tool messages
-content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content), // Handle potential non-string content if necessary
 ⋮----
 interrupt()
 ⋮----
@@ -2944,6 +2945,12 @@ export const readFileContent = async (
 export const truncateToolResult = async (content: string, maxLines = 1000, maxSizeKB = 50, maxTokens = 50000): Promise<string> =>
 ⋮----
 export const isNetworkError = (error: unknown): boolean =>
+⋮----
+type CountableMessage = { role: string; content: unknown };
+⋮----
+const extractToolResultText = (output: unknown): string =>
+⋮----
+export const estimateMessageTokens = (messages: CountableMessage[]): number =>
 
 ================
 File: src/main/connector/connector-manager.ts
@@ -3283,6 +3290,7 @@ import {
   CommandsData,
   ExtensionUIRefreshData,
   ModalOverlayUrlData,
+  ContextInfoData,
 } from '@common/types';
 ⋮----
 import type { WindowManager } from '@/window-manager';
@@ -3306,6 +3314,8 @@ constructor(private readonly windowManager?: WindowManager)
 sendProjectStarted(baseDir: string): void
 ⋮----
 sendClearTask(baseDir: string, taskId: string, clearMessages: boolean, clearFiles: boolean): void
+⋮----
+sendContextInfoUpdated(data: ContextInfoData): void
 ⋮----
 // File management events
 sendFileAdded(baseDir: string, taskId: string, file: ContextFile): void
@@ -7327,6 +7337,8 @@ registerRoutes(router: Router): void
 ⋮----
 // Smart compact conversation
 ⋮----
+// Undo context change
+⋮----
 // Handoff conversation
 ⋮----
 // Run code change requests
@@ -8359,6 +8371,10 @@ constructor(
 ⋮----
 // Task-specific storage path - single context per task
 ⋮----
+hasUndoSnapshot(): boolean
+⋮----
+undoContextChange(): ContextMessage[] | null
+⋮----
 public enableAutosave()
 ⋮----
 public disableAutosave()
@@ -8378,10 +8394,10 @@ async addContextFile(contextFile: ContextFile): Promise<ContextFile[]>
 private async resolveContextFilePath(relativePath: string): Promise<string | null>
 ⋮----
 /**
-   * Checks whether a resolved absolute path matches any already-added context file.
+   * Finds an already-added context file matching the given resolved absolute path, if any.
    * Accounts for files that may have been resolved from either taskDir or projectDir.
    */
-private isContextFileAlreadyAdded(absolutePath: string): boolean
+private findExistingContextFile(absolutePath: string): ContextFile | undefined
 ⋮----
 dropContextFile(filePath: string): ContextFile[]
 ⋮----
@@ -8399,7 +8415,7 @@ async getContextMessages(): Promise<ContextMessage[]>
 ⋮----
 clearContextFiles(save = true)
 ⋮----
-clearMessages(save = true)
+clearMessages(save = true, createSnapshot = true)
 ⋮----
 removeMessageById(messageId: string): string[]
 ⋮----
@@ -8619,7 +8635,7 @@ import {
   UserMessageData,
   WorkingMode,
 } from '@common/types';
-import { extractProviderModel, extractServerNameToolName, extractTextContent, fileExists, parseUsageReport } from '@common/utils';
+import { extractImagesFromContent, extractProviderModel, extractServerNameToolName, extractTextContent, fileExists, parseUsageReport } from '@common/utils';
 import { COMPACT_CONVERSATION_AGENT_PROFILE, CONFLICT_RESOLUTION_PROFILE, HANDOFF_AGENT_PROFILE, INIT_PROJECT_AGENTS_PROFILE } from '@common/agent';
 import { SKILLS_TOOL_ACTIVATE_SKILL, SKILLS_TOOL_GROUP_NAME, TOOL_GROUP_NAME_SEPARATOR } from '@common/tools';
 import { v4 as uuidv4 } from 'uuid';
@@ -8813,6 +8829,7 @@ public async runPrompt(
     addToInputHistory = true,
     userMessageId = uuidv4(),
     sendNotification = true,
+    images?: string[],
 ): Promise<ResponseCompletedData[]>
 ⋮----
 // Queue the prompt for later execution
@@ -8843,6 +8860,7 @@ public async runPromptInAgent(
     systemPrompt?: string,
     waitForCurrentAgentToFinish = true,
     sendNotification = true,
+    images?: string[],
 ): Promise<ResponseCompletedData[]>
 ⋮----
 // send messages to connectors
@@ -9082,9 +9100,13 @@ public sendUserMessage(data: UserMessageData)
 ⋮----
 public sendToolMessage(data: ToolData)
 ⋮----
-public async clearContext(addToHistory = false, updateContextInfo = true, updateTaskState = true)
+public async clearContext(addToHistory = false, updateContextInfo = true, updateTaskState = true, createSnapshot = true)
 ⋮----
 public async resetContext()
+⋮----
+sendContextInfoUpdated()
+⋮----
+async undoContextChange(): Promise<boolean>
 ⋮----
 /**
    * Load context messages into the task context and send them to the UI.
@@ -9140,7 +9162,7 @@ public addToolMessage(
 ⋮----
 private updateTotalCosts(usageReport: UsageReportData)
 ⋮----
-addUserMessage(id: string, content: string, promptContext?: PromptContext)
+addUserMessage(id: string, content: string, promptContext?: PromptContext, images?: string[])
 ⋮----
 public async removeLastMessage()
 ⋮----
@@ -9150,7 +9172,7 @@ public async removeMessagesUpTo(messageId: string): Promise<string[]>
 ⋮----
 public sendTaskMessageRemoved(messageIds: string[])
 ⋮----
-public async redoUserPrompt(messageId: string, mode: Mode, updatedPrompt?: string)
+public async redoUserPrompt(messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[])
 ⋮----
 // No need to await runPrompt here, let it run in the background
 ⋮----
@@ -9498,12 +9520,28 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 ⋮----
 import { initializeLangfuseExporter } from './langfuse';
+import { initializePostHogExporter } from './posthog';
 ⋮----
 import type { SpanExporter } from '@opentelemetry/sdk-trace-base';
 ⋮----
 import logger from '@/logger';
 ⋮----
 // Graceful shutdown
+
+================
+File: src/main/telemetry/posthog.ts
+================
+import { PostHogTraceExporter } from '@posthog/ai/otel';
+⋮----
+import type { SpanExporter } from '@opentelemetry/sdk-trace-base';
+import type { SettingsData } from '@common/types';
+⋮----
+import { getEffectiveEnvironmentVariable } from '@/utils/environment';
+import logger from '@/logger';
+⋮----
+export const initializePostHogExporter = (): SpanExporter | undefined =>
+⋮----
+export const getPostHogAiderEnvironmentVariables = (baseDir: string, settings: SettingsData): Record<string, unknown> =>
 
 ================
 File: src/main/telemetry/telemetry-manager.ts
@@ -9513,7 +9551,7 @@ import { AgentProfile, Mode, SettingsData, TaskData } from '@common/types';
 ⋮----
 import { Store } from '@/store';
 import logger from '@/logger';
-import { POSTHOG_PUBLIC_API_KEY, POSTHOG_HOST } from '@/constants';
+import { POSTHOG_PUBLIC_API_KEY, POSTHOG_HOST, APP_TYPE } from '@/constants';
 import { getElectronApp } from '@/app';
 ⋮----
 export class TelemetryManager
@@ -9613,7 +9651,7 @@ import { DEFAULT_AGENT_PROFILE, DEFAULT_AIDER_MAIN_MODEL, DEFAULT_PROVIDER_MODEL
 import { EnvironmentVariable, Model, ProjectSettings, ProviderProfile, SettingsData } from '@common/types';
 ⋮----
 import logger from '@/logger';
-import { getLangfuseEnvironmentVariables } from '@/telemetry';
+import { getLangfuseEnvironmentVariables, getPostHogAiderEnvironmentVariables } from '@/telemetry';
 import { Store } from '@/store';
 ⋮----
 const readEnvFile = (filePath: string): Record<string, string> | null =>
@@ -11092,13 +11130,15 @@ async removeMessage(baseDir: string, taskId: string, messageId: string): Promise
 ⋮----
 async removeMessagesUpTo(baseDir: string, taskId: string, messageId: string): Promise<void>
 ⋮----
-async redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string): Promise<void>
+async redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]): Promise<void>
 ⋮----
 async resumeTask(baseDir: string, taskId: string): Promise<void>
 ⋮----
 async compactConversation(baseDir: string, taskId: string, mode: Mode, customInstructions?: string): Promise<void>
 ⋮----
 async smartCompactConversation(baseDir: string, taskId: string): Promise<void>
+⋮----
+async undoContextChange(baseDir: string, taskId: string): Promise<boolean>
 ⋮----
 async handoffConversation(baseDir: string, taskId: string, focus?: string): Promise<void>
 ⋮----
@@ -11120,7 +11160,7 @@ async pasteImage(baseDir: string, taskId: string, imageBuffer?: Buffer): Promise
 ⋮----
 applyEdits(baseDir: string, taskId: string, edits: FileEdit[]): void
 ⋮----
-async runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode): Promise<ResponseCompletedData[]>
+async runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]): Promise<ResponseCompletedData[]>
 ⋮----
 async savePrompt(baseDir: string, taskId: string, prompt: string): Promise<void>
 ⋮----
@@ -11906,8 +11946,6 @@ export class ProgressWindow
 ⋮----
 constructor(options:
 ⋮----
-// Send icon path and splash image to renderer once loaded
-⋮----
 on(event: 'ready', callback: () => void): void
 ⋮----
 setDetail(value: string): void
@@ -12211,6 +12249,7 @@ import {
   CommandOutputData,
   CommandsData,
   ContextFilesUpdatedData,
+  ContextInfoData,
   ContextMenuParams,
   CreateTaskParams,
   ExtensionUIRefreshData,
@@ -12343,6 +12382,7 @@ import {
   CloudflareTunnelStatus,
   CommandOutputData,
   ContextFilesUpdatedData,
+  ContextInfoData,
   ContextMenuParams,
   CommandsData,
   EditFormat,
@@ -12420,6 +12460,7 @@ type EventDataMap = {
   log: LogData;
   'system-log': SystemLogData;
   'context-files-updated': ContextFilesUpdatedData;
+  'context-info-updated': ContextInfoData;
   'commands-updated': CommandsData;
   'update-autocompletion': AutocompletionData;
   'ask-question': QuestionData;
@@ -12509,9 +12550,9 @@ stopProject(baseDir: string): void
 ⋮----
 restartProject(baseDir: string): void
 resetTask(baseDir: string, taskId: string): void
-runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode): void
+runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]): void
 savePrompt(baseDir: string, taskId: string, prompt: string): Promise<void>
-redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string): void
+redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]): void
 resumeTask(baseDir: string, taskId: string): void
 answerQuestion(baseDir: string, taskId: string, answer: string): void
 removeQueuedPrompt(baseDir: string, taskId: string, promptId: string): void
@@ -12592,6 +12633,8 @@ compactConversation(baseDir: string, taskId: string, mode: Mode, customInstructi
 ⋮----
 async smartCompactConversation(baseDir: string, taskId: string): Promise<void>
 ⋮----
+async undoContextChange(baseDir: string, taskId: string): Promise<boolean>
+⋮----
 async handoffConversation(baseDir: string, taskId: string, focus?: string): Promise<void>
 ⋮----
 runCodeChangeRequests(baseDir: string, taskId: string, requests: ChangeRequestItem[], createNewTask?: boolean): void
@@ -12622,6 +12665,7 @@ addResponseChunkListener(baseDir: string, taskId: string, callback: (data: Respo
 addResponseCompletedListener(baseDir: string, taskId: string, callback: (data: ResponseCompletedData) => void): () => void
 addLogListener(baseDir: string, taskId: string, callback: (data: LogData) => void): () => void
 addContextFilesUpdatedListener(baseDir: string, taskId: string, callback: (data: ContextFilesUpdatedData) => void): () => void
+addContextInfoUpdatedListener(baseDir: string, taskId: string, callback: (data: ContextInfoData) => void): () => void
 addUpdatedFilesUpdatedListener(baseDir: string, taskId: string, callback: (data: UpdatedFilesUpdatedData) => void): () => void
 addSkillsUpdatedListener(baseDir: string, taskId: string, callback: (data: SkillsUpdatedData) => void): () => void
 addCommandsUpdatedListener(baseDir: string, callback: (data: CommandsData) => void): () => void
@@ -13301,6 +13345,8 @@ File: src/renderer/src/components/common/Button.tsx
 import { ReactNode, MouseEvent } from 'react';
 import { twMerge } from 'tailwind-merge';
 ⋮----
+import { Tooltip } from '@/components/ui/Tooltip';
+⋮----
 export type ButtonVariant = 'contained' | 'text' | 'outline';
 export type ButtonColor = 'primary' | 'secondary' | 'tertiary' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'xs';
@@ -13316,6 +13362,7 @@ type Props = {
   size?: ButtonSize;
   type?: 'button' | 'submit' | 'reset';
   title?: string;
+  tooltip?: string;
 };
 ⋮----
 export const Button = ({
@@ -13329,7 +13376,10 @@ export const Button = ({
   size = 'md',
   type = 'button',
   title,
+  tooltip,
 }: Props) =>
+⋮----
+const renderButton = () =>
 ⋮----
 className=
 
@@ -15151,6 +15201,7 @@ import { FaInfoCircle, FaExclamationTriangle, FaExclamationCircle } from 'react-
 import { MdClose } from 'react-icons/md';
 import { useTranslation } from 'react-i18next';
 import { LogMessage } from '@common/types';
+import { clsx } from 'clsx';
 ⋮----
 import { CopyMessageButton } from './CopyMessageButton';
 import { MessageActions } from './MessageActions';
@@ -15173,17 +15224,21 @@ const renderMessage = () => (
     </div>
   );
 ⋮----
-<CopyMessageButton content=
+content=
+⋮----
+className=
 
 ================
 File: src/renderer/src/components/message/MessageActions.tsx
 ================
 import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
+import { MdUndo } from 'react-icons/md';
 ⋮----
 import { Button } from '../common/Button';
 ⋮----
 import { useApi } from '@/contexts/ApiContext';
+import { useTaskStore } from '@/stores/taskStore';
 ⋮----
 type Props = {
   actionIds: string[];
@@ -15199,6 +15254,10 @@ const handleContinueRebase = () =>
 const handleResolveConflictsWithAgent = () =>
 ⋮----
 const handleRebaseWorktree = () =>
+⋮----
+const handleUndoContextChange = () =>
+⋮----
+<Button key=
 
 ================
 File: src/renderer/src/components/message/MessageBar.tsx
@@ -15392,7 +15451,7 @@ type Props = {
   inProgress: boolean;
   removeMessage: (message: Message) => void;
   redoUserPrompt: (messageId: string) => void;
-  editLastUserMessage: (content: string) => void;
+  editLastUserMessage: (content: string, images?: string[]) => void;
   onInterrupt?: () => void;
   onForkFromMessage?: (message: Message) => void;
   onRemoveUpToMessage?: (message: Message) => void;
@@ -15432,7 +15491,7 @@ type Props = {
   renderMarkdown: boolean;
   removeMessage: (message: Message) => void;
   redoUserPrompt: (messageId: string) => void;
-  editLastUserMessage: (content: string) => void;
+  editLastUserMessage: (content: string, images?: string[]) => void;
   onInterrupt?: () => void;
   onForkFromMessage?: (message: Message) => void;
   onRemoveUpToMessage?: (message: Message) => void;
@@ -15918,6 +15977,7 @@ type Props = {
 ================
 File: src/renderer/src/components/message/UserMessageBlock.tsx
 ================
+import { useState } from 'react';
 import { FaRegUser } from 'react-icons/fa';
 import { clsx } from 'clsx';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -15935,10 +15995,14 @@ type Props = {
   compact?: boolean;
   onRemove?: () => void;
   onRedo?: () => void;
-  onEdit?: (content: string) => void;
+  onEdit?: (content: string, images?: string[]) => void;
   onFork?: () => void;
   onRemoveUpTo?: () => void;
 };
+⋮----
+const handleImageClick = (index: number) =>
+⋮----
+const handleExpandedClick = () =>
 ⋮----
 export const UserMessageBlock = (
 ⋮----
@@ -16165,7 +16229,7 @@ type Props = {
   renderMarkdown: boolean;
   removeMessage: (message: Message) => void;
   redoUserPrompt: (messageId: string) => void;
-  editLastUserMessage: (content: string) => void;
+  editLastUserMessage: (content: string, images?: string[]) => void;
   onInterrupt?: () => void;
   onForkFromMessage?: (message: Message) => void;
   onRemoveUpToMessage?: (message: Message) => void;
@@ -16835,6 +16899,7 @@ import { OpenAiCompatibleProvider } from '@common/agent';
 import { ReasoningEffort } from '@common/types';
 ⋮----
 import { Select, Option } from '@/components/common/Select';
+import { Checkbox } from '@/components/common/Checkbox';
 import { InfoIcon } from '@/components/common/InfoIcon';
 ⋮----
 type Props = {
@@ -16844,7 +16909,11 @@ type Props = {
 ⋮----
 const handleReasoningEffortChange = (value: string) =>
 ⋮----
+const handleTrackTokenUsageChange = (trackTokenUsage: boolean) =>
+⋮----
 <span>
+⋮----
+<Checkbox label=
 
 ================
 File: src/renderer/src/components/ModelLibrary/providers/OpenAiCompatibleModelOverrides.tsx
@@ -18783,7 +18852,7 @@ File: src/renderer/src/components/project/TaskControlBar.tsx
 import { AIDER_MODES, Mode, TaskData } from '@common/types';
 import { useTranslation } from 'react-i18next';
 import { FaInfoCircle } from 'react-icons/fa';
-import { MdPlaylistRemove } from 'react-icons/md';
+import { MdPlaylistRemove, MdUndo } from 'react-icons/md';
 import { VscTerminal } from 'react-icons/vsc';
 import { clsx } from 'clsx';
 ⋮----
@@ -18791,7 +18860,6 @@ import { AgentSelector } from '@/components/AgentSelector';
 import { ModeSelector } from '@/components/PromptField/ModeSelector';
 import { AutoApprove } from '@/components/PromptField/AutoApprove';
 import { Button } from '@/components/common/Button';
-import { Tooltip } from '@/components/ui/Tooltip';
 import { useResponsive } from '@/hooks/useResponsive';
 import { ExtensionComponentWrapper } from '@/components/extensions/ExtensionComponentWrapper';
 import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
@@ -18809,6 +18877,8 @@ type Props = {
   onToggleTaskInfoPanel?: () => void;
   onAutoApproveChanged?: (autoApprove: boolean) => void;
   showSettingsPage?: (pageId?: string, options?: Record<string, unknown>) => void;
+  canUndoContextChange?: boolean;
+  onUndoContextChange?: () => void;
 };
 ⋮----
 const handleAutoApproveLockChanged = (locked: boolean) =>
@@ -19411,6 +19481,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import { useTranslation } from 'react-i18next';
 import { BiSend } from 'react-icons/bi';
 import { MdSave, MdStop, MdMic, MdMicOff, MdOutlineScheduleSend } from 'react-icons/md';
+import { AiOutlineClose } from 'react-icons/ai';
 import { clsx } from 'clsx';
 ⋮----
 import { QueuedPromptsList } from './QueuedPromptsList';
@@ -19433,6 +19504,7 @@ export interface PromptFieldRef {
   focus: () => void;
   setText: (text: string) => void;
   appendText: (text: string) => void;
+  setImages: (images: string[]) => void;
 }
 ⋮----
 type Props = {
@@ -19447,7 +19519,7 @@ type Props = {
   openAgentModelSelector?: (model?: string) => void;
   mode: Mode;
   onModeChanged: (mode: Mode) => void;
-  runPrompt: (prompt: string) => void;
+  runPrompt: (prompt: string, images?: string[]) => void;
   savePrompt: (prompt: string) => Promise<void>;
   showFileDialog: (readOnly: boolean) => void;
   addFiles?: (filePaths: string[], readOnly?: boolean) => void;
@@ -21508,6 +21580,7 @@ import { MdOutlineCommit } from 'react-icons/md';
 import { RiAlertLine } from 'react-icons/ri';
 import { DiffViewMode, UpdatedFile } from '@common/types';
 import { useTranslation } from 'react-i18next';
+import { clsx } from 'clsx';
 ⋮----
 import { Tooltip } from '@/components/ui/Tooltip';
 import { PierreDiffViewer, PierreLineClickInfo, type DiffComment } from '@/components/common/DiffViewer';
@@ -21521,7 +21594,12 @@ type Props = {
   comments?: DiffComment[];
   onEditComment?: (info: { commentId: string; viewportRect: { top: number; left: number } }) => void;
   onRemoveComment?: (commentId: string) => void;
+  stickyHeader?: boolean;
 };
+⋮----
+export const DiffFileItem = (
+⋮----
+className=
 
 ================
 File: src/renderer/src/components/Workspace/DiffFilesSidebar.tsx
@@ -23107,7 +23185,15 @@ import { useCallback, useEffect } from 'react';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { shallow } from 'zustand/vanilla/shallow';
 ⋮----
-import type { AutocompletionData, ContextFilesUpdatedData, ModelsData, QuestionData, QueuedPromptsUpdatedData, TokensInfoData } from '@common/types';
+import type {
+  AutocompletionData,
+  ContextFilesUpdatedData,
+  ContextInfoData,
+  ModelsData,
+  QuestionData,
+  QueuedPromptsUpdatedData,
+  TokensInfoData,
+} from '@common/types';
 ⋮----
 import { useApi } from '@/contexts/ApiContext';
 import { useTaskStore } from '@/stores/taskStore';
@@ -24447,6 +24533,7 @@ export interface TaskState {
   aiderModelsData: ModelsData | null;
   lastActiveAt: Date | null;
   queuedPrompts: QueuedPromptData[];
+  canUndoContextChange: boolean;
 }
 ⋮----
 interface TaskStore {
@@ -27044,18 +27131,12 @@ File: src/renderer/progress.html
       border-radius: 12px;
       padding: 32px;
       width: 100%;
+      aspect-ratio: 500 / 330;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
       -webkit-app-region: no-drag;
-    }
-
-    .container::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: rgba(34, 36, 49, 0.7);
-      border-radius: 12px;
-      pointer-events: none;
-      z-index: 1;
     }
 
     #splash-video {
@@ -27066,29 +27147,6 @@ File: src/renderer/progress.html
       object-fit: cover;
       border-radius: 12px;
       z-index: 0;
-    }
-
-    .brand {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 16px;
-      margin-bottom: 32px;
-      position: relative;
-      z-index: 1;
-    }
-
-    .brand-icon {
-      width: 72px;
-      height: 72px;
-      border-radius: 14px;
-    }
-
-    .brand-name {
-      font-size: 20px;
-      font-weight: 600;
-      color: #f1f3f5;
-      letter-spacing: -0.3px;
     }
 
     .detail {
@@ -27202,13 +27260,6 @@ File: src/renderer/progress.html
 <body>
   <div class="container">
     <video id="splash-video" autoplay muted loop></video>
-    <div class="brand">
-      <div class="brand-icon-wrapper">
-        <img class="brand-icon" id="brand-icon" src="" alt="AiderDesk">
-      </div>
-      <span class="brand-name">AiderDesk</span>
-    </div>
-
     <div class="detail">
       <span class="detail-text" id="detail-text">Initializing...</span>
     </div>
@@ -27223,17 +27274,9 @@ File: src/renderer/progress.html
   <script>
     const { ipcRenderer } = require('electron');
 
-    ipcRenderer.on('set-icon-path', (_, iconPath) => {
-      document.getElementById('brand-icon').src = iconPath;
-    });
-
     ipcRenderer.on('set-splash-image', (_, imagePath) => {
       const video = document.getElementById('splash-video');
       video.src = imagePath;
-    });
-
-    ipcRenderer.on('set-title', (_, title) => {
-      // Title is no longer displayed, but keep handler for compatibility
     });
 
     ipcRenderer.on('set-detail', (_, value) => {
@@ -27372,7 +27415,7 @@ File: package.json
 ================
 {
   "name": "aider-desk",
-  "version": "0.65.0-dev",
+  "version": "0.66.0-dev",
   "description": "Aider desktop application wrapper",
   "main": "./out/main/index.js",
   "author": "Hotovo",
@@ -27461,6 +27504,7 @@ File: package.json
     "@opentelemetry/sdk-node": "^0.203.0",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
     "@pierre/diffs": "^1.1.16",
+    "@posthog/ai": "^7.18.1",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@reactuses/core": "^6.0.6",
     "@replit/codemirror-vim": "^6.3.0",

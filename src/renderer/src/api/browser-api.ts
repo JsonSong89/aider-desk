@@ -5,6 +5,7 @@ import {
   CloudflareTunnelStatus,
   CommandOutputData,
   ContextFilesUpdatedData,
+  ContextInfoData,
   ContextMenuParams,
   CommandsData,
   EditFormat,
@@ -82,6 +83,7 @@ type EventDataMap = {
   log: LogData;
   'system-log': SystemLogData;
   'context-files-updated': ContextFilesUpdatedData;
+  'context-info-updated': ContextInfoData;
   'commands-updated': CommandsData;
   'update-autocompletion': AutocompletionData;
   'ask-question': QuestionData;
@@ -161,6 +163,7 @@ export class BrowserApi implements ApplicationAPI {
       log: new Map(),
       'system-log': new Map(),
       'context-files-updated': new Map(),
+      'context-info-updated': new Map(),
       'commands-updated': new Map(),
       'update-autocompletion': new Map(),
       'ask-question': new Map(),
@@ -350,19 +353,20 @@ export class BrowserApi implements ApplicationAPI {
   resetTask(baseDir: string, taskId: string): void {
     this.post('/project/tasks/reset', { projectDir: baseDir, taskId });
   }
-  runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode): void {
-    this.post('/run-prompt', { projectDir: baseDir, taskId, prompt, mode });
+  runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]): void {
+    this.post('/run-prompt', { projectDir: baseDir, taskId, prompt, mode, images });
   }
   savePrompt(baseDir: string, taskId: string, prompt: string): Promise<void> {
     return this.post('/save-prompt', { projectDir: baseDir, taskId, prompt });
   }
-  redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string): void {
+  redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]): void {
     this.post('/project/redo-prompt', {
       projectDir: baseDir,
       taskId,
       messageId,
       mode,
       updatedPrompt,
+      updatedImages,
     });
   }
   resumeTask(baseDir: string, taskId: string): void {
@@ -713,6 +717,14 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
+  async undoContextChange(baseDir: string, taskId: string): Promise<boolean> {
+    const result = await this.post<{ projectDir: string; taskId: string }, { undone: boolean }>('/project/undo-context-change', {
+      projectDir: baseDir,
+      taskId,
+    });
+    return result?.undone ?? false;
+  }
+
   async handoffConversation(baseDir: string, taskId: string, focus?: string): Promise<void> {
     await this.post('/project/handoff-conversation', {
       projectDir: baseDir,
@@ -797,6 +809,9 @@ export class BrowserApi implements ApplicationAPI {
   }
   addContextFilesUpdatedListener(baseDir: string, taskId: string, callback: (data: ContextFilesUpdatedData) => void): () => void {
     return this.addListener('context-files-updated', callback, baseDir, taskId);
+  }
+  addContextInfoUpdatedListener(baseDir: string, taskId: string, callback: (data: ContextInfoData) => void): () => void {
+    return this.addListener('context-info-updated', callback, baseDir, taskId);
   }
   addUpdatedFilesUpdatedListener(baseDir: string, taskId: string, callback: (data: UpdatedFilesUpdatedData) => void): () => void {
     return this.addListener('updated-files-updated', callback, baseDir, taskId);

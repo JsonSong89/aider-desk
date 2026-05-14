@@ -4,6 +4,7 @@ import {
   AutocompletionData,
   BranchInfo,
   ClearTaskData,
+  ContextInfoData,
   CloudflareTunnelStatus,
   CommandOutputData,
   ContextFilesUpdatedData,
@@ -87,9 +88,9 @@ export interface ApplicationAPI {
   stopProject: (baseDir: string) => void;
   restartProject: (baseDir: string) => void;
   resetTask: (baseDir: string, taskId: string) => void;
-  runPrompt: (baseDir: string, taskId: string, prompt: string, mode?: Mode) => void;
+  runPrompt: (baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]) => void;
   savePrompt: (baseDir: string, taskId: string, prompt: string) => Promise<void>;
-  redoUserPrompt: (baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string) => void;
+  redoUserPrompt: (baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]) => void;
   resumeTask: (baseDir: string, taskId: string) => void;
   answerQuestion: (baseDir: string, taskId: string, answer: string) => void;
   removeQueuedPrompt: (baseDir: string, taskId: string, promptId: string) => void;
@@ -190,6 +191,7 @@ export interface ApplicationAPI {
   compactConversation: (baseDir: string, taskId: string, mode: Mode, customInstructions?: string) => void;
   smartCompactConversation: (baseDir: string, taskId: string) => Promise<void>;
   handoffConversation: (baseDir: string, taskId: string, focus?: string) => Promise<void>;
+  undoContextChange: (baseDir: string, taskId: string) => Promise<boolean>;
   runCodeChangeRequests: (baseDir: string, taskId: string, requests: ChangeRequestItem[], createNewTask?: boolean) => void;
   setZoomLevel: (level: number) => Promise<void>;
 
@@ -231,6 +233,7 @@ export interface ApplicationAPI {
   addUserMessageListener: (baseDir: string, taskId: string, callback: (data: UserMessageData) => void) => () => void;
   addInputHistoryUpdatedListener: (baseDir: string, callback: (data: InputHistoryData) => void) => () => void;
   addClearTaskListener: (baseDir: string, taskId: string, callback: (data: ClearTaskData) => void) => () => void;
+  addContextInfoUpdatedListener: (baseDir: string, taskId: string, callback: (data: ContextInfoData) => void) => () => void;
   addMessageRemovedListener: (baseDir: string, taskId: string, callback: (data: MessageRemovedData) => void) => () => void;
   addProjectStartedListener: (baseDir: string, callback: (data: ProjectStartedData) => void) => () => void;
   addVersionsInfoUpdatedListener: (callback: (data: VersionsInfo) => void) => () => void;

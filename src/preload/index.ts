@@ -4,6 +4,7 @@ import {
   CommandOutputData,
   CommandsData,
   ContextFilesUpdatedData,
+  ContextInfoData,
   ContextMenuParams,
   CreateTaskParams,
   ExtensionUIRefreshData,
@@ -62,9 +63,10 @@ const api: ApplicationAPI = {
   stopProject: (baseDir) => ipcRenderer.send('stop-project', baseDir),
   restartProject: (baseDir) => ipcRenderer.send('restart-project', baseDir),
   resetTask: (baseDir, taskId) => ipcRenderer.send('reset-task', baseDir, taskId),
-  runPrompt: (baseDir, taskId, prompt, mode) => ipcRenderer.send('run-prompt', baseDir, taskId, prompt, mode),
+  runPrompt: (baseDir, taskId, prompt, mode, images) => ipcRenderer.send('run-prompt', baseDir, taskId, prompt, mode, images),
   savePrompt: (baseDir, taskId, prompt) => ipcRenderer.invoke('save-prompt', baseDir, taskId, prompt),
-  redoUserPrompt: (baseDir, taskId, messageId, mode, updatedPrompt?) => ipcRenderer.send('redo-user-prompt', baseDir, taskId, messageId, mode, updatedPrompt),
+  redoUserPrompt: (baseDir, taskId, messageId, mode, updatedPrompt?, updatedImages?) =>
+    ipcRenderer.send('redo-user-prompt', baseDir, taskId, messageId, mode, updatedPrompt, updatedImages),
   resumeTask: (baseDir, taskId) => ipcRenderer.send('resume-task', baseDir, taskId),
   answerQuestion: (baseDir, taskId, answer) => ipcRenderer.send('answer-question', baseDir, taskId, answer),
   removeQueuedPrompt: (baseDir, taskId, promptId) => ipcRenderer.send('remove-queued-prompt', baseDir, taskId, promptId),
@@ -179,6 +181,7 @@ const api: ApplicationAPI = {
   removeMessagesUpTo: (baseDir, taskId, messageId) => ipcRenderer.invoke('remove-messages-up-to', baseDir, taskId, messageId),
   compactConversation: (baseDir, taskId, mode, customInstructions) => ipcRenderer.invoke('compact-conversation', baseDir, taskId, mode, customInstructions),
   smartCompactConversation: (baseDir, taskId) => ipcRenderer.invoke('smart-compact-conversation', baseDir, taskId),
+  undoContextChange: (baseDir, taskId) => ipcRenderer.invoke('undo-context-change', baseDir, taskId),
   handoffConversation: (baseDir, taskId, focus) => ipcRenderer.invoke('handoff-conversation', baseDir, taskId, focus),
   runCodeChangeRequests: (baseDir, taskId, requests, createNewTask?) => ipcRenderer.send('run-code-change-requests', baseDir, taskId, requests, createNewTask),
   setZoomLevel: (level) => ipcRenderer.invoke('set-zoom-level', level),
@@ -453,6 +456,19 @@ const api: ApplicationAPI = {
     ipcRenderer.on('message-removed', listener);
     return () => {
       ipcRenderer.removeListener('message-removed', listener);
+    };
+  },
+
+  addContextInfoUpdatedListener: (baseDir, taskId, callback) => {
+    const listener = (_: Electron.IpcRendererEvent, data: ContextInfoData) => {
+      if (!compareBaseDirs(data.baseDir, baseDir) || data.taskId !== taskId) {
+        return;
+      }
+      callback(data);
+    };
+    ipcRenderer.on('context-info-updated', listener);
+    return () => {
+      ipcRenderer.removeListener('context-info-updated', listener);
     };
   },
 

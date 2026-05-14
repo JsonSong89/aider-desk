@@ -246,8 +246,8 @@ export class EventsHandler {
     this.eventManager.sendTaskMessageRemoved(baseDir, taskId, removedIds);
   }
 
-  async redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string): Promise<void> {
-    void this.projectManager.getProject(baseDir).getTask(taskId)?.redoUserPrompt(messageId, mode, updatedPrompt);
+  async redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]): Promise<void> {
+    void this.projectManager.getProject(baseDir).getTask(taskId)?.redoUserPrompt(messageId, mode, updatedPrompt, updatedImages);
   }
 
   async resumeTask(baseDir: string, taskId: string): Promise<void> {
@@ -266,6 +266,14 @@ export class EventsHandler {
     if (task) {
       await task.smartCompactConversation();
     }
+  }
+
+  async undoContextChange(baseDir: string, taskId: string): Promise<boolean> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (task) {
+      return task.undoContextChange();
+    }
+    return false;
   }
 
   async handoffConversation(baseDir: string, taskId: string, focus?: string): Promise<void> {
@@ -368,8 +376,8 @@ export class EventsHandler {
     this.projectManager.getProject(baseDir).getTask(taskId)?.applyEdits(edits);
   }
 
-  async runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode): Promise<ResponseCompletedData[]> {
-    return this.projectManager.getProject(baseDir).getTask(taskId)?.runPrompt(prompt, mode) || [];
+  async runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]): Promise<ResponseCompletedData[]> {
+    return this.projectManager.getProject(baseDir).getTask(taskId)?.runPrompt(prompt, mode, true, undefined, true, images) || [];
   }
 
   async savePrompt(baseDir: string, taskId: string, prompt: string): Promise<void> {

@@ -1,5 +1,17 @@
 # Changelog
 
+## [UNRELEASED]
+
+- added limit truncation to fetch tool result
+- added PostHog integration for telemetry
+- add context file properly handles existing files
+- added undo functionality for clearing the messages and compacting
+- updated extension event types to include agentProfile and support blocking reasons
+- added option to manage token usage tracking for OpenAI-compatible providers
+- added sticky file path header to diff file items
+- updated onboarding feature descriptions
+- added support for sending images within user messages in Agent mode
+
 ## [0.65.0]
 
 - added onInterrupted extension hook to allow blocking or customizing interrupt behavior
