@@ -1,7 +1,7 @@
 import { ProjectData } from '@common/types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, Suspense, lazy, startTransition, useCallback, useEffect, useOptimistic, useRef, useState, useTransition } from 'react';
-import { MdBarChart, MdSettings, MdUpload } from 'react-icons/md';
+import { MdBarChart, MdSettings } from 'react-icons/md';
 import { PiNotebookFill } from 'react-icons/pi';
 import { useTranslation } from 'react-i18next';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -83,12 +83,6 @@ export const Home = () => {
     },
     [api, setOptimisticOpenProjects],
   );
-
-  const isAiderDeskUpdateAvailable = versions?.aiderDeskAvailableVersion && versions.aiderDeskAvailableVersion !== versions.aiderDeskCurrentVersion;
-  const isAiderUpdateAvailable = versions?.aiderAvailableVersion && versions.aiderAvailableVersion !== versions.aiderCurrentVersion;
-  const isUpdateAvailable = isAiderDeskUpdateAvailable || isAiderUpdateAvailable;
-  const isDownloading = typeof versions?.aiderDeskDownloadProgress === 'number';
-  const showUpdateIcon = isDownloading || isUpdateAvailable || versions?.aiderDeskNewVersionReady;
 
   useEffect(() => {
     if (versions?.aiderDeskNewVersionReady && !hasShownUpdateNotification) {
@@ -500,22 +494,6 @@ export const Home = () => {
       </ProjectSettingsProvider>
     ));
 
-  const getUpdateTooltip = () => {
-    if (versions?.aiderDeskNewVersionReady) {
-      return t('settings.about.newAiderDeskVersionReady');
-    }
-    if (isDownloading && versions?.aiderDeskDownloadProgress) {
-      return `${t('settings.about.downloadingUpdate')}: ${Math.round(versions.aiderDeskDownloadProgress)}%`;
-    }
-    if (isAiderDeskUpdateAvailable) {
-      return t('settings.about.updateAvailable');
-    }
-    if (isAiderUpdateAvailable && versions?.aiderAvailableVersion) {
-      return t('settings.about.newAiderVersionAvailable', { version: versions.aiderAvailableVersion });
-    }
-    return ''; // Should not happen if showUpdateIcon is true
-  };
-
   const handleCloseReleaseNotes = async () => {
     await api.clearReleaseNotes();
     setReleaseNotesContent(null);
@@ -528,12 +506,6 @@ export const Home = () => {
   const handleOpenUsageDashboard = useCallback(() => {
     showUsageDashboard();
   }, [showUsageDashboard]);
-
-  const handleOpenAboutSettings = useCallback(() => {
-    setShowSettingsInfo({
-      pageId: 'about',
-    });
-  }, []);
 
   const handleOpenGeneralSettings = useCallback(() => {
     setShowSettingsInfo({
@@ -562,14 +534,6 @@ export const Home = () => {
           />
           <div className="flex items-center flex-shrink-0">
             <ExtensionComponentWrapper placement="header-right" />
-            {showUpdateIcon && (
-              <IconButton
-                icon={<MdUpload className="h-5 w-5 text-text-primary " />}
-                tooltip={getUpdateTooltip()}
-                onClick={handleOpenAboutSettings}
-                className="px-4 py-2 hover:bg-bg-tertiary-emphasis transition-colors duration-200"
-              />
-            )}
             <IconButton
               icon={<PiNotebookFill className="h-5 w-5 text-text-secondary" />}
               tooltip={t('projectBar.modelLibrary')}
