@@ -36,14 +36,12 @@ import {
 export type LlmProviderName =
   | 'anthropic'
   | 'anthropic-compatible'
-  | 'auggie'
   | 'azure'
   | 'bedrock'
   | 'cerebras'
-  | 'claude-agent-sdk'
+  | 'clinepass'
   | 'deepseek'
   | 'gemini'
-  | 'gemini-cli'
   | 'gpustack'
   | 'groq'
   | 'alibaba-plan'
@@ -52,6 +50,7 @@ export type LlmProviderName =
   | 'lmstudio'
   | 'minimax'
   | 'mistral'
+  | 'neuralwatt'
   | 'ollama'
   | 'openai'
   | 'openai-compatible'
@@ -66,6 +65,7 @@ export type LlmProviderName =
 export interface LlmProviderBase {
   name: LlmProviderName;
   disableStreaming?: boolean;
+  disableToolCallStreaming?: boolean;
   voiceEnabled?: boolean;
 }
 
@@ -85,14 +85,12 @@ export const AVAILABLE_PROVIDERS: LlmProviderName[] = [
   'alibaba-plan',
   'anthropic',
   'anthropic-compatible',
-  'auggie',
   'azure',
   'bedrock',
   'cerebras',
-  'claude-agent-sdk',
+  'clinepass',
   'deepseek',
   'gemini',
-  'gemini-cli',
   'gpustack',
   'groq',
   'kimi-plan',
@@ -100,6 +98,7 @@ export const AVAILABLE_PROVIDERS: LlmProviderName[] = [
   'lmstudio',
   'minimax',
   'mistral',
+  'neuralwatt',
   'ollama',
   'openai',
   'openai-compatible',
@@ -114,6 +113,8 @@ export const AVAILABLE_PROVIDERS: LlmProviderName[] = [
 export enum OpenAiVoiceModel {
   Gpt4oMiniTranscribe = 'gpt-4o-mini-transcribe',
   Gpt4oTranscribe = 'gpt-4o-transcribe',
+  GptLiveTranscribe = 'gpt-live-transcribe',
+  GptRealtimeWhisper = 'gpt-realtime-whisper',
 }
 
 export interface OpenAiVoiceControlSettings extends VoiceControlSettings {
@@ -152,13 +153,6 @@ export interface AnthropicCompatibleProvider extends LlmProviderBase {
 }
 export const isAnthropicCompatibleProvider = (provider: LlmProviderBase): provider is AnthropicCompatibleProvider => provider.name === 'anthropic-compatible';
 
-export interface AuggieProvider extends LlmProviderBase {
-  name: 'auggie';
-  apiKey: string;
-  apiUrl?: string;
-}
-export const isAuggieProvider = (provider: LlmProviderBase): provider is AuggieProvider => provider.name === 'auggie';
-
 export interface KimiPlanProvider extends LlmProviderBase {
   name: 'kimi-plan';
   apiKey: string;
@@ -174,7 +168,8 @@ export interface AlibabaPlanProvider extends LlmProviderBase {
 export const isAlibabaPlanProvider = (provider: LlmProviderBase): provider is AlibabaPlanProvider => provider.name === 'alibaba-plan';
 
 export enum GeminiVoiceModel {
-  GeminiLive25FlashNativeAudio = 'gemini-2.5-flash-native-audio-preview-12-2025',
+  Gemini31FlashLivePreview = 'gemini-3.1-flash-live-preview',
+  Gemini25FlashNativeAudio = 'gemini-2.5-flash-native-audio-preview-12-2025',
 }
 
 export interface GeminiVoiceControlSettings extends VoiceControlSettings {
@@ -233,18 +228,11 @@ export interface CerebrasProvider extends LlmProviderBase {
 }
 export const isCerebrasProvider = (provider: LlmProviderBase): provider is CerebrasProvider => provider.name === 'cerebras';
 
-export interface ClaudeAgentSdkProvider extends LlmProviderBase {
-  name: 'claude-agent-sdk';
-  systemPrompt?: string;
-  mcpServers?: Record<string, unknown>;
+export interface ClinePassProvider extends LlmProviderBase {
+  name: 'clinepass';
+  apiKey?: string;
 }
-export const isClaudeAgentSdkProvider = (provider: LlmProviderBase): provider is ClaudeAgentSdkProvider => provider.name === 'claude-agent-sdk';
-
-export interface GeminiCliProvider extends LlmProviderBase {
-  name: 'gemini-cli';
-  projectId?: string;
-}
-export const isGeminiCliProvider = (provider: LlmProviderBase): provider is GeminiCliProvider => provider.name === 'gemini-cli';
+export const isClinePassProvider = (provider: LlmProviderBase): provider is ClinePassProvider => provider.name === 'clinepass';
 
 export interface BedrockProvider extends LlmProviderBase {
   name: 'bedrock';
@@ -261,6 +249,7 @@ export interface OpenAiCompatibleProvider extends LlmProviderBase {
   baseUrl?: string;
   reasoningEffort?: ReasoningEffort;
   trackTokenUsage?: boolean;
+  extraBody?: Record<string, unknown>;
 }
 export const isOpenAiCompatibleProvider = (provider: LlmProviderBase): provider is OpenAiCompatibleProvider => provider.name === 'openai-compatible';
 
@@ -313,6 +302,7 @@ export interface ZaiPlanProvider extends LlmProviderBase {
   name: 'zai-plan';
   apiKey: string;
   thinkingEnabled?: boolean;
+  reasoningEffort?: ReasoningEffort;
 }
 export const isZaiPlanProvider = (provider: LlmProviderBase): provider is ZaiPlanProvider => provider.name === 'zai-plan';
 
@@ -328,6 +318,13 @@ export interface MistralProvider extends LlmProviderBase {
 }
 export const isMistralProvider = (provider: LlmProviderBase): provider is MistralProvider => provider.name === 'mistral';
 
+export interface NeuralwattProvider extends LlmProviderBase {
+  name: 'neuralwatt';
+  apiKey: string;
+  reasoningEffort?: ReasoningEffort;
+}
+export const isNeuralwattProvider = (provider: LlmProviderBase): provider is NeuralwattProvider => provider.name === 'neuralwatt';
+
 export interface SyntheticProvider extends LlmProviderBase {
   name: 'synthetic';
   apiKey: string;
@@ -342,18 +339,16 @@ export type LlmProvider =
   | OpenAiProvider
   | AnthropicProvider
   | AnthropicCompatibleProvider
-  | AuggieProvider
   | AzureProvider
   | GeminiProvider
-  | GeminiCliProvider
   | VertexAiProvider
   | LmStudioProvider
   | BedrockProvider
-  | ClaudeAgentSdkProvider
   | DeepseekProvider
   | GroqProvider
   | GpustackProvider
   | CerebrasProvider
+  | ClinePassProvider
   | AlibabaPlanProvider
   | KimiPlanProvider
   | OpenAiCompatibleProvider
@@ -366,29 +361,28 @@ export type LlmProvider =
   | ZaiPlanProvider
   | MinimaxProvider
   | MistralProvider
+  | NeuralwattProvider
   | ExtensionLlmProvider;
-
 
 export const DEFAULT_PROVIDER_MODELS: Partial<Record<LlmProviderName, string>> = {
   'alibaba-plan': 'qwen3-coder-plus',
-  anthropic: 'claude-sonnet-4-6',
-  auggie: 'gpt-5-4',
-  bedrock: 'global.anthropic.claude-sonnet-4-6',
-  cerebras: 'qwen-3-235b-a22b-instruct-2507',
-  'claude-agent-sdk': 'sonnet',
+  anthropic: 'claude-sonnet-5',
+  bedrock: 'global.anthropic.claude-sonnet-5',
+  cerebras: 'gpt-oss-120b',
+  clinepass: 'deepseek-v4-flash',
   deepseek: 'deepseek-v4-pro',
-  gemini: 'gemini-pro-latest',
-  'gemini-cli': 'gemini-2.5-pro',
-  groq: 'moonshotai/kimi-k2-instruct-0905',
+  gemini: 'gemini-3.5-flash',
+  groq: 'openai/gpt-oss-120b',
   'kimi-plan': 'k2p6',
-  openai: 'gpt-5.4',
-  openrouter: 'anthropic/claude-sonnet-4.6',
-  opencode: 'claude-sonnet-4-6',
-  requesty: 'anthropic/claude-sonnet-4-6',
-  synthetic: 'hf:zai-org/GLM-4.7',
-  'zai-plan': 'glm-5.1',
+  openai: 'gpt-5.5',
+  openrouter: 'anthropic/claude-sonnet-5',
+  opencode: 'claude-sonnet-5',
+  requesty: 'anthropic/claude-sonnet-5',
+  synthetic: 'hf:zai-org/GLM-5.2',
+  'zai-plan': 'glm-5.2',
   minimax: 'MiniMax-M2.7',
   mistral: 'mistral-large-latest',
+  neuralwatt: 'glm-5.2',
 };
 
 export const DEFAULT_AIDER_MAIN_MODEL = `anthropic/${DEFAULT_PROVIDER_MODELS.anthropic}`;
@@ -400,7 +394,7 @@ export const DEFAULT_AGENT_PROFILE: AgentProfile = {
   name: 'Default Agent',
   provider: 'anthropic',
   model: DEFAULT_PROVIDER_MODELS.anthropic!,
-  maxIterations: 250,
+  maxIterations: 0,
   minTimeBetweenToolCalls: 0,
   toolApprovals: {
     // aider tools
@@ -450,6 +444,7 @@ export const DEFAULT_AGENT_PROFILE: AgentProfile = {
   useMemoryTools: true,
   useSkillsTools: true,
   useExtensionTools: true,
+  disabledExtensionTools: [],
   customInstructions: '',
   enabledServers: [],
   subagent: {
@@ -624,6 +619,7 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
   const baseConfig: LlmProviderBase = {
     name: providerName,
     disableStreaming: false,
+    disableToolCallStreaming: false,
   };
 
   switch (providerName) {
@@ -635,7 +631,7 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
         voice: {
           idleTimeoutMs: 5000,
           systemInstructions: DEFAULT_VOICE_SYSTEM_INSTRUCTIONS,
-          model: OpenAiVoiceModel.Gpt4oTranscribe,
+          model: OpenAiVoiceModel.GptLiveTranscribe,
           language: 'en',
         },
       } satisfies OpenAiProvider;
@@ -661,13 +657,6 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
         baseUrl: '',
       } satisfies AnthropicCompatibleProvider;
       break;
-    case 'auggie':
-      provider = {
-        name: 'auggie',
-        apiKey: '',
-        apiUrl: '',
-      } satisfies AuggieProvider;
-      break;
     case 'gemini':
       provider = {
         name: 'gemini',
@@ -679,7 +668,7 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
         voice: {
           idleTimeoutMs: 5000,
           systemInstructions: DEFAULT_VOICE_SYSTEM_INSTRUCTIONS,
-          model: GeminiVoiceModel.GeminiLive25FlashNativeAudio,
+          model: GeminiVoiceModel.Gemini31FlashLivePreview,
           temperature: 0.7,
         },
       } satisfies GeminiProvider;
@@ -726,6 +715,12 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
         name: 'cerebras',
         apiKey: '',
       } satisfies CerebrasProvider;
+      break;
+    case 'clinepass':
+      provider = {
+        name: 'clinepass',
+        apiKey: '',
+      } satisfies ClinePassProvider;
       break;
     case 'deepseek':
       provider = {
@@ -808,6 +803,7 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
       provider = {
         name: 'zai-plan',
         apiKey: '',
+        reasoningEffort: ReasoningEffort.Max,
       } satisfies ZaiPlanProvider;
       break;
     case 'minimax':
@@ -822,11 +818,12 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
         apiKey: '',
       } satisfies MistralProvider;
       break;
-    case 'gemini-cli':
+    case 'neuralwatt':
       provider = {
-        name: 'gemini-cli',
-        projectId: '',
-      } satisfies GeminiCliProvider;
+        name: 'neuralwatt',
+        apiKey: '',
+        reasoningEffort: ReasoningEffort.High,
+      } satisfies NeuralwattProvider;
       break;
     default:
       // For any other provider, create a base structure. This might need more specific handling if new providers are added.
@@ -838,8 +835,21 @@ export const getDefaultProviderParams = <T extends LlmProvider>(providerName: Ll
   return provider as T;
 };
 
-export const isSubagentEnabled = (agentProfile: AgentProfile, currentProfileId?: string): boolean => {
-  return Boolean(agentProfile.subagent.systemPrompt && agentProfile.subagent.enabled && (!currentProfileId || agentProfile.id !== currentProfileId));
+export const isSubagentEnabled = (agentProfile: AgentProfile, mainAgentProfile?: AgentProfile): boolean => {
+  if (!agentProfile.subagent.enabled) {
+    return false;
+  }
+  if (!mainAgentProfile) {
+    return true;
+  }
+  if (agentProfile.id === mainAgentProfile.id) {
+    return false;
+  }
+  return !mainAgentProfile.enabledSubagentIds || mainAgentProfile.enabledSubagentIds.includes(agentProfile.id);
+};
+
+export const getSubagentId = (subagent: AgentProfile): string => {
+  return subagent.name.toLowerCase().replace(/\s+/g, '-');
 };
 
 export const getProviderModelId = (model: Model): string => {

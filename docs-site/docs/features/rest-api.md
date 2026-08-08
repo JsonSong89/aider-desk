@@ -115,7 +115,10 @@ Retrieves a list of all files in the project that can be added to the context.
 ### Prompt Execution
 
 #### Run Prompt
-Executes an AI prompt in the specified project.
+Executes an AI prompt in the specified project. Supports two response modes via content negotiation:
+
+- **JSON response** (default): Waits for the prompt to complete and returns the result. When `taskId` is omitted, the project and task are auto-created.
+- **SSE streaming**: When `Accept: text/event-stream` is provided, the response is streamed in real-time as Server-Sent Events. The project and task are auto-created if needed, and the `X-Task-Id` header is returned.
 
 - **Endpoint**: `POST /api/run-prompt`
 - **Request Body**:
@@ -123,10 +126,29 @@ Executes an AI prompt in the specified project.
   {
     "projectDir": "/path/to/your/project",
     "prompt": "Create a user authentication system",
-    "mode": "code"
+    "mode": "code",
+    "taskId": "optional-task-id"
   }
   ```
-- **Response**: `200 OK` (returns prompt execution result)
+- **JSON Response**: `200 OK` (returns prompt execution result)
+- **SSE Response**: `200 OK` with `Content-Type: text/event-stream`
+
+  SSE event types: `response-chunk`, `response-completed`, `tool`, `log`, `ask-question`, `user-message`, `task-updated`. The stream ends with a `stream-end` event after `response-completed`.
+
+  Example SSE output:
+  ```
+  event: response-chunk
+  data: {"chunk":"Hello","reasoning":"","taskId":"abc123",...}
+
+  event: tool
+  data: {"toolName":"file_read","finished":false,...}
+
+  event: response-completed
+  data: {"content":"Hello!","taskId":"abc123",...}
+
+  event: stream-end
+  data: {"type":"stream-end"}
+  ```
 
 #### Redo Last User Prompt
 Re-executes the last user prompt with optional modifications.
@@ -423,7 +445,7 @@ Creates a new task within a project. The new task inherits model, mode, and othe
     "currentMode": "agent",
     "workingMode": "local",
     "worktree": null,
-    "autoApprove": false,
+    "autonomyMode": "guided",
     ...
   }
   ```
@@ -433,7 +455,7 @@ The task is returned in an **uninitialized** state. The `workingMode` field refl
 :::
 
 #### Update Task
-Updates a task's properties. This is the supported way to change `workingMode`, `currentMode`, `autoApprove`, and other task fields.
+Updates a task's properties. This is the supported way to change `workingMode`, `currentMode`, `autonomyMode`, and other task fields.
 
 - **Endpoint**: `POST /api/project/tasks`
 - **Request Body**:
@@ -569,6 +591,15 @@ Retrieves usage data for a specific date range.
 - **Response**: `200 OK` (returns usage data array)
 
 ### System Integration
+
+#### Health Check
+Returns the server health status. Useful for checking if the AiderDesk server is running before making API calls.
+
+- **Endpoint**: `GET /api/health`
+- **Response**: `200 OK`
+  ```json
+  { "status": "ok" }
+  ```
 
 #### Get Effective Environment Variable
 Retrieves the effective value of an environment variable.
@@ -725,7 +756,9 @@ Renames the current worktree branch.
 
 #### Additional Worktree Endpoints
 
-- `POST /api/project/worktree/merge-and-switch-to-local` — Merge worktree and switch task to local mode
+- `POST /api/project/switch-to-local-working-mode` — Switch task to local working mode (optionally merge first)
+- `POST /api/project/switch-to-worktree-working-mode` — Switch task to worktree working mode (optionally carry over uncommitted changes)
+- `GET /api/project/local-uncommitted-files` — Get uncommitted files in the local project directory
 - `POST /api/project/worktree/apply-uncommitted` — Apply uncommitted changes to a target branch
 - `POST /api/project/worktree/revert-last-merge` — Revert the most recent merge
 - `POST /api/project/worktree/restore-file` — Restore a file from the target branch

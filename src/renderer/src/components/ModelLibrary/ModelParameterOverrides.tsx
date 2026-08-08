@@ -14,6 +14,7 @@ import { DefaultModelOverrides } from './providers/DefaultModelOverrides';
 import { ZaiPlanModelOverrides } from './providers/ZaiPlanModelOverrides';
 import { AlibabaPlanModelOverrides } from './providers/AlibabaPlanModelOverrides';
 import { DeepseekModelOverrides } from './providers/DeepseekModelOverrides';
+import { NeuralwattModelOverrides } from './providers/NeuralwattModelOverrides';
 
 import { Button } from '@/components/common/Button';
 import { Accordion } from '@/components/common/Accordion';
@@ -36,14 +37,15 @@ const PROVIDER_OVERRIDES_MAP: Partial<Record<LlmProviderName, ComponentType<Prov
   'openai-compatible': OpenAiCompatibleModelOverrides,
   // Providers without specific overrides use DefaultModelOverrides
   anthropic: DefaultModelOverrides,
-  auggie: DefaultModelOverrides,
   bedrock: DefaultModelOverrides,
   cerebras: DefaultModelOverrides,
+  clinepass: DefaultModelOverrides,
   deepseek: DeepseekModelOverrides,
   groq: DefaultModelOverrides,
   lmstudio: DefaultModelOverrides,
   minimax: DefaultModelOverrides,
   mistral: DefaultModelOverrides,
+  neuralwatt: NeuralwattModelOverrides,
   ollama: DefaultModelOverrides,
   synthetic: DefaultModelOverrides,
   'zai-plan': ZaiPlanModelOverrides,

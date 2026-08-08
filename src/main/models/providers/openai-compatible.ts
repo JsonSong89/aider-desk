@@ -1,8 +1,9 @@
-import { Model, ProviderProfile, ReasoningEffort, SettingsData } from '@common/types';
+import { Model, ProviderProfile, ReasoningEffort, SettingsData, Reasoning } from '@common/types';
 import { isOpenAiCompatibleProvider, LlmProvider, OpenAiCompatibleProvider } from '@common/agent';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
-import type { LanguageModelV2, SharedV2ProviderOptions } from '@ai-sdk/provider';
+import type { JSONValue, SharedV4ProviderOptions } from '@ai-sdk/provider';
+import type { LanguageModel } from 'ai';
 
 import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
 import logger from '@/logger';
@@ -101,7 +102,7 @@ const getOpenAiCompatibleAiderMapping = (provider: ProviderProfile, modelId: str
 };
 
 // === LLM Creation Functions ===
-const createOpenAiCompatibleLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModelV2 => {
+const createOpenAiCompatibleLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel => {
   const provider = profile.provider as OpenAiCompatibleProvider;
   let apiKey = provider.apiKey;
   let baseUrl = provider.baseUrl;
@@ -141,7 +142,7 @@ const createOpenAiCompatibleLlm = (profile: ProviderProfile, model: Model, setti
 };
 
 // === Configuration Helper Functions ===
-const getOpenAiCompatibleProviderOptions = (provider: LlmProvider, model: Model): SharedV2ProviderOptions | undefined => {
+const getOpenAiCompatibleProviderOptions = (provider: LlmProvider, model: Model, reasoning?: Reasoning): SharedV4ProviderOptions | undefined => {
   if (!isOpenAiCompatibleProvider(provider)) {
     return undefined;
   }
@@ -151,22 +152,36 @@ const getOpenAiCompatibleProviderOptions = (provider: LlmProvider, model: Model)
   // Extract reasoningEffort from model overrides or provider config
   const providerOverrides = model.providerOverrides as Partial<OpenAiCompatibleProvider> | undefined;
   const reasoningEffort = providerOverrides?.reasoningEffort ?? openAiCompatibleProvider.reasoningEffort;
+  const extraBody = providerOverrides?.extraBody ?? openAiCompatibleProvider.extraBody;
 
-  // Map ReasoningEffort enum to AI SDK format
-  const mappedReasoningEffort =
-    reasoningEffort === undefined || reasoningEffort === ReasoningEffort.None
-      ? undefined
-      : (reasoningEffort.toLowerCase() as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh');
+  const providerOptions: Record<string, JSONValue> = {};
 
-  if (mappedReasoningEffort) {
-    logger.debug('Using reasoning effort for OpenAI Compatible:', {
-      mappedReasoningEffort,
+  // When the top-level reasoning parameter is set (not undefined or 'provider-default'),
+  // omit reasoningEffort from providerOptions so the AI SDK's portable reasoning takes effect.
+  // Still apply extraBody since it may contain unrelated provider settings.
+  if (!reasoning || reasoning === 'provider-default') {
+    const mappedReasoningEffort =
+      reasoningEffort === undefined || reasoningEffort === ReasoningEffort.None
+        ? undefined
+        : (reasoningEffort.toLowerCase() as 'max' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh');
+
+    if (mappedReasoningEffort) {
+      providerOptions.reasoningEffort = mappedReasoningEffort;
+    }
+  }
+
+  if (extraBody) {
+    Object.assign(providerOptions, extraBody);
+  }
+
+  if (Object.keys(providerOptions).length > 0) {
+    logger.debug('Using provider options for OpenAI Compatible:', {
+      reasoning,
+      hasExtraBody: !!extraBody,
     });
     return {
-      [provider.name]: {
-        reasoningEffort: mappedReasoningEffort,
-      },
-    } satisfies SharedV2ProviderOptions;
+      [provider.name]: providerOptions,
+    } satisfies SharedV4ProviderOptions;
   }
 
   return undefined;

@@ -98,18 +98,26 @@ export default class PermissionGateExtension implements Extension {
   };
 
   async onToolCalled(event: ToolCalledEvent, context: ExtensionContext): Promise<Partial<ToolCalledEvent>> {
-    if (event.tool !== 'power---bash') return {};
+    if (event.toolName !== 'power---bash') return {};
 
-    const command = event.toolInput.command as string;
-    if (DANGEROUS_PATTERNS.some(p => command.includes(p))) {
-      const taskContext = context.getTaskContext();
-      const answer = await taskContext?.askQuestion(
-        `Allow dangerous command: ${command}?`,
-        { options: ['Yes', 'No'] }
-      );
-      if (answer !== 'Yes') {
-        return { blocked: true };
-      }
+    const command = event.input?.command as string;
+    if (!command || !DANGEROUS_PATTERNS.some(p => command.includes(p))) return {};
+
+    const taskContext = context.getTaskContext();
+    if (!taskContext) return {};
+
+    const answer = await taskContext.askQuestion(
+      `Allow dangerous command: ${command}?`,
+      {
+        answers: [
+          { text: 'Yes', shortkey: 'y' },
+          { text: 'No', shortkey: 'n' },
+        ],
+        defaultAnswer: 'No',
+      },
+    );
+    if (answer !== 'Yes') {
+      return { blocked: true };
     }
     return {};
   }
@@ -372,10 +380,11 @@ export default class MultiModelRunExtension implements Extension {
     const taskContext = context.getTaskContext();
 
     for (const model of selectedModels.slice(1)) {
+      const [provider, ...modelParts] = model.modelId.split('/');
       await projectContext.createTask({
         name: `${taskContext?.data.name} (${model.modelId})`,
-        initialPrompt: event.prompt,
-        modelId: model.modelId,
+        provider,
+        model: modelParts.join('/'),
       });
     }
   }
@@ -581,3 +590,14 @@ export default class ExternalRulesExtension implements Extension {
 | Tools | chunkhound-search | Custom AI tools |
 | UI Display | tps-counter | Show information in UI |
 | UI Interactive | multi-model-run | User input in UI |
+| **External Libraries** | **kanban-demo.ts** | **Third-party npm packages in UI components** |
+
+### External Libraries (kanban-demo.ts)
+
+Uses `getUIComponentsLibraries()` to load a npm package and render it in a UI component. See [external-libraries.md](external-libraries.md) for full documentation and a minimal example.
+
+Key patterns:
+- `getUIComponentsLibraries()` returns `{ kanban: 'react-kanban-kit@^0.0.2-beta.7' }`
+- JSX accesses library via `props.libraries.kanban`
+- Loading state handled with `undefined` check + timeout-based error fallback
+- Uses `ui.Button` and `ui.ModalOverlayLayout` alongside the external library

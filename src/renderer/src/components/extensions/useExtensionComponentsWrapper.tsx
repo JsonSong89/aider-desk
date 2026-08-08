@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useRef } from 'react';
-import StringToReactComponent from 'string-to-react-component';
-import { ExtensionUIComponent } from '@common/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { ExtensionUIErrorBoundary } from '@/components/extensions/ExtensionUIErrorBoundary';
-import { useApi } from '@/contexts/ApiContext';
+import { ExtensionComponentRenderer } from './ExtensionComponentRenderer';
+
+import { useExtensionApi } from '@/contexts/ExtensionApiContext';
 import { useExtensions } from '@/contexts/ExtensionsContext';
-import { useExtensionComponents, useExtensionUIStore } from '@/stores/extensionUIStore';
+import {
+  handleExtensionUIRefreshEvent,
+  isExtensionUIDataLoaded,
+  loadExtensionComponentData,
+  loadExtensionUIComponents,
+  useExtensionComponents,
+} from '@/stores/extensionUIStore';
+import { useReactIcons } from '@/utils/extension-icons';
+import { loadAllLibraries } from '@/utils/extension-library-loader';
 
 type UseExtensionComponentsWrapperProps = {
   placement: string;
@@ -25,8 +32,8 @@ export const useExtensionComponentsWrapper = ({
   actionTaskId,
 }: UseExtensionComponentsWrapperProps) => {
   const { componentProps } = useExtensions();
-  const api = useApi();
-  const store = useExtensionUIStore();
+  const api = useExtensionApi();
+  const icons = useReactIcons();
   const currentProjectDir = projectDir ?? componentProps.projectDir;
   const currentTaskId = taskId ?? componentProps.task?.id;
   const currentActionProjectDir = actionProjectDir ?? currentProjectDir;
@@ -37,12 +44,47 @@ export const useExtensionComponentsWrapper = ({
   // Track which components have been loaded in this mount to prevent infinite loops with noDataCache
   const loadedComponentsRef = useRef<Set<string>>(new Set());
 
+  // Load libraries for all components that declare them
+  const [libraries, setLibraries] = useState<Record<string, Record<string, unknown>>>({});
+
+  useEffect(() => {
+    if (!components) {
+      return;
+    }
+
+    const mergedLibraries: Record<string, string> = {};
+    for (const comp of components) {
+      if (comp.libraries) {
+        Object.assign(mergedLibraries, comp.libraries);
+      }
+    }
+    if (Object.keys(mergedLibraries).length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    void loadAllLibraries(api, mergedLibraries)
+      .then((loaded) => {
+        if (!cancelled) {
+          setLibraries(loaded);
+        }
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('[ExtensionLibLoader] Failed to load libraries:', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, components]);
+
   // Load components list if not yet loaded
   useEffect(() => {
     if (components === undefined) {
-      void store.loadComponents(api, placement, currentProjectDir, currentTaskId);
+      void loadExtensionUIComponents(api, placement, currentProjectDir, currentTaskId);
     }
-  }, [api, currentProjectDir, placement, components, store, currentTaskId]);
+  }, [api, currentProjectDir, placement, components, currentTaskId]);
 
   // Reset loaded components tracking when components list changes
   useEffect(() => {
@@ -59,7 +101,7 @@ export const useExtensionComponentsWrapper = ({
 
     componentsWithData.forEach((comp) => {
       const componentKey = `${comp.extensionId}:${comp.componentId}:${currentProjectDir}:${currentTaskId}`;
-      const isLoaded = store.isDataLoaded(comp.extensionId, comp.componentId, currentProjectDir, currentTaskId);
+      const isLoaded = isExtensionUIDataLoaded(comp.extensionId, comp.componentId, currentProjectDir, currentTaskId);
       const hasBeenLoadedThisMount = loadedComponentsRef.current.has(componentKey);
 
       // For noDataCache components, only load once per mount (unless explicitly refreshed)
@@ -68,10 +110,10 @@ export const useExtensionComponentsWrapper = ({
 
       if (shouldLoad) {
         loadedComponentsRef.current.add(componentKey);
-        void store.loadComponentData(api, comp.extensionId, comp.componentId, currentProjectDir, currentTaskId, comp.noDataCache);
+        void loadExtensionComponentData(api, comp.extensionId, comp.componentId, currentProjectDir, currentTaskId, comp.noDataCache);
       }
     });
-  }, [api, currentProjectDir, currentTaskId, components, store]);
+  }, [api, currentProjectDir, currentTaskId, components]);
 
   useEffect(() => {
     return api.onExtensionUIRefresh((data) => {
@@ -80,8 +122,8 @@ export const useExtensionComponentsWrapper = ({
       }
 
       if (data.reloadComponents) {
-        store.handleRefreshEvent(api, data, currentProjectDir, currentTaskId);
-        void store.loadComponents(api, placement, currentProjectDir);
+        handleExtensionUIRefreshEvent(api, data, currentProjectDir, currentTaskId);
+        void loadExtensionUIComponents(api, placement, currentProjectDir);
       } else {
         if (data.taskId !== undefined && data.taskId !== currentTaskId) {
           return;
@@ -107,7 +149,7 @@ export const useExtensionComponentsWrapper = ({
             // Remove from tracking so it can be loaded again
             loadedComponentsRef.current.delete(componentKey);
 
-            void store.loadComponentData(
+            void loadExtensionComponentData(
               api,
               comp.extensionId,
               comp.componentId,
@@ -119,39 +161,56 @@ export const useExtensionComponentsWrapper = ({
         }
       }
     });
-  }, [api, currentProjectDir, currentTaskId, components, placement, store]);
+  }, [api, currentProjectDir, currentTaskId, components, placement]);
 
-  const getComponentData = useCallback(
-    (comp: ExtensionUIComponent) => {
-      const executeExtensionAction = async (action: string, ...args: unknown[]) => {
-        return await api.executeUIExtensionAction(comp.extensionId, comp.componentId, action, args, currentActionProjectDir, currentActionTaskId);
-      };
-
-      return {
-        ...componentProps,
-        ...additionalProps,
-        executeExtensionAction,
-        data: store.getComponentData(comp.extensionId, comp.componentId, currentProjectDir, currentTaskId),
-      };
-    },
-    [componentProps, additionalProps, store, currentProjectDir, currentTaskId, currentActionProjectDir, currentActionTaskId, api],
-  );
+  const componentLibraries = useMemo(() => ({ ...componentProps.libraries, ...libraries }), [componentProps.libraries, libraries]);
 
   const renderComponents = useCallback(() => {
     if (!components) {
       return [];
     }
 
+    if (!icons) {
+      return [];
+    }
+
     return components.map((comp) => (
-      <ExtensionUIErrorBoundary key={`${comp.extensionId}-${comp.componentId}`} extensionId={comp.extensionId} componentId={comp.componentId}>
-        <StringToReactComponent data={getComponentData(comp)}>{comp.jsx}</StringToReactComponent>
-      </ExtensionUIErrorBoundary>
+      <ExtensionComponentRenderer
+        key={`${comp.extensionId}-${comp.componentId}`}
+        component={comp}
+        componentProps={componentProps}
+        additionalProps={additionalProps}
+        libraries={componentLibraries}
+        currentProjectDir={currentProjectDir}
+        currentTaskId={currentTaskId}
+        currentActionProjectDir={currentActionProjectDir}
+        currentActionTaskId={currentActionTaskId}
+        api={api}
+      />
     ));
-  }, [components, getComponentData]);
+  }, [
+    components,
+    componentProps,
+    additionalProps,
+    componentLibraries,
+    currentProjectDir,
+    currentTaskId,
+    currentActionProjectDir,
+    currentActionTaskId,
+    api,
+    icons,
+  ]);
 
   return {
     components,
     renderComponents,
     isEmpty: !components || components.length === 0,
+    componentProps,
+    componentLibraries,
+    api,
+    currentProjectDir,
+    currentTaskId,
+    currentActionProjectDir,
+    currentActionTaskId,
   };
 };

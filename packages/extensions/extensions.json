@@ -1,12 +1,25 @@
 {
   "extensions": [
     {
+      "id": "binary-files",
+      "name": "Binary Files",
+      "description": "Attaches local binary files to multimodal model requests",
+      "folder": "binary-files",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "tools"
+      ]
+    },
+    {
       "id": "wakatime",
       "name": "WakaTime",
       "description": "Tracks coding activity by sending heartbeats to WakaTime via wakatime-cli",
       "file": "wakatime.ts",
       "type": "single",
-      "capabilities": ["tracking"]
+      "capabilities": [
+        "tracking"
+      ]
     },
     {
       "id": "pirate",
@@ -14,7 +27,10 @@
       "description": "Adds a Pirate agent that speaks like a swashbuckling sea dog",
       "file": "pirate.ts",
       "type": "single",
-      "capabilities": ["agents", "example"]
+      "capabilities": [
+        "agents",
+        "example"
+      ]
     },
     {
       "id": "generate-tests",
@@ -22,7 +38,10 @@
       "description": "Adds /generate-tests command to generate unit tests for files",
       "file": "generate-tests.ts",
       "type": "single",
-      "capabilities": ["commands", "example"]
+      "capabilities": [
+        "commands",
+        "example"
+      ]
     },
     {
       "id": "questions",
@@ -31,7 +50,10 @@
       "folder": "questions",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["commands", "ui"]
+      "capabilities": [
+        "commands",
+        "ui"
+      ]
     },
     {
       "id": "theme",
@@ -39,7 +61,9 @@
       "description": "Adds /theme command to switch AiderDesk themes",
       "file": "theme.ts",
       "type": "single",
-      "capabilities": ["commands"]
+      "capabilities": [
+        "commands"
+      ]
     },
     {
       "id": "plan-mode",
@@ -47,15 +71,20 @@
       "description": "Adds a Plan mode that enforces planning before coding",
       "file": "plan-mode.ts",
       "type": "single",
-      "capabilities": ["modes"]
+      "capabilities": [
+        "modes"
+      ]
     },
     {
       "id": "protected-paths",
       "name": "Protected Paths",
-      "description": "Blocks file operations on protected paths (.env, .git/, node_modules/)",
-      "file": "protected-paths.ts",
-      "type": "single",
-      "capabilities": ["security"]
+      "description": "Blocks file operations on sensitive files and protected directories (.env*, *.pem, .ssh/, .aws/, .git/, system dirs, etc.)",
+      "folder": "protected-paths",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "security"
+      ]
     },
     {
       "id": "permission-gate",
@@ -63,7 +92,9 @@
       "description": "Prompts for confirmation before running dangerous bash commands",
       "file": "permission-gate.ts",
       "type": "single",
-      "capabilities": ["security"]
+      "capabilities": [
+        "security"
+      ]
     },
     {
       "id": "ultrathink",
@@ -71,15 +102,20 @@
       "description": "Detects 'ultrathink' / 'think hard' and increases reasoning effort",
       "file": "ultrathink.ts",
       "type": "single",
-      "capabilities": ["optimization"]
+      "capabilities": [
+        "optimization"
+      ]
     },
     {
       "id": "external-rules",
       "name": "External Rules",
       "description": "Includes rule files from Cursor, Claude Code, and Roo Code",
-      "file": "external-rules.ts",
-      "type": "single",
-      "capabilities": ["context"]
+      "folder": "external-rules",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "context"
+      ]
     },
     {
       "id": "external-skills",
@@ -88,7 +124,20 @@
       "folder": "external-skills",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["context"]
+      "capabilities": [
+        "context"
+      ]
+    },
+    {
+      "id": "legacy-system-prompt",
+      "name": "Legacy System Prompt",
+      "description": "Restores the verbose pre-optimization system prompt and workflow — ideal for less capable models",
+      "folder": "legacy-system-prompt",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "context"
+      ]
     },
     {
       "id": "sound-notification",
@@ -97,7 +146,9 @@
       "folder": "sound-notification",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["notifications"]
+      "capabilities": [
+        "notifications"
+      ]
     },
     {
       "id": "sandbox",
@@ -106,7 +157,13 @@
       "folder": "sandbox",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["security"]
+      "capabilities": [
+        "security"
+      ],
+      "supportedOS": [
+        "linux",
+        "macos"
+      ]
     },
     {
       "id": "rtk",
@@ -115,16 +172,25 @@
       "folder": "rtk",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["optimization", "commands"]
+      "capabilities": [
+        "optimization",
+        "commands"
+      ],
+      "supportedOS": [
+        "linux",
+        "macos"
+      ]
     },
     {
       "id": "redact-secrets",
       "name": "Redact Secrets",
-      "description": "Redacts secret values from .env* files in file read results",
+      "description": "Redacts secrets from file read results using regex patterns and .env* file values",
       "folder": "redact-secrets",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["security"]
+      "capabilities": [
+        "security"
+      ]
     },
     {
       "id": "chunkhound-search",
@@ -133,7 +199,9 @@
       "folder": "chunkhound-search",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["search"]
+      "capabilities": [
+        "search"
+      ]
     },
     {
       "id": "chunkhound-on-semantic-search-tool",
@@ -142,7 +210,9 @@
       "folder": "chunkhound-on-semantic-search-tool",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["search"]
+      "capabilities": [
+        "search"
+      ]
     },
     {
       "id": "tree-sitter-repo-map",
@@ -151,7 +221,10 @@
       "folder": "tree-sitter-repo-map",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["context", "commands"]
+      "capabilities": [
+        "context",
+        "commands"
+      ]
     },
     {
       "id": "context-autocompletion-words",
@@ -160,7 +233,9 @@
       "folder": "context-autocompletion-words",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["context"]
+      "capabilities": [
+        "context"
+      ]
     },
     {
       "id": "lsp",
@@ -169,7 +244,10 @@
       "folder": "lsp",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["tools", "code-intelligence"]
+      "capabilities": [
+        "tools",
+        "code-intelligence"
+      ]
     },
     {
       "id": "plannotator",
@@ -178,7 +256,12 @@
       "folder": "plannotator",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["modes", "tools", "commands", "workflows"]
+      "capabilities": [
+        "modes",
+        "tools",
+        "commands",
+        "workflows"
+      ]
     },
     {
       "id": "programmatic-tool-calls",
@@ -187,7 +270,9 @@
       "folder": "programmatic-tool-calls",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["tools"]
+      "capabilities": [
+        "tools"
+      ]
     },
     {
       "id": "ui-placement-demo",
@@ -195,7 +280,10 @@
       "description": "Demonstrates all available UI component placement locations in AiderDesk",
       "file": "ui-placement-demo.ts",
       "type": "single",
-      "capabilities": ["ui", "example"]
+      "capabilities": [
+        "ui",
+        "example"
+      ]
     },
     {
       "id": "multi-model-run",
@@ -204,7 +292,10 @@
       "folder": "multi-model-run",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["ui", "workflows"]
+      "capabilities": [
+        "ui",
+        "workflows"
+      ]
     },
     {
       "id": "providers-quota-extension",
@@ -213,7 +304,20 @@
       "folder": "providers-quota-extension",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["ui"]
+      "capabilities": [
+        "ui"
+      ]
+    },
+    {
+      "id": "openai-codex",
+      "name": "OpenAI Codex Auth",
+      "description": "OpenAI Codex provider using ChatGPT Plus/Pro OAuth authentication",
+      "folder": "openai-codex",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "providers"
+      ]
     },
     {
       "id": "fff",
@@ -222,7 +326,26 @@
       "folder": "fff",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["tools", "search"]
+      "capabilities": [
+        "tools",
+        "search"
+      ],
+      "supportedOS": [
+        "linux",
+        "macos"
+      ]
+    },
+    {
+      "id": "searxng-search",
+      "name": "SearXNG Search",
+      "description": "Web search tool using SearXNG with auto-starting Docker container support",
+      "folder": "searxng-search",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "tools",
+        "search"
+      ]
     },
     {
       "id": "seek",
@@ -231,7 +354,14 @@
       "folder": "seek",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["tools", "search"]
+      "capabilities": [
+        "tools",
+        "search"
+      ],
+      "supportedOS": [
+        "linux",
+        "macos"
+      ]
     },
     {
       "id": "tps-counter",
@@ -240,7 +370,9 @@
       "folder": "tps-counter",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["metrics"]
+      "capabilities": [
+        "metrics"
+      ]
     },
     {
       "id": "verifier",
@@ -249,7 +381,10 @@
       "folder": "verifier",
       "type": "folder",
       "hasDependencies": false,
-      "capabilities": ["workflows", "ui"]
+      "capabilities": [
+        "workflows",
+        "ui"
+      ]
     },
     {
       "id": "bmad",
@@ -258,16 +393,185 @@
       "folder": "bmad",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["modes", "ui"]
+      "capabilities": [
+        "modes",
+        "ui"
+      ]
+    },
+    {
+      "id": "claude-agent-sdk",
+      "name": "Claude Agent SDK",
+      "description": "Integrates the Claude Agent SDK as a provider, using Claude Code CLI for agent mode",
+      "folder": "claude-agent-sdk",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "providers",
+        "agent-loop"
+      ]
+    },
+    {
+      "id": "auggie-sdk",
+      "name": "Auggie SDK",
+      "description": "Integrates the Auggie SDK as a provider using the Augment platform",
+      "folder": "auggie-sdk",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "providers"
+      ]
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "description": "Integrates Cursor as a provider via a local OpenAI-compatible proxy with full tool approval control",
+      "folder": "cursor",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "providers"
+      ]
     },
     {
       "id": "cursor-sdk",
       "name": "Cursor SDK",
-      "description": "Integrates the Cursor SDK as a provider with cursor/ prefix, overriding the agent loop to run Cursor agents",
+      "description": "Integrates the Cursor SDK as a provider with cursor-sdk/ prefix, overriding the agent loop to run Cursor agents",
       "folder": "cursor-sdk",
       "type": "folder",
       "hasDependencies": true,
-      "capabilities": ["providers", "agent-loop"]
+      "capabilities": [
+        "providers",
+        "agent-loop"
+      ]
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "description": "Integrates GitHub Copilot as an LLM provider using the official Copilot SDK (Copilot CLI). Agent mode only",
+      "folder": "github-copilot",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "providers",
+        "agent-loop"
+      ]
+    },
+    {
+      "id": "checkpoints",
+      "name": "Checkpoints",
+      "description": "Git-based checkpoints for file edits — revert to the state before any edit",
+      "folder": "checkpoints",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "events",
+        "ui"
+      ]
+    },
+    {
+      "id": "codegraph",
+      "name": "CodeGraph",
+      "description": "Code intelligence using CodeGraph — symbol search, call graph tracing, impact analysis, and context building",
+      "folder": "codegraph",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "tools",
+        "search"
+      ]
+    },
+    {
+      "id": "kanban",
+      "name": "Kanban Board",
+      "description": "Kanban board for project tasks, grouped by state with auto-updating columns",
+      "folder": "kanban",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "ui"
+      ]
+    },
+    {
+      "id": "doom",
+      "name": "Doom",
+      "description": "Play DOOM in a floating panel",
+      "folder": "doom",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "ui"
+      ]
+    },
+    {
+      "id": "my-minions",
+      "name": "My Minions",
+      "description": "Adds Orchestrator and Minion agent profiles — a coordinator that delegates all work to a focused execution subagent",
+      "folder": "my-minions",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "agents",
+        "example"
+      ]
+    },
+    {
+      "id": "wigolo",
+      "name": "wigolo",
+      "description": "Local-first web search, fetch, crawl & research tools powered by wigolo — no API keys required",
+      "folder": "wigolo",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "tools",
+        "search"
+      ]
+    },
+    {
+      "id": "destructive-command-guard",
+      "name": "Destructive Command Guard",
+      "description": "Blocks dangerous git and shell commands from being executed by agents using dcg",
+      "folder": "destructive-command-guard",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "security",
+        "commands"
+      ]
+    },
+    {
+      "id": "skill-gallery",
+      "name": "Skill Gallery",
+      "description": "Browse and install Claude Skills from popular skill repositories (Anthropic Official, Awesome Claude Skills)",
+      "folder": "skill-gallery",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "ui"
+      ]
+    },
+    {
+      "id": "task-scheduler",
+      "name": "Task Scheduler",
+      "description": "Schedule tasks to run automatically on a cron or periodic basis",
+      "folder": "task-scheduler",
+      "type": "folder",
+      "hasDependencies": true,
+      "capabilities": [
+        "ui",
+        "commands",
+        "events"
+      ]
+    },
+    {
+      "id": "reasoning-selector",
+      "name": "Reasoning Selector",
+      "description": "Adds a reasoning effort selector dropdown next to the model selector in agent mode",
+      "folder": "reasoning-selector",
+      "type": "folder",
+      "hasDependencies": false,
+      "capabilities": [
+        "ui"
+      ]
     }
   ]
 }

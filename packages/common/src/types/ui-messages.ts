@@ -6,7 +6,7 @@ export interface Message {
   type: 'user' | 'response' | 'loading' | 'reflected-message' | 'command-output' | 'log' | 'tokens-info' | 'tool' | 'group' | 'task-info' | 'assistant-group';
   content: string;
   promptContext?: PromptContext;
-  children?: Message[];
+  timestamp?: number;
 }
 
 export interface UserMessage extends Message {
@@ -17,6 +17,7 @@ export interface UserMessage extends Message {
 
 export interface ResponseMessage extends Message {
   type: 'response';
+  reasoning?: string;
   usageReport?: UsageReportData;
   finished?: boolean;
 }
@@ -55,6 +56,7 @@ export interface ToolMessage extends Message {
   content: string; // Empty while executing, contains result when complete
   usageReport?: UsageReportData;
   finished?: boolean;
+  isStreaming?: boolean;
 }
 
 export const isUserMessage = (message: Message): message is UserMessage => {

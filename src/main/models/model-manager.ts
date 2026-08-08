@@ -3,19 +3,17 @@ import path from 'path';
 
 import { AVAILABLE_PROVIDERS, getDefaultProviderParams, LlmProvider, LlmProviderName } from '@common/agent';
 import { ProviderDefinition } from '@common/extensions';
-import { Model, ModelInfo, ModelOverrides, ProviderModelsData, ProviderProfile, SettingsData, UsageReportData, VoiceSession } from '@common/types';
+import { Model, ModelInfo, ModelOverrides, ProviderModelsData, ProviderProfile, Reasoning, SettingsData, UsageReportData, VoiceSession } from '@common/types';
 import { extractProviderModel } from '@common/utils';
 
 import { anthropicProviderStrategy } from './providers/anthropic';
 import { anthropicCompatibleProviderStrategy } from './providers/anthropic-compatible';
-import { auggieProviderStrategy } from './providers/auggie';
 import { azureProviderStrategy } from './providers/azure';
 import { bedrockProviderStrategy } from './providers/bedrock';
 import { cerebrasProviderStrategy } from './providers/cerebras';
-import { claudeAgentSdkProviderStrategy } from './providers/claude-agent-sdk';
+import { clinePassProviderStrategy } from './providers/clinepass';
 import { deepseekProviderStrategy } from './providers/deepseek';
 import { geminiProviderStrategy } from './providers/gemini';
-import { geminiCliProviderStrategy } from './providers/gemini-cli';
 import { gpustackProviderStrategy } from './providers/gpustack';
 import { groqProviderStrategy } from './providers/groq';
 import { alibabaPlanProviderStrategy } from './providers/alibaba-plan';
@@ -24,6 +22,7 @@ import { litellmProviderStrategy } from './providers/litellm';
 import { lmStudioProviderStrategy } from './providers/lm-studio';
 import { minimaxProviderStrategy } from './providers/minimax';
 import { mistralProviderStrategy } from './providers/mistral';
+import { neuralwattProviderStrategy } from './providers/neuralwatt';
 import { ollamaProviderStrategy } from './providers/ollama';
 import { openaiProviderStrategy } from './providers/openai';
 import { openaiCompatibleProviderStrategy } from './providers/openai-compatible';
@@ -35,8 +34,8 @@ import { vertexAiProviderStrategy } from './providers/vertex-ai';
 import { zaiPlanProviderStrategy } from './providers/zai-plan';
 
 import type { RegisteredProvider } from '@/extensions/extension-manager';
-import type { LanguageModelV2 } from '@ai-sdk/provider';
-import type { JSONValue, LanguageModelUsage, ModelMessage, ToolSet } from 'ai';
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
+import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from 'ai';
 
 import { getDefaultUsageReport } from '@/models/providers/default';
 import { AIDER_DESK_CACHE_DIR, AIDER_DESK_DATA_DIR } from '@/constants';
@@ -46,10 +45,11 @@ import { EventManager } from '@/events';
 import { Task } from '@/task/task';
 import { AiderModelMapping, CacheControl, LoadModelsResponse, LlmProviderRegistry, LlmProviderStrategy } from '@/models/types';
 
+const MODEL_LOAD_TIMEOUT_MS = 30_000;
 const MODELS_META_URL = 'https://models.dev/api.json';
 const MODELS_FILE = path.join(AIDER_DESK_DATA_DIR, 'models.json');
 const PROVIDER_MODELS_CACHE_FILE = path.join(AIDER_DESK_CACHE_DIR, 'provider-models.json');
-const PROVIDER_MODELS_CACHE_VERSION = 1;
+const PROVIDER_MODELS_CACHE_VERSION = 2;
 
 type ProviderModelsCache = {
   version: number;
@@ -91,14 +91,12 @@ export class ModelManager {
   private providerRegistry: LlmProviderRegistry = {
     anthropic: anthropicProviderStrategy,
     'anthropic-compatible': anthropicCompatibleProviderStrategy,
-    auggie: auggieProviderStrategy,
     azure: azureProviderStrategy,
     bedrock: bedrockProviderStrategy,
     cerebras: cerebrasProviderStrategy,
-    'claude-agent-sdk': claudeAgentSdkProviderStrategy,
+    clinepass: clinePassProviderStrategy,
     deepseek: deepseekProviderStrategy,
     gemini: geminiProviderStrategy,
-    'gemini-cli': geminiCliProviderStrategy,
     gpustack: gpustackProviderStrategy,
     groq: groqProviderStrategy,
     'alibaba-plan': alibabaPlanProviderStrategy,
@@ -107,6 +105,7 @@ export class ModelManager {
     lmstudio: lmStudioProviderStrategy,
     minimax: minimaxProviderStrategy,
     mistral: mistralProviderStrategy,
+    neuralwatt: neuralwattProviderStrategy,
     ollama: ollamaProviderStrategy,
     openai: openaiProviderStrategy,
     'openai-compatible': openaiCompatibleProviderStrategy,
@@ -157,6 +156,10 @@ export class ModelManager {
     } catch (error) {
       logger.error('Error initializing ModelInfoManager:', error);
     }
+  }
+
+  async waitForInit(): Promise<void> {
+    await this.initPromise;
   }
 
   private async loadModelsInfo(): Promise<void> {
@@ -350,60 +353,70 @@ export class ModelManager {
     return changedProviderProfiles.length > 0 || removedProviders.length > 0;
   }
 
+  private async withModelLoadTimeout(promise: Promise<void>, profile: ProviderProfile): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        if (!this.providerModels[profile.id]) {
+          const errorMsg = `Timed out after ${MODEL_LOAD_TIMEOUT_MS / 1000}s while loading models`;
+          logger.error(`Model loading timed out for provider profile ${profile.id}`);
+          this.providerErrors[profile.id] = errorMsg;
+        }
+        resolve();
+      }, MODEL_LOAD_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
   private async loadProviderModels(providers: ProviderProfile[]): Promise<void> {
     this.eventManager.sendProviderModelsUpdated({ loading: true });
 
-    // Group providers by their provider name
-    const providersByName: Record<LlmProviderName, ProviderProfile[]> = {} as Record<LlmProviderName, ProviderProfile[]>;
-    for (const provider of providers || []) {
-      if (!providersByName[provider.provider.name]) {
-        providersByName[provider.provider.name] = [];
-      }
-      providersByName[provider.provider.name].push(provider);
-    }
-
     const toLoadPromises: Promise<void>[] = [];
 
-    for (const providerName of Object.keys(providersByName) as LlmProviderName[]) {
-      const profilesForProvider = providersByName[providerName];
-      const strategy = this.providerRegistry[providerName];
+    for (const profile of providers || []) {
+      const strategy = this.providerRegistry[profile.provider.name as LlmProviderName];
 
-      if (strategy && profilesForProvider.length > 0) {
-        const loadModels = async () => {
-          // Load models from each profile for this provider type
-          for (const profile of profilesForProvider) {
-            // Skip disabled providers
-            if (profile.disabled) {
-              logger.debug(`Skipping disabled provider profile ${profile.id}`);
-              continue;
-            }
-
-            let providerModels: Model[] = [];
-            const response = await this.loadModelsWithRetry(strategy, profile);
-
-            delete this.providerErrors[profile.id];
-            if (response.success) {
-              providerModels.push(...response.models);
-            } else {
-              if (response.error) {
-                logger.error(`Failed to load models for provider profile ${profile.id}:`, {
-                  error: response.error,
-                });
-                this.providerErrors[profile.id] = response.error;
-              } else {
-                logger.warn(`Models for provider profile '${profile.id}' were not loaded due to misconfiguration.`);
-              }
-            }
-
-            providerModels = this.enrichWithModelInfo(providerModels, profile, strategy);
-            providerModels = this.enrichWithOverrides(providerModels, profile.id);
-
-            this.providerModels[profile.id] = providerModels;
-          }
-        };
-
-        toLoadPromises.push(loadModels());
+      if (!strategy) {
+        continue;
       }
+
+      if (profile.disabled) {
+        logger.debug(`Skipping disabled provider profile ${profile.id}`);
+        continue;
+      }
+
+      const loadModels = async () => {
+        let providerModels: Model[] = [];
+        const response = await this.loadModelsWithRetry(strategy, profile);
+
+        delete this.providerErrors[profile.id];
+        if (response.success) {
+          providerModels.push(...response.models);
+        } else {
+          if (response.error) {
+            logger.error(`Failed to load models for provider profile ${profile.id}:`, {
+              error: response.error,
+            });
+            this.providerErrors[profile.id] = response.error;
+          } else {
+            logger.warn(`Models for provider profile '${profile.id}' were not loaded due to misconfiguration.`);
+          }
+        }
+
+        providerModels = this.enrichWithModelInfo(providerModels, profile, strategy);
+        providerModels = this.enrichWithOverrides(providerModels, profile.id);
+
+        this.providerModels[profile.id] = providerModels;
+      };
+
+      toLoadPromises.push(this.withModelLoadTimeout(loadModels(), profile));
     }
 
     await Promise.all(toLoadPromises);
@@ -716,7 +729,7 @@ export class ModelManager {
     toolSet?: ToolSet,
     systemPrompt?: string,
     providerMetadata?: unknown,
-  ): LanguageModelV2 | Promise<LanguageModelV2> {
+  ): LanguageModel | Promise<LanguageModel> {
     const strategy = this.providerRegistry[provider.provider.name];
     if (!strategy) {
       throw new Error(`Unsupported LLM provider: ${provider.provider.name}`);
@@ -805,7 +818,21 @@ export class ModelManager {
       : (llmProvider.disableStreaming ?? false);
   }
 
-  getProviderOptions(provider: ProviderProfile, modelId: string): Record<string, Record<string, JSONValue>> | undefined {
+  isToolCallStreamingDisabled(provider: ProviderProfile, modelId: string): boolean {
+    const llmProvider = provider.provider;
+    const models = this.providerModels[provider.id] || [];
+    const modelObj = models.find((m) => m.id === modelId);
+
+    if (!modelObj) {
+      return llmProvider.disableToolCallStreaming ?? false;
+    }
+
+    return typeof modelObj.providerOverrides?.disableToolCallStreaming === 'boolean'
+      ? modelObj.providerOverrides.disableToolCallStreaming
+      : (llmProvider.disableToolCallStreaming ?? false);
+  }
+
+  getProviderOptions(provider: ProviderProfile, modelId: string, reasoning?: Reasoning): SharedV4ProviderOptions | undefined {
     const llmProvider = provider.provider;
     const strategy = this.providerRegistry[llmProvider.name];
     if (!strategy?.getProviderOptions) {
@@ -826,17 +853,17 @@ export class ModelManager {
         id: modelId,
         providerId: provider.id,
       };
-      return strategy.getProviderOptions(llmProvider, fallbackModel);
+      return strategy.getProviderOptions(llmProvider, fallbackModel, reasoning);
     }
 
     logger.debug(`Found model object for ${modelId} in provider ${provider.id}`, {
       hasProviderOverrides: !!modelObj.providerOverrides,
     });
 
-    return strategy.getProviderOptions(llmProvider, modelObj);
+    return strategy.getProviderOptions(llmProvider, modelObj, reasoning);
   }
 
-  getProviderParameters(provider: ProviderProfile, modelId: string): Record<string, unknown> {
+  getProviderParameters(provider: ProviderProfile, modelId: string, reasoning?: Reasoning): Record<string, unknown> {
     const llmProvider = provider.provider;
     const strategy = this.providerRegistry[llmProvider.name];
     if (!strategy?.getProviderParameters) {
@@ -857,14 +884,14 @@ export class ModelManager {
         id: modelId,
         providerId: provider.id,
       };
-      return strategy.getProviderParameters(llmProvider, fallbackModel);
+      return strategy.getProviderParameters(llmProvider, fallbackModel, reasoning);
     }
 
     logger.debug(`Found model object for ${modelId} in provider ${provider.id}`, {
       hasProviderOverrides: !!modelObj.providerOverrides,
     });
 
-    return strategy.getProviderParameters(llmProvider, modelObj);
+    return strategy.getProviderParameters(llmProvider, modelObj, reasoning);
   }
 
   /**
@@ -946,14 +973,18 @@ export class ModelManager {
 
       this.providerRegistry[provider.provider.name] = {
         ...provider.strategy,
-        createLlm: (profile, model, settings, projectDir) =>
-          provider.strategy.createLlm(profile, model, settings, projectDir) as LanguageModelV2 | Promise<LanguageModelV2>,
+        createLlm: (profile, model, settings, projectDir, toolSet, systemPrompt, providerMetadata) =>
+          provider.strategy.createLlm(profile, model, settings, projectDir, toolSet, systemPrompt, providerMetadata) as LanguageModel | Promise<LanguageModel>,
         getUsageReport: provider.strategy.getUsageReport || getDefaultUsageReport,
-        getProviderOptions: provider.strategy.getProviderOptions ? (_provider, model) => provider.strategy.getProviderOptions!(model) : undefined,
+        getProviderOptions: provider.strategy.getProviderOptions
+          ? (_provider, model, reasoning) => provider.strategy.getProviderOptions!(model, reasoning)
+          : undefined,
         getProviderTools: provider.strategy.getProviderTools
           ? (_provider, model) => provider.strategy.getProviderTools!(model) as ToolSet | Promise<ToolSet>
           : undefined,
-        getProviderParameters: provider.strategy.getProviderParameters ? (_provider, model) => provider.strategy.getProviderParameters!(model) : undefined,
+        getProviderParameters: provider.strategy.getProviderParameters
+          ? (_provider, model, reasoning) => provider.strategy.getProviderParameters!(model, reasoning)
+          : undefined,
         getCacheControl: provider.strategy.getCacheControl ? (_provider, model) => provider.strategy.getCacheControl!(model) : undefined,
         hasEnvVars: () => false,
         getAiderMapping: provider.strategy.getAiderMapping
@@ -1023,7 +1054,11 @@ export class ModelManager {
   }
 
   getProviders(): ProviderProfile[] {
-    return [...this.store.getProviders(), ...this.getExtensionProviderProfiles()];
+    const providersById = new Map<string, ProviderProfile>(this.store.getProviders().map((p) => [p.id, p]));
+    for (const extensionProfile of this.getExtensionProviderProfiles()) {
+      providersById.set(extensionProfile.id, extensionProfile);
+    }
+    return [...providersById.values()];
   }
 
   getExtensionProviderProfiles(): ProviderProfile[] {

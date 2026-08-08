@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { AutonomyMode } from '@common/types';
 
 import type { AgentProfile, ContextFile, Mode, PromptContext, ProviderProfile, QuestionData, ResponseCompletedData, TaskData } from '@common/types';
 import type {
@@ -118,6 +119,21 @@ describe('Event Payload Interfaces', () => {
       expect(event.blocked).toBe(true);
     });
 
+    it('AgentStartedEvent should support optional images field', () => {
+      const event: AgentStartedEvent = {
+        mode: 'agent',
+        agentProfile: {} as AgentProfile,
+        providerProfile: {} as ProviderProfile,
+        model: 'gpt-4',
+        prompt: 'test prompt',
+        systemPrompt: undefined,
+        contextMessages: [],
+        contextFiles: [],
+        images: ['data:image/png;base64,abc123'],
+      };
+      expect(event.images).toHaveLength(1);
+    });
+
     it('AgentFinishedEvent should have resultMessages field', () => {
       const event: AgentFinishedEvent = {
         mode: 'agent',
@@ -163,8 +179,9 @@ describe('Event Payload Interfaces', () => {
       expect(event.allowed).toBe(false);
     });
 
-    it('ToolCalledEvent should have toolName, agentProfile, and input fields', () => {
+    it('ToolCalledEvent should have toolCallId, toolName, agentProfile, and input fields', () => {
       const event: ToolCalledEvent = {
+        toolCallId: 'test-call-id',
         toolName: 'test-tool',
         agentProfile: {} as AgentProfile,
         input: undefined,
@@ -176,6 +193,7 @@ describe('Event Payload Interfaces', () => {
 
     it('ToolCalledEvent should support optional output field', () => {
       const event: ToolCalledEvent = {
+        toolCallId: 'test-call-id',
         toolName: 'test-tool',
         agentProfile: {} as AgentProfile,
         input: {},
@@ -184,8 +202,9 @@ describe('Event Payload Interfaces', () => {
       expect(event.output).toBe('result');
     });
 
-    it('ToolFinishedEvent should have toolName, agentProfile, input, and output fields', () => {
+    it('ToolFinishedEvent should have toolCallId, toolName, agentProfile, input, and output fields', () => {
       const event: ToolFinishedEvent = {
+        toolCallId: 'test-call-id',
         toolName: 'test-tool',
         agentProfile: {} as AgentProfile,
         input: {},
@@ -304,6 +323,19 @@ describe('Event Payload Interfaces', () => {
       expect(event.answer).toBe('answer');
     });
 
+    it('QuestionAskedEvent should have optional storedAnswer field', () => {
+      const eventWithStoredAnswer: QuestionAskedEvent = {
+        question: {} as QuestionData,
+        storedAnswer: 'yes',
+      };
+      expect(eventWithStoredAnswer.storedAnswer).toBe('yes');
+
+      const eventWithoutStoredAnswer: QuestionAskedEvent = {
+        question: {} as QuestionData,
+      };
+      expect(eventWithoutStoredAnswer.storedAnswer).toBeUndefined();
+    });
+
     it('QuestionAnsweredEvent should have question, answer fields', () => {
       const event: QuestionAnsweredEvent = {
         question: {} as QuestionData,
@@ -379,11 +411,11 @@ describe('Event Payload Interfaces', () => {
         messages: [],
         files: [],
         blocked: true,
-        autoApprove: true,
+        autonomyMode: AutonomyMode.Autonomous,
         denyCommands: true,
       };
       expect(event.blocked).toBe(true);
-      expect(event.autoApprove).toBe(true);
+      expect(event.autonomyMode).toBe('autonomous');
       expect(event.denyCommands).toBe(true);
     });
 
@@ -428,6 +460,32 @@ describe('Extension Interface Event Handlers', () => {
     it('should have optional onTaskClosed handler', () => {
       const extension: Extension = {};
       expect(extension.onTaskClosed).toBeUndefined();
+    });
+
+    it('should have optional onTaskDeleted handler', () => {
+      const extension: Extension = {};
+      expect(extension.onTaskDeleted).toBeUndefined();
+    });
+
+    it('onTaskDeleted should accept TaskDeletedEvent and return Promise', async () => {
+      const extension: Extension = {
+        async onTaskDeleted(event, context) {
+          expect(event.task).toBeDefined();
+          expect(context).toBe(mockContext);
+        },
+      };
+      await extension.onTaskDeleted!({ task: {} as TaskData }, mockContext);
+    });
+
+    it('onTaskDeleted should support blocking deletion', async () => {
+      const extension: Extension = {
+        async onTaskDeleted(event) {
+          expect(event.task).toBeDefined();
+          return { blocked: true };
+        },
+      };
+      const result = await extension.onTaskDeleted!({ task: {} as TaskData }, mockContext);
+      expect(result?.blocked).toBe(true);
     });
   });
 
@@ -597,7 +655,10 @@ describe('Event Modification Pattern', () => {
         return { output: 'modified result' };
       },
     };
-    const result = await extension.onToolFinished!({ toolName: 'test', agentProfile: {} as AgentProfile, input: {}, output: 'original' }, mockContext);
+    const result = await extension.onToolFinished!(
+      { toolCallId: 'test-call-id', toolName: 'test', agentProfile: {} as AgentProfile, input: {}, output: 'original' },
+      mockContext,
+    );
     expect(result?.output).toBe('modified result');
   });
 });

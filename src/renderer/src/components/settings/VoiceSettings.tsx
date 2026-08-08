@@ -332,9 +332,14 @@ export const VoiceSettings = ({ providers: localProviders, setProviders: setLoca
   const openAiModelOptions: Option[] = [
     { label: OpenAiVoiceModel.Gpt4oMiniTranscribe, value: OpenAiVoiceModel.Gpt4oMiniTranscribe },
     { label: OpenAiVoiceModel.Gpt4oTranscribe, value: OpenAiVoiceModel.Gpt4oTranscribe },
+    { label: OpenAiVoiceModel.GptLiveTranscribe, value: OpenAiVoiceModel.GptLiveTranscribe },
+    { label: OpenAiVoiceModel.GptRealtimeWhisper, value: OpenAiVoiceModel.GptRealtimeWhisper },
   ];
 
-  const geminiModelOptions: Option[] = [{ label: GeminiVoiceModel.GeminiLive25FlashNativeAudio, value: GeminiVoiceModel.GeminiLive25FlashNativeAudio }];
+  const geminiModelOptions: Option[] = [
+    { label: GeminiVoiceModel.Gemini31FlashLivePreview, value: GeminiVoiceModel.Gemini31FlashLivePreview },
+    { label: GeminiVoiceModel.Gemini25FlashNativeAudio, value: GeminiVoiceModel.Gemini25FlashNativeAudio },
+  ];
 
   const handleOpenAiModelChange = (value: string) => {
     if (!selectedProfile || selectedProfile.provider.name !== 'openai') {
@@ -421,11 +426,11 @@ export const VoiceSettings = ({ providers: localProviders, setProviders: setLoca
   };
 
   const openAiProvider = selectedProfile?.provider.name === 'openai' ? (selectedProfile.provider as OpenAiProvider) : undefined;
-  const openAiModel = openAiProvider?.voice?.model ?? OpenAiVoiceModel.Gpt4oTranscribe;
+  const openAiModel = openAiProvider?.voice?.model ?? OpenAiVoiceModel.GptLiveTranscribe;
   const openAiLanguage = openAiProvider?.voice?.language ?? 'en';
 
   const geminiProvider = selectedProfile?.provider.name === 'gemini' ? (selectedProfile.provider as GeminiProvider) : undefined;
-  const geminiModel = geminiProvider?.voice?.model ?? GeminiVoiceModel.GeminiLive25FlashNativeAudio;
+  const geminiModel = geminiProvider?.voice?.model ?? GeminiVoiceModel.Gemini31FlashLivePreview;
   const geminiTemperature = geminiProvider?.voice?.temperature ?? 0.7;
 
   const [geminiTemperatureDraft, setGeminiTemperatureDraft] = useState<number>(geminiTemperature);

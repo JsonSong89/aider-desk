@@ -1,6 +1,5 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { homedir } from 'os';
 
 import { FSWatcher, watch } from 'chokidar';
 import { debounce } from 'lodash';
@@ -8,17 +7,19 @@ import { DEFAULT_AGENT_PROFILE, DEFAULT_AGENT_PROFILES } from '@common/agent';
 import { fileExists } from '@common/utils';
 import { v4 as uuidv4 } from 'uuid';
 
-import type { AgentProfile } from '@common/types';
+import type { AgentProfile, SettingsData } from '@common/types';
+import type { Store } from '@/store';
 
 import { Project } from '@/project';
 import { ExtensionManager, ExtensionsChangeListener } from '@/extensions/extension-manager';
-import { AIDER_DESK_AGENTS_DIR, AIDER_DESK_RULES_DIR } from '@/constants';
+import { AIDER_DESK_AGENTS_DIR, AIDER_DESK_HOME_DIR, AIDER_DESK_RULES_DIR } from '@/constants';
 import logger from '@/logger';
 import { EventManager } from '@/events';
 import { deriveDirName } from '@/utils';
+import { shouldUsePolling } from '@/utils/file-watch';
 
 // Helper methods for directory management
-const getGlobalAgentsDir = (): string => path.join(homedir(), AIDER_DESK_AGENTS_DIR);
+const getGlobalAgentsDir = (): string => path.join(AIDER_DESK_HOME_DIR, 'agents');
 const getProjectAgentsDir = (projectDir: string): string => path.join(projectDir, AIDER_DESK_AGENTS_DIR);
 const getAgentsDirForProfile = (profile: AgentProfile): string => (profile.projectDir ? getProjectAgentsDir(profile.projectDir) : getGlobalAgentsDir());
 
@@ -82,6 +83,7 @@ export class AgentProfileManager {
   constructor(
     private readonly eventManager: EventManager,
     private readonly extensionManager: ExtensionManager,
+    private readonly store: Store,
   ) {
     this.extensionsChangeListener = () => {
       this.sendAgentProfilesUpdated();
@@ -232,14 +234,14 @@ export class AgentProfileManager {
 
     const watcher = watch(agentsDir, {
       persistent: true,
-      usePolling: true,
+      usePolling: shouldUsePolling(agentsDir, this.store.getSettings().fileWatchMode),
       ignoreInitial: true,
     });
 
     // Also watch rules subdirectories within each agent directory
     const rulesWatcher = watch(path.join(agentsDir, '*', AIDER_DESK_RULES_DIR), {
       persistent: true,
-      usePolling: true,
+      usePolling: shouldUsePolling(agentsDir, this.store.getSettings().fileWatchMode),
       ignoreInitial: true,
     });
 
@@ -404,6 +406,7 @@ export class AgentProfileManager {
       maxIterations: loadedProfile.maxIterations ?? DEFAULT_AGENT_PROFILE.maxIterations,
       minTimeBetweenToolCalls: loadedProfile.minTimeBetweenToolCalls ?? DEFAULT_AGENT_PROFILE.minTimeBetweenToolCalls,
       enabledServers: loadedProfile.enabledServers ?? [],
+      disabledExtensionTools: loadedProfile.disabledExtensionTools ?? [],
       customInstructions: loadedProfile.customInstructions ?? '',
       toolApprovals: {
         ...loadedProfile.toolApprovals,
@@ -799,6 +802,25 @@ export class AgentProfileManager {
 
     // Clear profiles
     this.profiles.clear();
+  }
+
+  async settingsChanged(oldSettings: SettingsData, newSettings: SettingsData): Promise<void> {
+    if (oldSettings.fileWatchMode === newSettings.fileWatchMode) {
+      return;
+    }
+
+    const watchedDirs = Array.from(this.directoryWatchers.keys());
+    for (const watcher of this.directoryWatchers.values()) {
+      await watcher.close();
+    }
+    this.directoryWatchers.clear();
+
+    for (const dir of watchedDirs) {
+      if (dir.endsWith('-rules')) {
+        continue;
+      }
+      await this.setupWatcherForDirectory(dir);
+    }
   }
 
   getDefaultAgentProfileId() {

@@ -68,7 +68,7 @@ Do not use when:
 3. Implement Extension interface methods
 4. Export metadata and default class
 5. **Register in `packages/extensions/extensions.json`**
-6. **Document in `docs-site/docs/extensions/examples.md`**
+6. **Document in `docs-site/docs/extensions/extensions-gallery.md`**
 7. Install npm dependencies if folder extension
 8. Verify with type checking
 
@@ -112,6 +112,20 @@ Do not use when:
 
 **If:** Component triggers actions, implement `executeUIExtensionAction()`
 
+### Rule: Use external libraries when UI components need npm packages
+
+**When:** Extension UI components need third-party npm packages (charts, calendars, kanban boards, etc.)
+
+**Then:** Implement `getUIComponentsLibraries()` returning a Record<string, string> mapping camelCase keys to npm package specs
+
+**Must:** Access loaded libraries in JSX via `props.libraries.<key>`
+
+**Must:** Handle the loading state — libraries are async and `props.libraries.<key>` will be `undefined` on first render
+
+**Never:** Bundle or import React in library specs — AiderDesk's React instance is externalized automatically
+
+**Reference:** [external-libraries.md](references/external-libraries.md) for full details, loading patterns, and examples
+
 ### Rule: Add config component for extension settings
 
 **When:** Extension needs user-configurable settings (shown in gear icon dialog)
@@ -140,13 +154,13 @@ Do not use when:
 
 **Must:** Set `hasDependencies: true` for folder extensions
 
-**Then:** Add entry to `docs-site/docs/extensions/examples.md` table
+**Then:** Add entry to `docs-site/docs/extensions/extensions-gallery.md` table
 
 **Must:** Include extension name, description, capabilities, and type
 
 **When:** Target is Project or Global
 
-**Then:** Do NOT modify `extensions.json` or `examples.md` — these are only for built-in extensions
+**Then:** Do NOT modify `extensions.json` or `extensions-gallery.md` — these are only for built-in extensions
 
 ### Rule: Use proper TypeScript config for folders
 
@@ -190,7 +204,7 @@ Do not use when:
 4. Implement Extension interface methods
 5. Export metadata and default class
 6. **Register in `packages/extensions/extensions.json`**
-7. **Document in `docs-site/docs/extensions/examples.md`**
+7. **Document in `docs-site/docs/extensions/extensions-gallery.md`**
 8. Run `npm install` in `packages/extensions/` (folder extensions)
 9. Verify with type checking
 
@@ -206,12 +220,22 @@ Before using this skill, verify:
 - Extension type (single-file or folder) is determined
 - Extension interface and types are understood
 
-If any precondition fails:
+**IMPORTANT:** The reference files below are comprehensive but may lag behind the latest code. For the **authoritative** and **complete** API, always refer to these source files:
 
-- Review [packages/common/src/extensions.ts](https://raw.githubusercontent.com/hotovo/aider-desk/refs/heads/main/packages/common/src/extensions.ts) for types
-- Check [references/install-targets.md](references/install-targets.md) for target options
-- Check [references/event-types.md](references/event-types.md) for event types
-- Check [references/command-definition.md](references/command-definition.md) for command structure
+- **Types source:** [packages/common/src/extensions.ts](https://raw.githubusercontent.com/hotovo/aider-desk/refs/heads/main/packages/common/src/extensions.ts) — Extension interface, all contexts (ExtensionContext, TaskContext, ProjectContext), event payloads, UI component definitions
+- **Context message types:** [packages/common/src/types/context.ts](https://raw.githubusercontent.com/hotovo/aider-desk/refs/heads/main/packages/common/src/types/context.ts) — ContextMessage, ContextFile, message part types
+- **Task/common types:** [packages/common/src/types/common.ts](https://raw.githubusercontent.com/hotovo/aider-desk/refs/heads/main/packages/common/src/types/common.ts) — TaskData, Model, AgentProfile, CreateTaskParams, etc.
+
+When you need a method or type that's not in the reference docs, **fetch the raw source first** before guessing.
+
+**Built-in extension examples** are available at:
+- [Online extensions gallery](https://github.com/hotovo/aider-desk/blob/main/docs-site/docs/extensions/extensions-gallery.md) — documented overview
+- Source code for each built-in extension is in the AiderDesk repo at `packages/extensions/extensions/[extension-name]/` — browse these for real-world patterns
+
+### Reference docs
+- [references/install-targets.md](references/install-targets.md) for target options
+- [references/event-types.md](references/event-types.md) for event types
+- [references/command-definition.md](references/command-definition.md) for command structure
 
 ## Postconditions
 
@@ -222,7 +246,7 @@ After completing this skill, verify:
 - Default export is the extension class
 - No `@/` imports used
 - **If In-Repo:** extensions.json updated correctly
-- **If In-Repo:** docs-site/docs/extensions/examples.md updated
+- **If In-Repo:** docs-site/docs/extensions/extensions-gallery.md updated
 - **If In-Repo:** Type checking passes
 - Extension loads without errors
 - Extension appears in extensions list
@@ -242,6 +266,61 @@ After completing this skill, verify:
 - When: Extension needs to modify agent behavior
 - Then: Implement event handler methods (onAgentStarted, onToolCalled, etc.)
 - Return: Partial event object to modify behavior
+
+**Situation:** Extension needs to create subtasks and coordinate between them
+
+**Pattern:**
+- Create: `const newTask = await projectContext.createTask({ parentId: currentTaskId, name: 'Subtask' })`
+- Access another task: `const subtaskContext = projectContext.getTask(newTask.id)`
+- Execute commands in subtask: `await subtaskContext?.runCustomCommand('scope:start')`
+- Read subtask conversation: `const messages = await subtaskContext?.getContextMessages()`
+- List all tasks: `const allTasks = await projectContext.getTasks()`
+- Reload tasks from disk after external task-folder changes: `const allTasks = await projectContext.reloadTasks()`
+- Fork at specific message: `await projectContext.forkTask(taskId, messageId)`
+- Duplicate a task: `await projectContext.duplicateTask(taskId)`
+- Delete a task: `await projectContext.deleteTask(taskId)`
+
+**Situation:** Extension needs to make direct LLM calls without the full agent loop
+
+**Pattern:**
+- Get model ID: `const profile = await taskContext.getTaskAgentProfile(); const modelId = profile ? \`\${profile.provider}/\${profile.model}\` : 'openai/gpt-4o'`
+- Generate text: `const result = await taskContext.generateText(modelId, 'You are a helpful assistant', 'Summarize this code')`
+- Generate structured data: `const result = await taskContext.generateObject(modelId, systemPrompt, prompt, z.object({ category: z.string() }))`
+
+**Situation:** Extension needs to read conversation history
+
+**Pattern:**
+- Get messages: `const messages = await taskContext.getContextMessages()`
+- Extract text: ContextMessage content can be a string or an array of parts. For simple text extraction:
+  ```typescript
+  function extractText(content: ContextMessage['content']): string {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((part): part is TextPart => part.type === 'text')
+        .map(part => part.text)
+        .join('\n');
+    }
+    return '';
+  }
+  ```
+- Reference: [context.ts](https://raw.githubusercontent.com/hotovo/aider-desk/refs/heads/main/packages/common/src/types/context.ts) for full ContextMessage type
+
+**Situation:** Extension needs to run shell commands
+
+**Pattern:** Node.js built-in modules (`fs`, `path`, `child_process`, `os`, etc.) are available in extensions.
+- Synchronous: `import { execSync } from 'node:child_process'; const output = execSync('git status', { encoding: 'utf-8' });`
+- Asynchronous: `import { exec } from 'node:child_process'; import { promisify } from 'node:util'; const execAsync = promisify(exec);`
+- File operations: `import { readFileSync, writeFileSync } from 'node:fs'; import { join } from 'node:path';`
+
+**Situation:** Extension needs to manage todos
+
+**Pattern:**
+- Get todos: `const todos = await taskContext.getTodos()`
+- Add todo: `const todos = await taskContext.addTodo('Implement feature X')`
+- Update todo: `const todos = await taskContext.updateTodo('Implement feature X', { completed: true })`
+- Delete todo: `const todos = await taskContext.deleteTodo('Implement feature X')`
+- Replace all: `await taskContext.setTodos([{ name: 'Task 1', completed: false }])`
 
 **Situation:** Extension needs to register commands
 
@@ -295,6 +374,35 @@ After completing this skill, verify:
   }
   ```
 
+**Situation:** Extension UI components need third-party npm packages
+
+**Pattern:**
+- When: Extension needs a library like a chart, calendar, kanban board, etc. that isn't in the built-in `ui` prop
+- Then: Implement `getUIComponentsLibraries()` returning `{ key: 'package@^version' }`
+- Access: Use `props.libraries.<key>` in JSX — check for `undefined` (async loading)
+- Example: `getUIComponentsLibraries() { return { chart: 'recharts@^2.12.0' } }`
+- Reference: [external-libraries.md](references/external-libraries.md)
+
+**Situation:** Extension needs to customize message rendering
+
+**Pattern:**
+- When: Extension wants to replace how messages (user, assistant, tool, log, etc.) are displayed
+- Then: Use the `task-message` placement with a `messageFilter` to specify which messages to handle
+- Must: Set `messageFilter.types` to the message types to match (e.g. `'user'`, `'response'`, `'assistant-group'`, `'tool'`, `'log'`, `'loading'`)
+- Must: For tool-specific filters, set `messageFilter.serverName` and/or `messageFilter.toolName`
+- Props: Component receives `message` prop — for `assistant-group` type, access `message.responseMessage` and `message.toolMessages`
+- Reference: [ui-components.md](references/ui-components.md) for full details, `MessageFilter` type, and JSX examples
+
+**Situation:** Extension needs a floating panel
+
+**Pattern:**
+- When: Extension needs a draggable, resizable panel (dashboard, inspector, toggle panel)
+- Then: Use the `floating` placement and set `name` for the panel title
+- Must: Set `name` on `UIComponentDefinition` — used as the floating panel title bar text
+- Must: Use `loadData: true` + `getUIExtensionData()` for panel data; implement `executeUIExtensionAction()` for actions
+- Must: Use `context.triggerUIDataRefresh(componentId)` to refresh panel data, `context.triggerUIComponentsReload()` to re-register components after state changes
+- Reference: [ui-components.md](references/ui-components.md) for full details, including toggle panel pattern
+
 **Situation:** Extension needs config storage
 
 **Pattern:**
@@ -326,11 +434,12 @@ After completing this skill, verify:
 ### Technical Reference (all targets)
 
 - [packages/common/src/extensions.ts](https://raw.githubusercontent.com/hotovo/aider-desk/refs/heads/main/packages/common/src/extensions.ts) - Extension types and interfaces
-- [extension-interface.md](references/extension-interface.md) - Full Extension interface, ExtensionContext, TaskContext, Metadata
+- [extension-interface.md](references/extension-interface.md) - Full Extension interface, ExtensionContext, TaskContext, ProjectContext, MemoryContext, and all supporting types
 - [extension-types.md](references/extension-types.md) - Single-file vs folder extensions, examples, extensions.json format
-- [event-types.md](references/event-types.md) - All event types and payloads
+- [event-types.md](references/event-types.md) - All event types, payloads, and extension method mappings
 - [command-definition.md](references/command-definition.md) - Command structure
 - [ui-components.md](references/ui-components.md) - UI component system, placements, and available components
+- [external-libraries.md](references/external-libraries.md) - Loading third-party npm libraries in UI components (getUIComponentsLibraries)
 - [config-components.md](references/config-components.md) - Config component API (settings UI), methods, JSX format, and patterns
 - [examples-gallery.md](references/examples-gallery.md) - Real extension examples
 

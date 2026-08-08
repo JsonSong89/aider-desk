@@ -13,12 +13,13 @@ import {
   AIDER_TOOL_RUN_PROMPT as TOOL_RUN_PROMPT,
   AIDER_TOOL_DESCRIPTIONS,
 } from '@common/tools';
-import { AgentProfile, PromptContext, ToolApprovalState } from '@common/types';
+import { AgentProfile, AutonomyMode, PromptContext, ToolApprovalState } from '@common/types';
 
 import { ApprovalManager } from './approval-manager';
 
 import type { ToolSet } from 'ai';
 
+import { coerceBoolean } from '@/agent/utils';
 import { Task } from '@/task';
 
 export const createAiderToolset = (task: Task, profile: AgentProfile, promptContext?: PromptContext): ToolSet => {
@@ -64,7 +65,7 @@ export const createAiderToolset = (task: Task, profile: AgentProfile, promptCont
       paths: z
         .array(z.string())
         .describe('One or more file paths to add to context. Relative to task directory (e.g. "src/file.ts") or absolute (e.g. "/tmp/log.txt" for read-only).'),
-      readOnly: z.boolean().optional().describe('Whether the file(s) are read-only. Applies to all paths if true.'),
+      readOnly: coerceBoolean.optional().describe('Whether the file(s) are read-only. Applies to all paths if true.'),
     }),
     execute: async (input, { toolCallId }) => {
       const { paths, readOnly = false } = input;
@@ -214,7 +215,7 @@ export const createAiderToolset = (task: Task, profile: AgentProfile, promptCont
       task.addToolMessage(toolCallId, TOOL_GROUP_NAME, TOOL_RUN_PROMPT, { prompt }, undefined, undefined, aiderPromptContext);
 
       const responses = await task.sendPromptToAider(prompt, aiderPromptContext, 'code', [], undefined, {
-        autoApprove: task.task.autoApprove,
+        autoApprove: task.task.autonomyMode !== AutonomyMode.Manual,
         denyCommands: true,
       });
 

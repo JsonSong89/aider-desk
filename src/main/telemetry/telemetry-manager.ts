@@ -33,13 +33,13 @@ export class TelemetryManager {
   }
 
   async init(): Promise<void> {
-    if (!POSTHOG_PUBLIC_API_KEY) {
-      logger.info('TelemetryManager skipped: POSTHOG_PUBLIC_API_KEY not configured.');
-      return;
-    }
-
     try {
       await import('./open-telemetry');
+
+      if (!POSTHOG_PUBLIC_API_KEY) {
+        logger.info('TelemetryManager skipped: POSTHOG_PUBLIC_API_KEY not configured.');
+        return;
+      }
 
       const app = getElectronApp();
       this.client = new PostHog(POSTHOG_PUBLIC_API_KEY, {
@@ -126,7 +126,7 @@ export class TelemetryManager {
         useTodoTools: profile.useTodoTools,
         includeContextFiles: profile.includeContextFiles,
         includeRepoMap: profile.includeRepoMap,
-        autoApprove: task?.autoApprove ?? false,
+        autonomyMode: task?.autonomyMode ?? 'guided',
         enabledMcpServersCount: profile.enabledServers.length,
         totalMcpServersCount: Object.keys(this.store.getSettings().mcpServers).length,
       },

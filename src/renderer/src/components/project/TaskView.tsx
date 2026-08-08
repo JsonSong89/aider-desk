@@ -1,6 +1,8 @@
 import {
   AIDER_MODES,
+  AutonomyMode,
   DefaultTaskState,
+  GroupMessage,
   isLoadingMessage,
   isLogMessage,
   isUserMessage,
@@ -19,7 +21,7 @@ import { ResizableBox, ResizeCallbackData } from 'react-resizable';
 import { clsx } from 'clsx';
 import { getProviderModelId } from '@common/agent';
 import { RiMenuUnfold4Line } from 'react-icons/ri';
-import { useLocalStorage } from '@reactuses/core';
+import { useEvent, useLocalStorage } from '@reactuses/core';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -28,7 +30,7 @@ import { useSidebarWidth } from './useSidebarWidth';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Messages, MessagesRef } from '@/components/message/Messages';
 import { VirtualizedMessages, VirtualizedMessagesRef } from '@/components/message/VirtualizedMessages';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
 import { useApi } from '@/contexts/ApiContext';
 import { AddFileDialog } from '@/components/project/AddFileDialog';
@@ -49,7 +51,9 @@ import { useModelProviders } from '@/contexts/ModelProviderContext';
 import { useTask } from '@/contexts/TasksContext';
 import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
-import { useTaskMessages, useTaskState } from '@/stores/taskStore';
+import { useTaskMessages, useOptimizedTaskState, useTaskStore } from '@/stores/taskStore';
+import { useTaskAllFiles, useTaskAutocompletionWords } from '@/stores/taskFilesStore';
+import { getTaskDir } from '@/utils/task-utils';
 import { showErrorNotification } from '@/utils/notifications';
 import { useSearchText } from '@/hooks/useSearchText';
 import { TaskStateActions } from '@/components/message/TaskStateActions';
@@ -100,28 +104,35 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
     ref,
   ) => {
     const { t } = useTranslation();
-    const { settings } = useSettings();
+    const fullMessageRendering = useSettingsStore((state) => state.settings?.fullMessageRendering);
+    const renderMarkdown = useSettingsStore((state) => state.settings?.renderMarkdown);
+    const showTaskStateActions = useSettingsStore((state) => state.settings?.taskSettings?.showTaskStateActions);
+    const promptBehavior = useSettingsStore((state) => state.settings?.promptBehavior);
+    const settingsLoaded = useSettingsStore((state) => !!state.settings);
     const { TASK_HOTKEYS } = useConfiguredHotkeys();
     const { projectSettings } = useProjectSettings();
     const { isMobile } = useResponsive();
     const api = useApi();
     const { models } = useModelProviders();
-    const { loadTask, clearSession, resetTask, setMessages, setTodoItems, setAiderModelsData, answerQuestion, interruptResponse, refreshAllFiles } = useTask();
-
-    const taskState = useTaskState(task.id);
     const {
-      loading,
-      loaded,
-      allFiles,
-      contextFiles,
-      autocompletionWords,
-      tokensInfo,
-      question,
-      todoItems,
-      aiderModelsData,
-      queuedPrompts,
-      canUndoContextChange,
-    } = taskState;
+      loadTask,
+      clearSession,
+      resetTask,
+      restartAiderConnector,
+      setMessages,
+      setTodoItems,
+      setAiderModelsData,
+      answerQuestion,
+      interruptResponse,
+      refreshAllFiles,
+      refreshContextFiles,
+      markTaskActive,
+    } = useTask();
+
+    const taskState = useOptimizedTaskState(task.id);
+    const { loading, loaded, contextFiles, question, aiderModelsData, canUndoContextChange } = taskState;
+    const allFiles = useTaskAllFiles(getTaskDir(task));
+    const autocompletionWords = useTaskAutocompletionWords(getTaskDir(task));
 
     const messages = useTaskMessages(task.id);
     const deferredMessages = useDeferredValue(messages);
@@ -132,6 +143,8 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
 
     const [addFileDialogOptions, setAddFileDialogOptions] = useState<AddFileDialogOptions | null>(null);
     const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+    const editedMessage = editingMessageIndex !== null ? displayedMessages[editingMessageIndex] : undefined;
+    const canSaveEditedPrompt = messages.length === 1 && isUserMessage(messages[0]) && messages[0]?.id === editedMessage?.id;
     const [searchContainer, setSearchContainer] = useState<HTMLElement | null>(null);
     const [terminalVisible, setTerminalVisible] = useState(false);
     const [showTaskInfoPanel, setShowTaskInfoPanel] = useState(false);
@@ -150,10 +163,13 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
     const activeAgentProfile = useActiveAgentProfile(task, projectDir);
 
     useEffect(() => {
-      if (isActive && !taskState.loaded && !taskState.loading) {
-        loadTask(task.id);
+      if (isActive) {
+        markTaskActive(task.id);
+        if (!loaded && !loading) {
+          loadTask(task.id);
+        }
       }
-    }, [isActive, loadTask, task.id, taskState.loaded, taskState.loading]);
+    }, [isActive, loadTask, task.id, loaded, loading, markTaskActive]);
 
     useImperativeHandle(ref, () => ({
       exportMessagesToImage: () => {
@@ -260,6 +276,10 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
       [api, projectDir, task.id],
     );
 
+    const toggleSidebar = useCallback(() => {
+      setShowSidebar((prev) => !prev);
+    }, []);
+
     const runTests = useCallback(
       (testCmd?: string) => {
         runCommand(`test ${testCmd || ''}`);
@@ -293,76 +313,69 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
       updateTask(task.id, { state: DefaultTaskState.Done });
     }, [updateTask, task.id]);
 
-    const runPrompt = useCallback(
-      (prompt: string, images?: string[]) => {
-        updateOptimisticTaskState(task.id, DefaultTaskState.InProgress);
-        if (editingMessageIndex !== null) {
-          // This submission is an edit of a previous message
-          const editedMessageId = displayedMessages[editingMessageIndex]?.id;
-          setEditingMessageIndex(null); // Clear editing state
-          setMessages(task.id, (prevMessages) => {
-            return prevMessages
-              .filter((_, index) => index <= editingMessageIndex)
-              .map((message, index) => {
-                if (index === editingMessageIndex) {
-                  return {
-                    ...message,
-                    content: prompt,
-                    images,
-                  };
-                } else {
-                  return message;
-                }
-              });
-          });
-          if (editedMessageId) {
-            api.redoUserPrompt(projectDir, task.id, editedMessageId, currentMode, prompt, images);
-          }
-        } else {
-          if (!question && !inProgress) {
-            startTransition(() => {
-              // OPTIMISTIC: Add user message immediately before backend response
-              const optimisticUserMessage = {
-                id: uuidv4(),
-                type: 'user',
-                content: prompt,
-                images,
-                isOptimistic: true,
-              } satisfies UserMessage;
-              setMessages(task.id, (prevMessages) => [...prevMessages, optimisticUserMessage]);
-              setDisplayedMessages([...displayedMessages, optimisticUserMessage]);
+    const runPrompt = useEvent((prompt: string, images?: string[]) => {
+      updateOptimisticTaskState(task.id, DefaultTaskState.InProgress);
+      if (editingMessageIndex !== null) {
+        // This submission is an edit of a previous message
+        const editedMessageId = displayedMessages[editingMessageIndex]?.id;
+        setEditingMessageIndex(null); // Clear editing state
+        setMessages(task.id, (prevMessages) => {
+          return prevMessages
+            .filter((_, index) => index <= editingMessageIndex)
+            .map((message, index) => {
+              if (index === editingMessageIndex) {
+                return {
+                  ...message,
+                  content: prompt,
+                  images,
+                };
+              } else {
+                return message;
+              }
             });
-          }
-          api.runPrompt(projectDir, task.id, prompt, currentMode, images);
+        });
+        if (editedMessageId) {
+          api.redoUserPrompt(projectDir, task.id, editedMessageId, currentMode, prompt, images);
         }
-      },
-      [
-        updateOptimisticTaskState,
-        task.id,
-        editingMessageIndex,
-        setMessages,
-        api,
-        projectDir,
-        currentMode,
-        question,
-        inProgress,
-        setDisplayedMessages,
-        displayedMessages,
-      ],
-    );
+      } else {
+        if (!question && !inProgress) {
+          startTransition(() => {
+            // OPTIMISTIC: Add user message immediately before backend response
+            const optimisticUserMessage = {
+              id: uuidv4(),
+              type: 'user',
+              content: prompt,
+              images,
+              isOptimistic: true,
+            } satisfies UserMessage;
+            setMessages(task.id, (prevMessages) => [...prevMessages, optimisticUserMessage]);
+            setDisplayedMessages([...displayedMessages, optimisticUserMessage]);
+          });
+        }
+        api.runPrompt(projectDir, task.id, prompt, currentMode, images);
+      }
+    });
 
     const handleSavePrompt = useCallback(
       async (prompt: string) => {
+        if (canSaveEditedPrompt && editedMessage) {
+          await api.saveEditedPrompt(projectDir, task.id, editedMessage.id, prompt);
+          setEditingMessageIndex(null);
+          setMessages(task.id, (prevMessages) => prevMessages.map((message) => (message.id === editedMessage.id ? { ...message, content: prompt } : message)));
+          return;
+        }
+
         await api.savePrompt(projectDir, task.id, prompt);
       },
-      [api, projectDir, task.id],
+      [api, canSaveEditedPrompt, editedMessage, projectDir, setMessages, task.id],
     );
 
-    const handleEditLastUserMessage = useCallback(
-      (content?: string, images?: string[]) => {
+    const handleEditUserMessage = useCallback(
+      (messageId: string, content?: string, images?: string[]) => {
+        const messages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
         let contentToEdit = content;
         let imagesToEdit = images;
-        const messageIndex = displayedMessages.findLastIndex(isUserMessage);
+        const messageIndex = messages.findIndex((msg) => msg.id === messageId);
 
         if (messageIndex === -1) {
           // eslint-disable-next-line no-console
@@ -370,12 +383,12 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
           return;
         }
 
-        const lastUserMessage = displayedMessages[messageIndex] as UserMessage | undefined;
+        const userMessage = messages[messageIndex] as UserMessage | undefined;
         if (contentToEdit === undefined) {
-          contentToEdit = lastUserMessage?.content;
+          contentToEdit = userMessage?.content;
         }
         if (imagesToEdit === undefined) {
-          imagesToEdit = lastUserMessage?.images;
+          imagesToEdit = userMessage?.images;
         }
         if (contentToEdit === undefined) {
           // eslint-disable-next-line no-console
@@ -392,28 +405,36 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
           promptFieldRef.current?.focus();
         }, 0);
       },
-      [displayedMessages],
+      [task.id],
     );
 
     useEffect(() => {
-      if (task.handoff && displayedMessages.length > 0) {
-        setTimeout(() => {
-          handleEditLastUserMessage();
-        }, 0);
+      if (task.handoff) {
+        const messages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
+        const lastUserMessageId = messages.findLast(isUserMessage)?.id;
+        if (lastUserMessageId) {
+          setTimeout(() => {
+            handleEditUserMessage(lastUserMessageId);
+          }, 0);
+        }
 
         updateTask(task.id, { handoff: false });
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [task.handoff, task.id, displayedMessages]);
+    }, [handleEditUserMessage, task.handoff, task.id, updateTask]);
 
     const handleResetTask = useCallback(() => {
       resetTask(task.id);
       setAiderModelsData(task.id, null);
     }, [resetTask, task.id, setAiderModelsData]);
 
+    const handleRestartAiderConnector = useCallback(() => {
+      restartAiderConnector(task.id);
+    }, [restartAiderConnector, task.id]);
+
     const handleRedoUserPrompt = useCallback(
       (messageId: string) => {
-        const userMessageIndex = displayedMessages.findIndex((msg) => msg.id === messageId);
+        const messages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
+        const userMessageIndex = messages.findIndex((msg) => msg.id === messageId);
         if (userMessageIndex === -1) {
           return;
         }
@@ -423,15 +444,24 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
         updateOptimisticTaskState(task.id, DefaultTaskState.InProgress);
         api.redoUserPrompt(projectDir, task.id, messageId, currentMode);
       },
-      [displayedMessages, setMessages, task.id, updateOptimisticTaskState, api, projectDir, currentMode],
+      [setMessages, task.id, updateOptimisticTaskState, api, projectDir, currentMode],
     );
 
     const handleRedoLastUserPrompt = useCallback(() => {
-      const lastUserMessage = displayedMessages.findLast(isUserMessage);
+      const messages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
+      const lastUserMessage = messages.findLast(isUserMessage);
       if (lastUserMessage) {
         handleRedoUserPrompt(lastUserMessage.id);
       }
-    }, [displayedMessages, handleRedoUserPrompt]);
+    }, [task.id, handleRedoUserPrompt]);
+
+    const handleEditLastUserMessage = useCallback(() => {
+      const messages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
+      const lastUserMessage = messages.findLast(isUserMessage);
+      if (lastUserMessage) {
+        handleEditUserMessage(lastUserMessage.id);
+      }
+    }, [task.id, handleEditUserMessage]);
 
     const handleResumeTask = useCallback(() => {
       api.resumeTask(projectDir, task.id);
@@ -459,7 +489,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
 
     const handleRemoveMessage = useCallback(
       async (messageToRemove: Message) => {
-        const originalMessages = displayedMessages;
+        const originalMessages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
 
         setMessages(task.id, (prevMessages) => prevMessages.filter((msg) => msg.id !== messageToRemove.id));
 
@@ -476,12 +506,36 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
           showErrorNotification(t('errors.removeMessageFailed'));
         }
       },
-      [displayedMessages, setMessages, task.id, api, projectDir, t],
+      [setMessages, task.id, api, projectDir, t],
+    );
+
+    const handleRemoveGroup = useCallback(
+      async (group: GroupMessage) => {
+        const originalMessages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
+        const childIds = new Set(group.children.map((child) => child.id));
+
+        setMessages(task.id, (prevMessages) => prevMessages.filter((msg) => !childIds.has(msg.id)));
+
+        const firstChild = group.children[0];
+        if (!firstChild) {
+          return;
+        }
+
+        try {
+          await api.removeMessage(projectDir, task.id, firstChild.id);
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error('Failed to remove group:', error);
+          setMessages(task.id, () => originalMessages);
+          showErrorNotification(t('errors.removeMessageFailed'));
+        }
+      },
+      [setMessages, task.id, api, projectDir, t],
     );
 
     const handleRemoveUpToMessage = useCallback(
       async (messageToRemove: Message) => {
-        const originalMessages = displayedMessages;
+        const originalMessages = useTaskStore.getState().taskMessagesMap.get(task.id) ?? [];
 
         // Optimistically remove the messages after it
         setMessages(task.id, (prevMessages) => {
@@ -489,6 +543,20 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
           if (messageIndex === -1) {
             return prevMessages;
           }
+
+          // If the target message is part of a group (e.g. subagent group), we need to keep
+          // all messages belonging to that group, since the target is the first child but the
+          // group has additional children that come after it in the flat messages array.
+          // Without this, the optimistic slice would remove the remaining group children.
+          const groupId = messageToRemove.promptContext?.group?.id;
+          if (groupId) {
+            const lastGroupChildIndex = prevMessages.reduce(
+              (lastIdx, msg, idx) => (idx >= messageIndex && msg.promptContext?.group?.id === groupId ? idx : lastIdx),
+              messageIndex,
+            );
+            return prevMessages.slice(0, lastGroupChildIndex + 1);
+          }
+
           return prevMessages.slice(0, messageIndex + 1);
         });
 
@@ -501,7 +569,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
           showErrorNotification(t('errors.removeMessagesUpToFailed'));
         }
       },
-      [displayedMessages, setMessages, task.id, api, projectDir, t],
+      [setMessages, task.id, api, projectDir, t],
     );
 
     const handleAddTodo = useCallback(
@@ -594,10 +662,10 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
       [promptFieldRef],
     );
 
-    const handleAutoApproveChanged = useCallback(
-      (autoApprove: boolean) => {
+    const handleAutonomyModeChanged = useCallback(
+      (autonomyMode: AutonomyMode) => {
         updateTask(task.id, {
-          autoApprove,
+          autonomyMode,
         });
       },
       [updateTask, task.id],
@@ -664,6 +732,17 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
       [api, projectDir, task.id],
     );
 
+    const handleCreateSubtask = useCallback(
+      async (args?: string) => {
+        try {
+          await api.createNewTask(projectDir, { parentId: task.id, name: args || undefined, activate: true });
+        } catch (error) {
+          showErrorNotification(error instanceof Error ? error.message : String(error));
+        }
+      },
+      [api, projectDir, task.id],
+    );
+
     const handleShowFileDialog = useCallback(() => {
       setAddFileDialogOptions({
         readOnly: false,
@@ -678,8 +757,9 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
     }, []);
 
     const handleRefreshAllFiles = useCallback((useGit?: boolean) => refreshAllFiles(task.id, useGit), [refreshAllFiles, task.id]);
+    const handleRefreshContextFiles = useCallback(() => refreshContextFiles(task.id), [refreshContextFiles, task.id]);
 
-    if (!projectSettings || !settings) {
+    if (!projectSettings || !settingsLoaded) {
       return <LoadingOverlay message={t('common.loadingProjectSettings')} />;
     }
 
@@ -697,15 +777,16 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
             activeAgentProfile={activeAgentProfile}
             onModelsChange={handleModelChange}
             runCommand={runCommand}
-            onToggleSidebar={() => setShowSidebar(!showSidebar)}
+            onToggleSidebar={toggleSidebar}
             onToggleTaskSidebar={onToggleTaskSidebar}
             updateTask={updateTask}
+            onRestartAiderConnector={handleRestartAiderConnector}
           />
           <div className="flex-grow overflow-y-hidden relative flex flex-col">
             {renderSearchInput()}
-            {!loading && todoItems.length > 0 && todoListVisible && (
+            {!loading && todoListVisible && (
               <TodoWindow
-                todos={todoItems}
+                taskId={task.id}
                 onToggleTodo={handleToggleTodo}
                 onAddTodo={handleAddTodo}
                 onUpdateTodo={handleUpdateTodo}
@@ -720,34 +801,36 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                 <WelcomeMessage onModeChange={handleModeChange} mode={currentMode} projectDir={projectDir} taskId={task.id} />
               ) : (
                 <>
-                  {settings.virtualizedRendering ? (
-                    <VirtualizedMessages
+                  {fullMessageRendering ? (
+                    <Messages
                       ref={setMessagesRef}
                       baseDir={projectDir}
                       taskId={task.id}
-                      task={task}
+                      inProgress={inProgress}
                       messages={displayedMessages}
                       allFiles={allFiles}
-                      renderMarkdown={settings.renderMarkdown}
+                      renderMarkdown={renderMarkdown!}
                       removeMessage={handleRemoveMessage}
+                      removeGroup={handleRemoveGroup}
                       redoUserPrompt={handleRedoUserPrompt}
-                      editLastUserMessage={handleEditLastUserMessage}
+                      editUserMessage={handleEditUserMessage}
                       onInterrupt={handleInterruptResponse}
                       onForkFromMessage={handleForkFromMessage}
                       onRemoveUpToMessage={handleRemoveUpToMessage}
                     />
                   ) : (
-                    <Messages
+                    <VirtualizedMessages
                       ref={setMessagesRef}
                       baseDir={projectDir}
                       taskId={task.id}
-                      task={task}
+                      inProgress={inProgress}
                       messages={displayedMessages}
                       allFiles={allFiles}
-                      renderMarkdown={settings.renderMarkdown}
+                      renderMarkdown={renderMarkdown!}
                       removeMessage={handleRemoveMessage}
+                      removeGroup={handleRemoveGroup}
                       redoUserPrompt={handleRedoUserPrompt}
-                      editLastUserMessage={handleEditLastUserMessage}
+                      editUserMessage={handleEditUserMessage}
                       onInterrupt={handleInterruptResponse}
                       onForkFromMessage={handleForkFromMessage}
                       onRemoveUpToMessage={handleRemoveUpToMessage}
@@ -758,7 +841,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
             </div>
             <ExtensionComponentWrapper placement="task-messages-bottom" />
             {showTaskInfoPanel && <TaskInfoPanel task={task} messageCount={displayedMessages.length || 0} onClose={() => setShowTaskInfoPanel(false)} />}
-            {settings?.taskSettings?.showTaskStateActions && !inProgress && !isLastLoadingMessage && (
+            {showTaskStateActions && !inProgress && !isLastLoadingMessage && (
               <TaskStateActions
                 state={task.state}
                 mode={task.currentMode}
@@ -825,8 +908,9 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                   onModeChanged={handleModeChange}
                   runPrompt={runPrompt}
                   savePrompt={handleSavePrompt}
-                  editLastUserMessage={handleEditLastUserMessage}
+                  editUserMessage={handleEditLastUserMessage}
                   isEditingLastMessage={editingMessageIndex !== null}
+                  canSaveEditedPrompt={canSaveEditedPrompt}
                   isActive={isActive}
                   allFiles={allFiles}
                   words={autocompletionWords}
@@ -836,7 +920,6 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                   addFiles={handleAddFiles}
                   question={question}
                   answerQuestion={handleAnswerQuestion}
-                  queuedPrompts={queuedPrompts}
                   removeQueuedPrompt={handleRemoveQueuedPrompt}
                   sendQueuedPromptNow={handleSendQueuedPromptNow}
                   reorderQueuedPrompts={handleReorderQueuedPrompts}
@@ -847,11 +930,12 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                   redoLastUserPrompt={handleRedoLastUserPrompt}
                   openModelSelector={handleOpenModelSelector}
                   openAgentModelSelector={handleOpenAgentModelSelector}
-                  promptBehavior={settings.promptBehavior}
+                  promptBehavior={promptBehavior!}
                   clearLogMessages={clearLogMessages}
                   scrollToBottom={handleScrollToBottom}
                   onToggleTaskInfoPanel={handleToggleTaskInfoPanel}
                   handoffConversation={handleHandoff}
+                  createSubtask={handleCreateSubtask}
                 />
                 <TaskControlBar
                   baseDir={projectDir}
@@ -864,7 +948,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                   terminalVisible={terminalVisible}
                   showTaskInfoPanel={showTaskInfoPanel}
                   onToggleTaskInfoPanel={handleToggleTaskInfoPanel}
-                  onAutoApproveChanged={handleAutoApproveChanged}
+                  onAutonomyModeChanged={handleAutonomyModeChanged}
                   showSettingsPage={showSettingsPage}
                   canUndoContextChange={canUndoContextChange && messages.length === 0}
                   onUndoContextChange={handleUndoContextChange}
@@ -911,7 +995,6 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                     taskId={task.id}
                     allFiles={allFiles}
                     contextFiles={contextFiles}
-                    tokensInfo={tokensInfo}
                     aiderTotalCost={task.aiderTotalCost}
                     maxInputTokens={currentModel?.maxInputTokens || 0}
                     clearMessages={clearMessages}
@@ -922,6 +1005,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                     task={task}
                     updateTask={updateTask}
                     refreshAllFiles={handleRefreshAllFiles}
+                    refreshContextFiles={handleRefreshContextFiles}
                     onToggleFilesSidebarCollapse={handleToggleFilesSidebarCollapse}
                   />
                 </div>
@@ -950,7 +1034,6 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
             taskId={task.id}
             allFiles={allFiles}
             contextFiles={contextFiles}
-            tokensInfo={tokensInfo}
             aiderTotalCost={task.aiderTotalCost}
             maxInputTokens={maxInputTokens}
             clearMessages={clearMessages}
@@ -961,6 +1044,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
             task={task}
             updateTask={updateTask}
             refreshAllFiles={(useGit) => refreshAllFiles(task.id, useGit)}
+            refreshContextFiles={handleRefreshContextFiles}
           />
         )}
       </div>

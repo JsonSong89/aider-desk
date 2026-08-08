@@ -34,6 +34,7 @@ import {
   TerminalExitData,
   TokensInfoData,
   ToolData,
+  ToolInputChunkData,
   UpdatedFilesUpdatedData,
   SkillsUpdatedData,
   UserMessageData,
@@ -63,8 +64,10 @@ const api: ApplicationAPI = {
   stopProject: (baseDir) => ipcRenderer.send('stop-project', baseDir),
   restartProject: (baseDir) => ipcRenderer.send('restart-project', baseDir),
   resetTask: (baseDir, taskId) => ipcRenderer.send('reset-task', baseDir, taskId),
+  restartAiderConnector: (baseDir, taskId) => ipcRenderer.send('restart-aider-connector', baseDir, taskId),
   runPrompt: (baseDir, taskId, prompt, mode, images) => ipcRenderer.send('run-prompt', baseDir, taskId, prompt, mode, images),
   savePrompt: (baseDir, taskId, prompt) => ipcRenderer.invoke('save-prompt', baseDir, taskId, prompt),
+  saveEditedPrompt: (baseDir, taskId, messageId, prompt) => ipcRenderer.invoke('save-edited-prompt', baseDir, taskId, messageId, prompt),
   redoUserPrompt: (baseDir, taskId, messageId, mode, updatedPrompt?, updatedImages?) =>
     ipcRenderer.send('redo-user-prompt', baseDir, taskId, messageId, mode, updatedPrompt, updatedImages),
   resumeTask: (baseDir, taskId) => ipcRenderer.send('resume-task', baseDir, taskId),
@@ -93,11 +96,13 @@ const api: ApplicationAPI = {
   getFilePathSuggestions: (currentPath, directoriesOnly = false) => ipcRenderer.invoke('get-file-path-suggestions', currentPath, directoriesOnly),
   getAddableFiles: (baseDir, taskId) => ipcRenderer.invoke('get-addable-files', baseDir, taskId),
   getAllFiles: (baseDir, taskId, useGit = true) => ipcRenderer.invoke('get-all-files', baseDir, taskId, useGit),
+  refreshContextFiles: (baseDir, taskId) => ipcRenderer.invoke('refresh-context-files', baseDir, taskId),
   getUpdatedFiles: (baseDir, taskId) => ipcRenderer.invoke('get-updated-files', baseDir, taskId),
   restoreFile: (baseDir, taskId, filePath) => ipcRenderer.invoke('restore-file', baseDir, taskId, filePath),
   readFile: (baseDir, taskId, filePath) => ipcRenderer.invoke('read-file', baseDir, taskId, filePath),
   generateCommitMessage: (baseDir, taskId) => ipcRenderer.invoke('generate-commit-message', baseDir, taskId),
   commitChanges: (baseDir, taskId, message, amend) => ipcRenderer.invoke('commit-changes', baseDir, taskId, message, amend),
+  cancelCommitChanges: (baseDir, taskId) => ipcRenderer.invoke('cancel-commit-changes', baseDir, taskId),
   addFile: (baseDir, taskId, filePath, readOnly = false) => ipcRenderer.send('add-file', baseDir, taskId, filePath, readOnly),
   isValidPath: (baseDir, path) => ipcRenderer.invoke('is-valid-path', baseDir, path),
   isProjectPath: (path) => ipcRenderer.invoke('is-project-path', path),
@@ -123,6 +128,7 @@ const api: ApplicationAPI = {
 
   // Extension operations
   getInstalledExtensions: (projectDir?: string) => ipcRenderer.invoke('get-installed-extensions', projectDir),
+  getExtensionToolsInfo: (projectDir?: string) => ipcRenderer.invoke('get-extension-tools-info', projectDir),
   getAvailableExtensions: (repositories: string[], forceRefresh?: boolean, fetchOnly?: boolean) =>
     ipcRenderer.invoke('get-available-extensions', repositories, forceRefresh, fetchOnly),
   installExtension: (extensionId: string, repositoryUrl: string, projectDir?: string) =>
@@ -130,6 +136,7 @@ const api: ApplicationAPI = {
   uninstallExtension: (extensionId: string, projectDir?: string) => ipcRenderer.invoke('uninstall-extension', extensionId, projectDir),
   updateExtension: (extensionId: string, repositoryUrl: string, projectDir?: string) =>
     ipcRenderer.invoke('update-extension', extensionId, repositoryUrl, projectDir),
+  reloadExtension: (filePath: string, projectDir?: string) => ipcRenderer.invoke('reload-extension', filePath, projectDir),
   getExtensionUIComponents: (placement?: string, projectDir?: string, taskId?: string) =>
     ipcRenderer.invoke('get-extension-ui-components', placement, projectDir, taskId),
   getUIExtensionData: (extensionId: string, componentId: string, projectDir?: string, taskId?: string) =>
@@ -154,6 +161,7 @@ const api: ApplicationAPI = {
       ipcRenderer.removeListener('modal-overlay-url', listener);
     };
   },
+  loadExtensionLibrary: (librarySpec: string) => ipcRenderer.invoke('load-extension-library', librarySpec),
   // Extension config operations (per-extension settings)
   getExtensionConfigComponent: (extensionId: string, projectDir?: string) => ipcRenderer.invoke('get-extension-config-component', extensionId, projectDir),
   getExtensionConfig: (extensionId: string, projectDir?: string) => ipcRenderer.invoke('get-extension-config', extensionId, projectDir),
@@ -404,6 +412,19 @@ const api: ApplicationAPI = {
     ipcRenderer.on('tool', listener);
     return () => {
       ipcRenderer.removeListener('tool', listener);
+    };
+  },
+
+  addToolInputChunkListener: (baseDir, taskId, callback) => {
+    const listener = (_: Electron.IpcRendererEvent, data: ToolInputChunkData) => {
+      if (!compareBaseDirs(data.baseDir, baseDir) || data.taskId !== taskId) {
+        return;
+      }
+      callback(data);
+    };
+    ipcRenderer.on('tool-input-chunk', listener);
+    return () => {
+      ipcRenderer.removeListener('tool-input-chunk', listener);
     };
   },
 
@@ -691,7 +712,9 @@ const api: ApplicationAPI = {
   // Worktree merge operations
   mergeWorktreeToMain: (baseDir, taskId, squash, targetBranch, commitMessage) =>
     ipcRenderer.invoke('merge-worktree-to-main', baseDir, taskId, squash, targetBranch, commitMessage),
-  mergeAndSwitchToLocal: (baseDir, taskId, targetBranch) => ipcRenderer.invoke('merge-and-switch-to-local', baseDir, taskId, targetBranch),
+  switchToLocalWorkingMode: (baseDir, taskId, options) => ipcRenderer.invoke('switch-to-local-working-mode', baseDir, taskId, options),
+  switchToWorktreeWorkingMode: (baseDir, taskId, options) => ipcRenderer.invoke('switch-to-worktree-working-mode', baseDir, taskId, options),
+  getLocalUncommittedFiles: (baseDir, taskId) => ipcRenderer.invoke('get-local-uncommitted-files', baseDir, taskId),
   applyUncommittedChanges: (baseDir, taskId, targetBranch) => ipcRenderer.invoke('apply-uncommitted-changes', baseDir, taskId, targetBranch),
   revertLastMerge: (baseDir, taskId) => ipcRenderer.invoke('revert-last-merge', baseDir, taskId),
   listBranches: (baseDir) => ipcRenderer.invoke('list-branches', baseDir),

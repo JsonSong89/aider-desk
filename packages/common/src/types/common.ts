@@ -20,8 +20,6 @@ import { z } from 'zod';
 
 import { ContextFile, ContextMemoryMode, ContextMessage, PromptContext, UsageReportData } from './context';
 
-import type { JSONSchema7Definition } from '@ai-sdk/provider';
-
 // Worktree schema definition
 export const WorktreeSchema = z.object({
   path: z.string(),
@@ -106,6 +104,14 @@ export const AIDER_MODES: Mode[] = ['code', 'ask', 'architect', 'context'];
 
 export const AIDER_COMMANDS: string[] = ['commit', 'map', 'map-refresh', 'tokens', 'test'];
 
+export enum AutonomyMode {
+  Manual = 'manual',
+  Guided = 'guided',
+  Autonomous = 'autonomous',
+}
+
+export const DEFAULT_AUTONOMY_MODE = AutonomyMode.Guided;
+
 export interface AiderRunOptions {
   autoApprove?: boolean;
   denyCommands?: boolean;
@@ -130,6 +136,7 @@ export enum MessageViewMode {
 }
 
 export enum ReasoningEffort {
+  Max = 'max',
   XHigh = 'xhigh',
   High = 'high',
   Medium = 'medium',
@@ -138,12 +145,87 @@ export enum ReasoningEffort {
   None = 'none',
 }
 
+/**
+ * Portable reasoning level for AI SDK v7's top-level `reasoning` parameter.
+ * See https://ai-sdk.dev/docs/ai-sdk-core/reasoning
+ */
+export type Reasoning = 'provider-default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+/**
+ * Timeout configuration for model calls.
+ * See https://ai-sdk.dev/docs/ai-sdk-core/settings#timeout
+ */
+export interface ModelCallTimeout {
+  /** Total timeout for the entire call including all steps. */
+  totalMs?: number;
+  /** Timeout for each individual step (LLM call). */
+  stepMs?: number;
+  /** Timeout between stream chunks (streaming only). Aborts if no chunk received in time. */
+  chunkMs?: number;
+  /** Default timeout for all tool executions. */
+  toolMs?: number;
+  /** Per-tool timeout overrides (e.g. `{ weatherMs: 3000 }`). Takes precedence over `toolMs`. */
+  tools?: Record<string, number>;
+}
+
+/**
+ * Model call settings that map to AI SDK Language Model Call Options and Request Options.
+ * These override provider-derived defaults when set via extension events.
+ *
+ * See https://ai-sdk.dev/docs/ai-sdk-core/settings for details.
+ */
+export interface ModelCallSettings {
+  // Language Model Call Options
+
+  /** Maximum number of tokens to generate. */
+  maxOutputTokens?: number;
+  /** Temperature setting (0 = deterministic, higher = more random). */
+  temperature?: number;
+  /** Nucleus sampling. Recommended instead of temperature, not alongside. */
+  topP?: number;
+  /** Only sample from top K options for each subsequent token. */
+  topK?: number;
+  /** Penalty for tokens already present in the prompt. */
+  presencePenalty?: number;
+  /** Penalty for repeatedly using the same words/phrases. */
+  frequencyPenalty?: number;
+  /** Stop sequences for text generation. */
+  stopSequences?: string[];
+  /** Random seed for deterministic results. */
+  seed?: number;
+  /** Controls reasoning/thinking behavior. See https://ai-sdk.dev/docs/ai-sdk-core/reasoning */
+  reasoning?: Reasoning;
+
+  // Request Options
+
+  /** Maximum number of retries. Set to 0 to disable retries. Default: 2. */
+  maxRetries?: number;
+  /** Abort signal that can be used to cancel the call. */
+  abortSignal?: AbortSignal;
+  /** Timeout for the call. Can be a number (ms) or a detailed timeout configuration. */
+  timeout?: number | ModelCallTimeout;
+  /** Additional HTTP headers to send with the request. */
+  headers?: Record<string, string>;
+}
+
 export interface ResponseChunkData {
   messageId: string;
   baseDir: string;
   taskId: string;
   chunk: string;
+  reasoning?: string;
   reflectedMessage?: string;
+  promptContext?: PromptContext;
+}
+
+export interface ToolInputChunkData {
+  baseDir: string;
+  taskId: string;
+  toolCallId: string;
+  serverName?: string;
+  toolName?: string;
+  partialArgs?: unknown;
+  isComplete: boolean;
   promptContext?: PromptContext;
 }
 
@@ -153,6 +235,7 @@ export interface ResponseCompletedData {
   baseDir: string;
   taskId: string;
   content: string;
+  reasoning?: string;
   reflectedMessage?: string;
   editedFiles?: string[];
   commitHash?: string;
@@ -161,6 +244,7 @@ export interface ResponseCompletedData {
   usageReport?: UsageReportData;
   sequenceNumber?: number;
   promptContext?: PromptContext;
+  timestamp?: number;
 }
 
 export interface CommandOutputData {
@@ -168,6 +252,7 @@ export interface CommandOutputData {
   taskId: string;
   command: string;
   output: string;
+  timestamp?: number;
 }
 
 export type LogLevel = 'info' | 'warning' | 'error' | 'loading';
@@ -180,6 +265,7 @@ export interface LogData {
   finished?: boolean;
   promptContext?: PromptContext;
   actionIds?: string[];
+  timestamp?: number;
 }
 
 // System log types (for application-wide logging)
@@ -215,6 +301,7 @@ export interface ToolData {
   usageReport?: UsageReportData;
   promptContext?: PromptContext;
   finished?: boolean;
+  timestamp?: number;
 }
 
 export interface ContextFilesUpdatedData {
@@ -323,7 +410,7 @@ export const ProjectSettingsSchema = z.object({
   thinkingTokens: z.string().optional(),
   currentMode: z.string(),
   weakModelLocked: z.boolean().optional(),
-  autoApproveLocked: z.boolean().optional(),
+  autonomyModeLocked: z.boolean().optional(),
   updatedFilesGroupMode: z.enum(['grouped', 'flat']).default('flat'),
   disabledRuleFiles: z.array(z.string()).default([]),
   contextSidebarSectionsOrder: z.array(z.string()).default([]),
@@ -337,6 +424,35 @@ export interface ProjectData {
   baseDir: string;
   settings: ProjectSettings;
 }
+
+export interface ReadonlyProjectData {
+  active: boolean;
+  baseDir: string;
+  name: string;
+}
+
+export interface ReadonlyDisplaySettings {
+  language: string;
+  theme: Theme;
+  font: Font;
+  fontSize: number;
+  renderMarkdown: boolean;
+  fullMessageRendering: boolean;
+  messageViewMode?: MessageViewMode;
+  enableExtensionUi: boolean;
+}
+
+export interface ReadonlyBootstrap {
+  mode: 'readonly';
+  projects: ReadonlyProjectData[];
+  display: ReadonlyDisplaySettings;
+}
+
+export interface StandardBootstrap {
+  mode: 'standard';
+}
+
+export type BrowserBootstrap = ReadonlyBootstrap | StandardBootstrap;
 
 export interface RawModelInfo {
   max_input_tokens: number;
@@ -392,7 +508,9 @@ export interface PromptBehavior {
 }
 
 export enum InvocationMode {
+  /** Subagent is only used when explicitly requested by the user. */
   OnDemand = 'on-demand',
+  /** Subagent can be automatically invoked when appropriate by the agent. */
   Automatic = 'automatic',
 }
 
@@ -435,7 +553,10 @@ export interface AgentProfile {
   useMemoryTools: boolean;
   useSkillsTools: boolean;
   useExtensionTools: boolean;
+  disabledExtensionTools: string[]; // Array of extension IDs whose tools are disabled
   customInstructions: string;
+  systemPrompt?: string; // when set, overrides the default built-in system prompt when the profile runs as the main agent; used as fallback for subagent runs when subagent.systemPrompt is not set
+  enabledSubagentIds?: string[]; // profile IDs allowed to be used as subagents; undefined = all subagents allowed
   subagent: SubagentConfig;
   isSubagent?: boolean; // flag to indicate if this profile is being used as a subagent
   ruleFiles?: string[]; // Array of absolute paths to rule files for this agent profile
@@ -470,20 +591,21 @@ export const THEMES = [
 ] as const;
 export type Theme = (typeof THEMES)[number];
 
-export const isCodeEditorDarkTheme = (theme: Theme) => [
-  'aurora',
-  'botanical-garden',
-  'botanical-garden-dark',
-  'charcoal',
-  'dark',
-  'forest',
-  'lavender',
-  'midnight',
-  'neon',
-  'neopunk',
-  'ocean',
-  'obsidian',
-].includes(theme)
+export const isCodeEditorDarkTheme = (theme: Theme) =>
+  [
+    'aurora',
+    'botanical-garden',
+    'botanical-garden-dark',
+    'charcoal',
+    'dark',
+    'forest',
+    'lavender',
+    'midnight',
+    'neon',
+    'neopunk',
+    'ocean',
+    'obsidian',
+  ].includes(theme);
 
 export const FONTS = [
   'Sono',
@@ -556,6 +678,12 @@ export enum ContextCompactionType {
   Smart = 'smart',
 }
 
+export enum FileWatchMode {
+  Auto = 'auto',
+  Native = 'native',
+  Polling = 'polling',
+}
+
 export interface TaskSettings {
   smartTaskState: boolean;
   autoGenerateTaskName: boolean;
@@ -610,7 +738,7 @@ export interface SettingsData {
   font?: Font;
   fontSize?: number;
   renderMarkdown: boolean;
-  virtualizedRendering: boolean;
+  fullMessageRendering: boolean;
   aiderDeskAutoUpdate: boolean;
   diffViewMode?: DiffViewMode;
   messageViewMode?: MessageViewMode;
@@ -649,6 +777,8 @@ export interface SettingsData {
   promptBehavior: PromptBehavior;
   server: {
     enabled: boolean;
+    readonly: boolean;
+    readonlyExtensionUi?: boolean;
     basicAuth: {
       enabled: boolean;
       username: string;
@@ -666,7 +796,9 @@ export interface SettingsData {
   proxy: {
     enabled: boolean;
     url: string;
+    noProxy: string;
   };
+  fileWatchMode?: FileWatchMode;
 }
 
 export interface ProviderProfile {
@@ -739,6 +871,7 @@ export interface UserMessageData {
   content: string;
   images?: string[];
   promptContext?: PromptContext;
+  timestamp?: number;
 }
 
 export interface MessageRemovedData {
@@ -759,9 +892,9 @@ export interface GenericTool {
   description: string;
 }
 
-export interface McpToolInputSchema {
+export interface McpToolInputSchema extends Record<string, unknown> {
   type: 'object';
-  properties: Record<string, JSONSchema7Definition>;
+  properties?: Record<string, unknown>;
 }
 
 export interface McpTool {
@@ -825,6 +958,17 @@ export const WorkingModeSchema = z.enum(['local', 'worktree']);
 
 export type WorkingMode = z.infer<typeof WorkingModeSchema>;
 
+export interface SwitchToLocalOptions {
+  mergeBeforeSwitch?: boolean;
+  targetBranch?: string;
+  switchAllInWorktree?: boolean;
+}
+
+export interface SwitchToWorktreeOptions {
+  carryOverUncommittedChanges?: boolean;
+  dropSourceChanges?: boolean;
+}
+
 export const TaskDataSchema = z.object({
   id: z.string(),
   baseDir: z.string(),
@@ -843,7 +987,7 @@ export const TaskDataSchema = z.object({
   lastMergeState: MergeStateSchema.optional(),
   aiderTotalCost: z.number(),
   agentTotalCost: z.number(),
-  autoApprove: z.boolean().optional(),
+  autonomyMode: z.enum(AutonomyMode).optional(),
   agentProfileId: z.string().optional(),
   provider: z.string().optional(),
   model: z.string().optional(),
@@ -865,12 +1009,13 @@ export type TaskData = z.infer<typeof TaskDataSchema>;
 export interface CreateTaskParams {
   parentId?: string | null;
   name?: string;
-  autoApprove?: boolean;
+  autonomyMode?: AutonomyMode;
   activate?: boolean;
   handoff?: boolean;
   sendEvent?: boolean;
   provider?: string;
   model?: string;
+  agentProfileId?: string;
   mode?: Mode;
   workingMode?: WorkingMode;
   addInitialContextFiles?: boolean;
@@ -893,6 +1038,8 @@ export enum DefaultTaskState {
   ReadyForImplementation = 'READY_FOR_IMPLEMENTATION',
   Done = 'DONE',
 }
+
+export const DEFAULT_TASK_STATES = new Set<string>(Object.values(DefaultTaskState));
 
 export const TaskStateEmoji: Record<DefaultTaskState, string> = {
   [DefaultTaskState.Todo]: '📋',
@@ -965,7 +1112,7 @@ export interface CommandArgument {
 export interface CustomCommand extends Command {
   template: string;
   includeContext?: boolean;
-  autoApprove?: boolean;
+  autonomyMode?: AutonomyMode;
   skills?: string[];
 }
 
@@ -1020,11 +1167,18 @@ export interface InstalledExtension {
     capabilities?: string[];
     iconUrl?: string;
     hasConfig?: boolean;
+    supportedOS?: OS[];
   };
   filePath: string;
   initialized: boolean;
   projectDir?: string;
   readmeContent?: string;
+}
+
+export interface ExtensionToolInfo {
+  extensionId: string;
+  extensionName: string;
+  tools: { name: string; description: string }[];
 }
 
 export interface AvailableExtension {
@@ -1035,6 +1189,7 @@ export interface AvailableExtension {
   author?: string;
   capabilities?: string[];
   iconUrl?: string;
+  supportedOS?: OS[];
   type: 'single' | 'folder';
   file?: string;
   folder?: string;
@@ -1043,13 +1198,25 @@ export interface AvailableExtension {
   readmeContent?: string;
 }
 
+export interface ExtensionOperationResult {
+  success: boolean;
+  error?: string;
+}
+
 export interface ExtensionUIComponent {
   extensionId: string;
   componentId: string;
+  name?: string;
   placement: string;
   jsx: string;
   loadData?: boolean;
   noDataCache?: boolean;
+  libraries?: Record<string, string>;
+  messageFilter?: {
+    types?: string[];
+    serverName?: string;
+    toolName?: string;
+  };
 }
 
 /**
@@ -1057,7 +1224,7 @@ export interface ExtensionUIComponent {
  * Returned by getConfigComponent() for a specific extension.
  */
 export interface ExtensionConfigComponent {
-  /** JSX/TSX component as string to be parsed by string-to-react-component */
+  /** JSX/TSX component as string to be parsed to component */
   jsx: string;
 }
 
@@ -1086,6 +1253,7 @@ export interface ContextMenuParams {
   y: number;
   selectionText?: string;
   isEditable: boolean;
+  linkURL?: string;
 }
 
 export interface ModalOverlayUrlData {
@@ -1126,4 +1294,3 @@ export interface SkillsUpdatedData {
   taskId: string;
   skills: SkillDefinition[];
 }
-

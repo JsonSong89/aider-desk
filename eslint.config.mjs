@@ -1,13 +1,27 @@
 import js from '@eslint/js';
 import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
+import reactCompiler from 'eslint-plugin-react-compiler';
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import prettierPlugin from 'eslint-plugin-prettier/recommended';
 import reactPlugin from 'eslint-plugin-react';
 
-export default tseslint.config({ ignores: ['build', 'dist', 'node_modules', 'out', '**/__fixtures__/**', 'docs-site', 'packages'] }, {
-  ignores: ['build', 'dist', 'node_modules', 'out', '**/__fixtures__/**', 'docs-site', 'packages', '.aider-desk'],
+const ignores = [
+  'build',
+  'dist',
+  'node_modules',
+  'out',
+  '**/__fixtures__/**',
+  'docs-site',
+  'packages/app',
+  'packages/extensions',
+  'packages/tree-sitter-utils',
+  '.aider-desk'
+];
+
+export default tseslint.config({ ignores }, {
+  ignores,
   extends: [
     js.configs.recommended,
     ...tseslint.configs.recommended,
@@ -34,6 +48,7 @@ export default tseslint.config({ ignores: ['build', 'dist', 'node_modules', 'out
   plugins: {
     'react': reactPlugin,
     'react-hooks': reactHooks,
+    'react-compiler': reactCompiler,
   },
   rules: {
     ...reactHooks.configs.recommended.rules,
@@ -134,6 +149,7 @@ export default tseslint.config({ ignores: ['build', 'dist', 'node_modules', 'out
     'react-hooks/purity': 'warn',
     'react-hooks/set-state-in-effect': 'warn',
     'react-hooks/refs': 'warn',
+    'react-compiler/react-compiler': 'warn',
   }
 }, {
   files: ['**/__tests__/**/*.test.ts'],

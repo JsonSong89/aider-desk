@@ -2,7 +2,7 @@ import { forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef } fro
 import { toPng } from 'html-to-image';
 import { MdKeyboardDoubleArrowDown } from 'react-icons/md';
 import { useTranslation } from 'react-i18next';
-import { DefaultTaskState, isUserMessage, Message, MessageViewMode, TaskData } from '@common/types';
+import { GroupMessage, isUserMessage, Message, MessageViewMode } from '@common/types';
 
 import { MessageBlockWrapper } from './MessageBlockWrapper';
 
@@ -10,7 +10,7 @@ import { IconButton } from '@/components/common/IconButton';
 import { groupAssistantMessages, groupMessagesByPromptContext } from '@/components/message/utils';
 import { useScrollingPaused } from '@/hooks/useScrollingPaused';
 import { useUserMessageNavigation } from '@/hooks/useUserMessageNavigation';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 export type MessagesRef = {
   exportToImage: () => void;
@@ -21,13 +21,14 @@ export type MessagesRef = {
 type Props = {
   baseDir: string;
   taskId: string;
-  task: TaskData;
+  inProgress: boolean;
   messages: Message[];
   allFiles?: string[];
   renderMarkdown: boolean;
-  removeMessage: (message: Message) => void;
-  redoUserPrompt: (messageId: string) => void;
-  editLastUserMessage: (content: string, images?: string[]) => void;
+  removeMessage?: (message: Message) => void;
+  removeGroup?: (group: GroupMessage) => void;
+  redoUserPrompt?: (messageId: string) => void;
+  editUserMessage?: (messageId: string, content: string, images?: string[]) => void;
   onInterrupt?: () => void;
   onForkFromMessage?: (message: Message) => void;
   onRemoveUpToMessage?: (message: Message) => void;
@@ -38,32 +39,31 @@ const MessagesComponent = forwardRef<MessagesRef, Props>(
     {
       baseDir,
       taskId,
-      task,
+      inProgress,
       messages,
       allFiles = [],
       renderMarkdown,
       removeMessage,
+      removeGroup,
       redoUserPrompt,
-      editLastUserMessage,
+      editUserMessage,
       onInterrupt,
       onForkFromMessage,
       onRemoveUpToMessage,
     },
     ref,
   ) => {
-    const { settings } = useSettings();
     const { t } = useTranslation();
+    const messageViewMode = useSettingsStore((state) => state.settings?.messageViewMode);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
-    const isCompactMode = settings?.messageViewMode === MessageViewMode.Compact;
+    const isCompactMode = messageViewMode === MessageViewMode.Compact;
 
     // Group messages by promptContext.group.id, then optionally group assistant messages for compact mode
     const processedMessages = useMemo(() => {
       const grouped = groupMessagesByPromptContext(messages);
       return isCompactMode ? groupAssistantMessages(grouped) : grouped;
     }, [messages, isCompactMode]);
-    const lastUserMessageIndex = processedMessages.findLastIndex(isUserMessage);
-    const inProgress = task.state === DefaultTaskState.InProgress;
 
     const { scrollingPaused, setScrollingPaused, scrollToBottom, eventHandlers } = useScrollingPaused({
       onAutoScroll: () => messagesEndRef.current?.scrollIntoView(),
@@ -71,7 +71,13 @@ const MessagesComponent = forwardRef<MessagesRef, Props>(
 
     useEffect(() => {
       if (!scrollingPaused) {
-        messagesEndRef.current?.scrollIntoView();
+        requestAnimationFrame(() => {
+          messagesEndRef.current?.scrollIntoView({
+            block: 'end',
+            inline: 'end',
+            behavior: 'instant',
+          });
+        });
       }
     }, [processedMessages, scrollingPaused]);
 
@@ -125,7 +131,7 @@ const MessagesComponent = forwardRef<MessagesRef, Props>(
           className="flex flex-col flex-grow overflow-y-auto max-h-full p-4 pb-2 scrollbar-thin scrollbar-track-bg-primary-light scrollbar-thumb-bg-tertiary hover:scrollbar-thumb-bg-fourth space-y-2"
           {...eventHandlers}
         >
-          {processedMessages.map((message, index) => (
+          {processedMessages.map((message) => (
             <MessageBlockWrapper
               key={message.id}
               baseDir={baseDir}
@@ -133,12 +139,11 @@ const MessagesComponent = forwardRef<MessagesRef, Props>(
               message={message}
               allFiles={allFiles}
               renderMarkdown={renderMarkdown}
-              index={index}
-              lastUserMessageIndex={lastUserMessageIndex}
               inProgress={inProgress}
               removeMessage={removeMessage}
+              removeGroup={removeGroup}
               redoUserPrompt={redoUserPrompt}
-              editLastUserMessage={editLastUserMessage}
+              editUserMessage={editUserMessage}
               onInterrupt={onInterrupt}
               onForkFromMessage={onForkFromMessage}
               onRemoveUpToMessage={onRemoveUpToMessage}

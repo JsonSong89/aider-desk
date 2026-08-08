@@ -14,9 +14,9 @@ import { CompactSelect } from './CompactSelect';
 
 import { DiffViewer, UDiffViewer, CompactDiffViewer } from '@/components/common/DiffViewer';
 import { useApi } from '@/contexts/ApiContext';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSaveSettings, useSettingsStore } from '@/stores/settingsStore';
 import { useResponsive } from '@/hooks/useResponsive';
-import { highlightWithLowlight } from '@/utils/highlighter';
+import { highlightWithLowlight, lowlight } from '@/utils/highlighter';
 
 const SEARCH_MARKER = /^<{5,9} SEARCH[^\n]*$/m;
 const DIVIDER_MARKER = /^={5,9}\s*$/m;
@@ -76,16 +76,18 @@ export const CodeBlock = ({ baseDir, taskId, language, children, file, isComplet
   const [isExpanded, setIsExpanded] = useState(true);
   const [changesReverted, setChangesReverted] = useState(false);
   const api = useApi();
-  const { settings, saveSettings } = useSettings();
-  const [diffViewMode, setDiffViewMode] = useOptimistic(settings?.diffViewMode || DiffViewMode.SideBySide);
+  const saveSettings = useSaveSettings();
+  const storedDiffViewMode = useSettingsStore((state) => state.settings?.diffViewMode) || DiffViewMode.SideBySide;
+  const [diffViewMode, setDiffViewMode] = useOptimistic(storedDiffViewMode);
   const { isMobile } = useResponsive();
 
   const handleDiffViewModeChange = (value: string) => {
-    if (settings) {
+    const currentSettings = useSettingsStore.getState().settings;
+    if (currentSettings) {
       startTransition(() => {
         setDiffViewMode(value as DiffViewMode);
         void saveSettings({
-          ...settings,
+          ...currentSettings,
           diffViewMode: value as DiffViewMode,
         });
       });
@@ -138,11 +140,12 @@ export const CodeBlock = ({ baseDir, taskId, language, children, file, isComplet
     } else if (language === 'mermaid' && codeForSyntaxHighlight) {
       return <MermaidDiagram code={codeForSyntaxHighlight} />;
     } else if (codeForSyntaxHighlight && language) {
+      const shouldHighlight = isComplete || lowlight.registered(language);
       return (
         <pre
           className={`language-${language} !bg-transparent !border-none !shadow-none scrollbar-thin scrollbar-track-bg-primary-light scrollbar-thumb-bg-secondary-light hover:scrollbar-thumb-bg-fourth focus:outline-none`}
         >
-          <code className={`language-${language}`}>{highlightWithLowlight(codeForSyntaxHighlight, language)}</code>
+          <code className={`language-${language}`}>{shouldHighlight ? highlightWithLowlight(codeForSyntaxHighlight, language) : codeForSyntaxHighlight}</code>
         </pre>
       );
     } else {

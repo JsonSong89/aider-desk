@@ -38,6 +38,8 @@ export type MessageAction =
   | 'request-context-info'
   | 'subscribe-events'
   | 'unsubscribe-events'
+  | 'readonly-subscribe-events'
+  | 'readonly-unsubscribe-events'
   | 'update-models-info';
 
 export interface Message {
@@ -80,6 +82,7 @@ export interface ResponseMessage extends Message {
   id: string;
   action: 'response';
   content: string;
+  reasoning?: string;
   reflectedMessage?: string;
   finished: boolean;
   usageReport?: string | UsageReportData;
@@ -287,4 +290,22 @@ export interface UnsubscribeEventsMessage extends Message {
 
 export const isUnsubscribeEventsMessage = (message: Message): message is UnsubscribeEventsMessage => {
   return message.action === 'unsubscribe-events';
+};
+
+export interface ReadonlySubscribeEventsMessage extends Message {
+  action: 'readonly-subscribe-events';
+  projectDir: string;
+  eventTypes: string[];
+}
+
+export const isReadonlySubscribeEventsMessage = (message: Message): message is ReadonlySubscribeEventsMessage => {
+  return message.action === 'readonly-subscribe-events';
+};
+
+export interface ReadonlyUnsubscribeEventsMessage extends Message {
+  action: 'readonly-unsubscribe-events';
+}
+
+export const isReadonlyUnsubscribeEventsMessage = (message: Message): message is ReadonlyUnsubscribeEventsMessage => {
+  return message.action === 'readonly-unsubscribe-events';
 };

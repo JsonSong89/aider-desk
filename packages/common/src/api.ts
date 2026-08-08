@@ -53,10 +53,14 @@ import {
   TodoItem,
   TokensInfoData,
   ToolData,
+  ToolInputChunkData,
   UsageDataRow,
   UserMessageData,
   VersionsInfo,
   VoiceSession,
+  SwitchToLocalOptions,
+  SwitchToWorktreeOptions,
+  WorktreeUncommittedFiles,
   WorktreeIntegrationStatus,
   WorktreeIntegrationStatusUpdatedData,
   UpdatedFile,
@@ -64,6 +68,7 @@ import {
   InstalledExtension,
   AvailableExtension,
   ExtensionConfigComponent,
+  ExtensionToolInfo,
   ExtensionUIComponent,
   ExtensionUIRefreshData,
   ModalOverlayUrlData,
@@ -71,7 +76,13 @@ import {
   ChangeRequestItem,
   SkillDefinition,
   SkillsUpdatedData,
+  ExtensionOperationResult,
 } from '@common/types';
+
+export type ExtensionDisplayAPI = Pick<
+  ApplicationAPI,
+  'getExtensionUIComponents' | 'getUIExtensionData' | 'executeUIExtensionAction' | 'onExtensionUIRefresh' | 'loadExtensionLibrary'
+>;
 
 export interface ApplicationAPI {
   isOpenLogsDirectorySupported: () => boolean;
@@ -88,8 +99,10 @@ export interface ApplicationAPI {
   stopProject: (baseDir: string) => void;
   restartProject: (baseDir: string) => void;
   resetTask: (baseDir: string, taskId: string) => void;
+  restartAiderConnector: (baseDir: string, taskId: string) => void;
   runPrompt: (baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]) => void;
   savePrompt: (baseDir: string, taskId: string, prompt: string) => Promise<void>;
+  saveEditedPrompt: (baseDir: string, taskId: string, messageId: string, prompt: string) => Promise<void>;
   redoUserPrompt: (baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]) => void;
   resumeTask: (baseDir: string, taskId: string) => void;
   answerQuestion: (baseDir: string, taskId: string, answer: string) => void;
@@ -117,11 +130,13 @@ export interface ApplicationAPI {
   getFilePathSuggestions: (currentPath: string, directoriesOnly?: boolean) => Promise<string[]>;
   getAddableFiles: (baseDir: string, taskId: string) => Promise<string[]>;
   getAllFiles: (baseDir: string, taskId: string, useGit?: boolean) => Promise<string[]>;
+  refreshContextFiles: (baseDir: string, taskId: string) => Promise<void>;
   getUpdatedFiles: (baseDir: string, taskId: string) => Promise<UpdatedFile[]>;
   restoreFile: (baseDir: string, taskId: string, filePath: string) => Promise<void>;
   readFile: (baseDir: string, taskId: string, filePath: string) => Promise<string>;
   generateCommitMessage: (baseDir: string, taskId: string) => Promise<string>;
   commitChanges: (baseDir: string, taskId: string, message: string, amend: boolean) => Promise<void>;
+  cancelCommitChanges: (baseDir: string, taskId: string) => Promise<void>;
   addFile: (baseDir: string, taskId: string, filePath: string, readOnly?: boolean) => void;
   isValidPath: (baseDir: string, path: string) => Promise<boolean>;
   isProjectPath: (path: string) => Promise<boolean>;
@@ -150,9 +165,10 @@ export interface ApplicationAPI {
   // Extension operations
   getInstalledExtensions: (projectDir?: string) => Promise<InstalledExtension[]>;
   getAvailableExtensions: (repositories: string[], forceRefresh?: boolean, fetchOnly?: boolean) => Promise<AvailableExtension[]>;
-  installExtension: (extensionId: string, repositoryUrl: string, projectDir?: string) => Promise<boolean>;
+  installExtension: (extensionId: string, repositoryUrl: string, projectDir?: string) => Promise<ExtensionOperationResult>;
   uninstallExtension: (extensionId: string, projectDir?: string) => Promise<boolean>;
-  updateExtension: (extensionId: string, repositoryUrl: string, projectDir?: string) => Promise<boolean>;
+  updateExtension: (extensionId: string, repositoryUrl: string, projectDir?: string) => Promise<ExtensionOperationResult>;
+  reloadExtension: (filePath: string, projectDir?: string) => Promise<boolean>;
   getExtensionUIComponents: (placement?: string, projectDir?: string, taskId?: string) => Promise<ExtensionUIComponent[]>;
   getUIExtensionData: (extensionId: string, componentId: string, projectDir?: string, taskId?: string) => Promise<unknown>;
   executeUIExtensionAction: (
@@ -163,6 +179,7 @@ export interface ApplicationAPI {
     projectDir?: string,
     taskId?: string,
   ) => Promise<unknown>;
+  getExtensionToolsInfo: (projectDir?: string) => Promise<ExtensionToolInfo[]>;
   // Extension config operations (per-extension settings UI)
   getExtensionConfigComponent: (extensionId: string, projectDir?: string) => Promise<ExtensionConfigComponent | null>;
   getExtensionConfig: (extensionId: string, projectDir?: string) => Promise<unknown>;
@@ -170,6 +187,7 @@ export interface ApplicationAPI {
   onExtensionUIRefresh: (callback: (data: ExtensionUIRefreshData) => void) => () => void;
   onModalOverlayUrl: (callback: (data: ModalOverlayUrlData) => void) => () => void;
   isWebViewSupported: () => boolean;
+  loadExtensionLibrary: (librarySpec: string) => Promise<string>;
 
   createNewTask: (baseDir: string, params?: CreateTaskParams) => Promise<TaskData>;
   updateTask: (baseDir: string, id: string, updates: Partial<TaskData>) => Promise<boolean>;
@@ -230,6 +248,7 @@ export interface ApplicationAPI {
   addCommandOutputListener: (baseDir: string, taskId: string, callback: (data: CommandOutputData) => void) => () => void;
   addTokensInfoListener: (baseDir: string, taskId: string, callback: (data: TokensInfoData) => void) => () => void;
   addToolListener: (baseDir: string, taskId: string, callback: (data: ToolData) => void) => () => void;
+  addToolInputChunkListener: (baseDir: string, taskId: string, callback: (data: ToolInputChunkData) => void) => () => void;
   addUserMessageListener: (baseDir: string, taskId: string, callback: (data: UserMessageData) => void) => () => void;
   addInputHistoryUpdatedListener: (baseDir: string, callback: (data: InputHistoryData) => void) => () => void;
   addClearTaskListener: (baseDir: string, taskId: string, callback: (data: ClearTaskData) => void) => () => void;
@@ -271,7 +290,9 @@ export interface ApplicationAPI {
 
   // Worktree merge operations
   mergeWorktreeToMain: (baseDir: string, taskId: string, squash: boolean, targetBranch?: string, commitMessage?: string) => Promise<void>;
-  mergeAndSwitchToLocal: (baseDir: string, taskId: string, targetBranch?: string) => Promise<void>;
+  switchToLocalWorkingMode: (baseDir: string, taskId: string, options?: SwitchToLocalOptions) => Promise<void>;
+  switchToWorktreeWorkingMode: (baseDir: string, taskId: string, options?: SwitchToWorktreeOptions) => Promise<void>;
+  getLocalUncommittedFiles: (baseDir: string, taskId: string) => Promise<WorktreeUncommittedFiles>;
   applyUncommittedChanges: (baseDir: string, taskId: string, targetBranch?: string) => Promise<void>;
   revertLastMerge: (baseDir: string, taskId: string) => Promise<void>;
   listBranches: (baseDir: string) => Promise<BranchInfo[]>;
@@ -308,7 +329,10 @@ export interface ApplicationAPI {
   addSystemLogListener: (callback: (data: SystemLogData) => void) => () => void;
 
   // Aider connector status (Python install + per-task connector lifecycle)
-  addAiderConnectorStatusListener: (callback: (data: { baseDir?: string; taskId?: string; status: AiderConnectorStatus }) => void, baseDir?: string, taskId?: string) => () => void;
+  addAiderConnectorStatusListener: (
+    callback: (data: { baseDir?: string; taskId?: string; status: AiderConnectorStatus }) => void,
+    baseDir?: string,
+    taskId?: string,
+  ) => () => void;
   getAiderConnectorStatus: () => Promise<AiderConnectorStatus>;
-
 }

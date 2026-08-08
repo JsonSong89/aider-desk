@@ -1,21 +1,32 @@
 import { AIDER_MODES, Mode, TaskData, TokensInfoData } from '@common/types';
-import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDebounceFn } from '@reactuses/core';
 import { clsx } from 'clsx';
+import { FaExclamationTriangle } from 'react-icons/fa';
 
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { formatHumanReadable } from '@/utils/string-utils';
+import { useActiveAgentProfile } from '@/utils/agents';
+import { Tooltip } from '@/components/ui/Tooltip';
+
+const DEFAULT_TRESHOLD_CONFIG = {
+  percentage: 0,
+  tokens: 0,
+};
 
 const getDefaultThresholdTokens = (task: TaskData, thresholdConfig: { percentage: number; tokens: number }, maxInputTokens: number) => {
-  if (task.contextCompactingThresholdTokens !== undefined) {
+  if (task.contextCompactingThresholdTokens !== undefined && task.contextCompactingThresholdTokens > 0) {
     return task.contextCompactingThresholdTokens;
   }
   if (maxInputTokens <= 0) {
     return 0;
   }
   const percentageThreshold = (maxInputTokens * thresholdConfig.percentage) / 100;
-  return Math.round(Math.min(percentageThreshold, thresholdConfig.tokens));
+  if (thresholdConfig.tokens > 0) {
+    return Math.round(Math.min(percentageThreshold, thresholdConfig.tokens));
+  }
+  return Math.round(percentageThreshold);
 };
 
 type Props = {
@@ -28,15 +39,18 @@ type Props = {
 
 export const TokenUsageBar = ({ task, tokensInfo, maxInputTokens = 0, mode, updateTask }: Props) => {
   const { t } = useTranslation();
-  const { settings } = useSettings();
+  const agentProfile = useActiveAgentProfile(task, task.baseDir);
+  const globalThresholdConfig = useSettingsStore((state) => state.settings?.taskSettings.contextCompactingThreshold) ?? DEFAULT_TRESHOLD_CONFIG;
   const [localThreshold, setLocalThreshold] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
   const [isHoveringThreshold, setIsHoveringThreshold] = useState(false);
   const tokenBarRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const thresholdConfig = settings?.taskSettings.contextCompactingThreshold ?? { percentage: 0, tokens: 0 };
+  const thresholdConfig = {
+    percentage: agentProfile?.autoCompactThresholdPercentage ?? globalThresholdConfig.percentage,
+    tokens: agentProfile?.autoCompactThresholdTokens ?? globalThresholdConfig.tokens,
+  };
 
   const effectiveThresholdTokens = getDefaultThresholdTokens(task, thresholdConfig, maxInputTokens);
 
@@ -53,21 +67,31 @@ export const TokenUsageBar = ({ task, tokensInfo, maxInputTokens = 0, mode, upda
     updateTask(task.id, { contextCompactingThresholdTokens: value });
   }, 1000);
 
-  const handleTokenBarClick = useCallback(
-    (e: ReactMouseEvent<HTMLDivElement>) => {
-      if (!tokenBarRef.current || AIDER_MODES.includes(mode)) {
+  const setThresholdAtPosition = useCallback(
+    (clientX: number) => {
+      if (!tokenBarRef.current) {
         return;
       }
 
       const rect = tokenBarRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
+      const x = clientX - rect.left;
       const percentage = Math.min(Math.max((x / rect.width) * 100, 0), 100);
       const roundedPercentage = Math.round(percentage / 5) * 5;
 
       setLocalThreshold(roundedPercentage);
       debouncedOnContextCompactingThreshold(Math.round((roundedPercentage / 100) * maxInputTokens));
     },
-    [mode, debouncedOnContextCompactingThreshold, maxInputTokens],
+    [debouncedOnContextCompactingThreshold, maxInputTokens, setLocalThreshold],
+  );
+
+  const handleTokenBarClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (AIDER_MODES.includes(mode)) {
+        return;
+      }
+      setThresholdAtPosition(e.clientX);
+    },
+    [mode, setThresholdAtPosition],
   );
 
   const updateThreshold = useCallback(
@@ -92,7 +116,7 @@ export const TokenUsageBar = ({ task, tokensInfo, maxInputTokens = 0, mode, upda
         setIsHoveringThreshold(false);
       }
     },
-    [isDragging, mode, localThreshold, debouncedOnContextCompactingThreshold, maxInputTokens],
+    [isDragging, mode, localThreshold, debouncedOnContextCompactingThreshold, maxInputTokens, setIsHoveringThreshold, setLocalThreshold],
   );
 
   const handleMouseMove = useCallback(
@@ -124,6 +148,33 @@ export const TokenUsageBar = ({ task, tokensInfo, maxInputTokens = 0, mode, upda
     [mode, handleTokenBarClick],
   );
 
+  const handleTouchStart = useCallback(
+    (e: ReactTouchEvent<HTMLDivElement>) => {
+      if (AIDER_MODES.includes(mode)) {
+        return;
+      }
+      setShowTooltip(true);
+      setIsDragging(true);
+      setThresholdAtPosition(e.touches[0].clientX);
+    },
+    [mode, setThresholdAtPosition],
+  );
+
+  const handleDocumentTouchMove = useCallback(
+    (e: TouchEvent) => {
+      if (isDragging) {
+        e.preventDefault();
+      }
+      updateThreshold(e.touches[0].clientX);
+    },
+    [isDragging, updateThreshold],
+  );
+
+  const handleTouchEnd = useCallback(() => {
+    setIsDragging(false);
+    setShowTooltip(false);
+  }, []);
+
   const handleMouseEnter = useCallback(() => {
     if (!AIDER_MODES.includes(mode)) {
       setShowTooltip(true);
@@ -139,13 +190,19 @@ export const TokenUsageBar = ({ task, tokensInfo, maxInputTokens = 0, mode, upda
     if (isDragging) {
       document.addEventListener('mouseup', handleMouseUp);
       document.addEventListener('mousemove', handleDocumentMouseMove);
+      document.addEventListener('touchend', handleTouchEnd);
+      document.addEventListener('touchcancel', handleTouchEnd);
+      document.addEventListener('touchmove', handleDocumentTouchMove, { passive: false });
       return () => {
         document.removeEventListener('mouseup', handleMouseUp);
         document.removeEventListener('mousemove', handleDocumentMouseMove);
+        document.removeEventListener('touchend', handleTouchEnd);
+        document.removeEventListener('touchcancel', handleTouchEnd);
+        document.removeEventListener('touchmove', handleDocumentTouchMove);
       };
     }
     return undefined;
-  }, [isDragging, handleMouseUp, handleDocumentMouseMove]);
+  }, [isDragging, handleMouseUp, handleDocumentMouseMove, handleTouchEnd, handleDocumentTouchMove]);
 
   const thresholdTokens = maxInputTokens > 0 ? Math.round((localThreshold / 100) * maxInputTokens) : 0;
 
@@ -167,6 +224,7 @@ export const TokenUsageBar = ({ task, tokensInfo, maxInputTokens = 0, mode, upda
       onMouseDown={handleMouseDown}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onTouchStart={handleTouchStart}
     >
       <div className="relative flex-1">
         {!!maxInputTokens && (
@@ -221,6 +279,11 @@ export const TokenUsageBar = ({ task, tokensInfo, maxInputTokens = 0, mode, upda
           maxTokens: maxInputTokens ? formatHumanReadable(t, maxInputTokens) : '?',
         })}
       </div>
+      {!maxInputTokens && (
+        <Tooltip content={t('costInfo.contextWindowNotSet')} side="top">
+          <FaExclamationTriangle className="w-3 h-3 text-warning flex-shrink-0" />
+        </Tooltip>
+      )}
     </div>
   );
 };

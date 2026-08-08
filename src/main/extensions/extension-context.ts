@@ -1,8 +1,8 @@
 import { ProjectContextImpl } from './project-context';
 import { TaskContextImpl } from './task-context';
 
-import type { ExtensionContext, MemoryContext, ProjectContext, TaskContext } from '@common/extensions';
-import type { Model, SettingsData } from '@common/types';
+import type { ElectronApp, ExtensionContext, MemoryContext, ProjectContext, TaskContext } from '@common/extensions';
+import type { Model, ProviderProfile, SettingsData } from '@common/types';
 import type { EventManager } from '@/events';
 import type { MemoryManager } from '@/memory/memory-manager';
 import type { ModelManager } from '@/models';
@@ -11,6 +11,7 @@ import type { Store } from '@/store';
 import type { Task } from '@/task';
 
 import logger from '@/logger';
+import { truncateToolResult } from '@/agent/utils';
 import { openUrl as openUrlUtil } from '@/utils/open-url';
 
 export class ExtensionContextImpl implements ExtensionContext {
@@ -40,6 +41,18 @@ export class ExtensionContextImpl implements ExtensionContext {
     return this.project?.baseDir ?? '';
   }
 
+  getOpenProjectDirs(): string[] {
+    if (!this.store) {
+      return [];
+    }
+    try {
+      return this.store.getOpenProjects().map((project) => project.baseDir);
+    } catch (error) {
+      this.log(`Failed to get open project dirs: ${error}`, 'error');
+      return [];
+    }
+  }
+
   getTaskContext(): TaskContext | null {
     return this.taskContext;
   }
@@ -61,6 +74,19 @@ export class ExtensionContextImpl implements ExtensionContext {
       return providerModelsData.models || [];
     } catch (error) {
       this.log(`Failed to get model configs: ${error}`, 'error');
+      return [];
+    }
+  }
+
+  getProviders(): ProviderProfile[] {
+    if (!this.modelManager) {
+      this.log('ModelManager not available, returning empty providers', 'warn');
+      return [];
+    }
+    try {
+      return this.modelManager.getProviders();
+    } catch (error) {
+      this.log(`Failed to get providers: ${error}`, 'error');
       return [];
     }
   }
@@ -155,10 +181,35 @@ export class ExtensionContextImpl implements ExtensionContext {
     }
   }
 
+  async getElectronApp(): Promise<ElectronApp | null> {
+    try {
+      const electron = await import('electron');
+      const app = electron?.app ?? electron?.default?.app;
+      if (!app || typeof app.getAppMetrics !== 'function') {
+        return null;
+      }
+      return app as ElectronApp;
+    } catch (error) {
+      this.log(`Failed to get Electron app: ${error}`, 'debug');
+      return null;
+    }
+  }
+
   getMemoryContext(): MemoryContext {
     if (!this.memoryManager) {
       throw new Error('MemoryManager not available');
     }
     return this.memoryManager;
+  }
+
+  async truncateToolResult(
+    content: string,
+    maxLines?: number,
+    maxSizeKB?: number,
+    maxTokens?: number,
+    saveToFile?: boolean,
+    truncationSuffix?: string,
+  ): Promise<string> {
+    return truncateToolResult(content, maxLines, maxSizeKB, maxTokens, saveToFile, truncationSuffix);
   }
 }

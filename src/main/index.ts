@@ -16,7 +16,7 @@ import { performStartUp, UpdateProgressData } from '@/start-up';
 import { Store } from '@/store';
 import logger, { eventTransport } from '@/logger';
 import { initManagers } from '@/managers';
-import { getDefaultProjectSettings } from '@/utils';
+import { getDefaultProjectSettings, initPath } from '@/utils';
 import { WindowManager } from '@/window-manager';
 
 // Global instances shared across all windows
@@ -159,22 +159,11 @@ const initStore = async (): Promise<Store> => {
 const initWindow = async (windowMgr: WindowManager, storeInstance: Store, projectToActivate?: string): Promise<BrowserWindow> => {
   const lastWindowState = storeInstance.getWindowState();
 
-  // Calculate position - offset from focused window if exists
-  const focusedWindow = BrowserWindow.getFocusedWindow();
-  let x = lastWindowState.x;
-  let y = lastWindowState.y;
-
-  if (focusedWindow && !focusedWindow.isDestroyed()) {
-    const [focusedX, focusedY] = focusedWindow.getPosition();
-    x = focusedX + 30;
-    y = focusedY + 30;
-  }
-
   const newWindow = new BrowserWindow({
     width: lastWindowState.width,
     height: lastWindowState.height,
-    x,
-    y,
+    x: lastWindowState.x,
+    y: lastWindowState.y,
     show: false,
     autoHideMenuBar: true,
     icon,
@@ -207,6 +196,7 @@ const initWindow = async (windowMgr: WindowManager, storeInstance: Store, projec
       y: params.y,
       selectionText: params.selectionText,
       isEditable: params.isEditable,
+      linkURL: params.linkURL || undefined,
     };
     newWindow.webContents.send('context-menu', contextMenuParams);
   });
@@ -299,8 +289,7 @@ app.whenReady().then(async () => {
     }
 
     logger.info('------------ Starting AiderDesk... ------------');
-    logger.info('Initializing fix-path...');
-    (await import('fix-path')).default();
+    initPath();
 
     let progressBar: ProgressWindow | null = null;
     let updateProgress: ((data: UpdateProgressData) => void) | null;
@@ -403,7 +392,6 @@ app.whenReady().then(async () => {
     setupIpcHandlers(managers.eventsHandler, managers.serverController, managers.pythonInstaller);
 
     if (!HEADLESS_MODE) {
-      // Create the first window
       // Create the first window
       await createNewWindow();
 

@@ -31,12 +31,12 @@ const NODE_BUILTINS = new Set([
   'node:tls', 'node:trace_events', 'node:tty', 'node:url', 'node:util',
   'node:v8', 'node:vm', 'node:wasi', 'node:worker_threads', 'node:zlib',
   'node:sqlite',
-  'undici',
 ]);
 
 // Packages that are already in the committed package.json CLI deps
 const CLI_PACKAGES = new Set([
-  '@mariozechner/pi-tui',
+  '@earendil-works/pi-tui',
+  '@agentclientprotocol/sdk',
 ]);
 
 const runnerJs = readFileSync(resolve(PKG_DIR, 'out', 'runner.js'), 'utf8');
@@ -78,21 +78,29 @@ const rootPkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
 const pkgJson = JSON.parse(readFileSync(resolve(PKG_DIR, 'package.json'), 'utf8'));
 
 for (const pkg of [...requiredPackages].sort()) {
-  if (pkgJson.dependencies[pkg]) continue;
-
   let version = rootPkg.dependencies?.[pkg] || rootPkg.devDependencies?.[pkg];
   if (version && version.startsWith('workspace:')) {
     const wsPkg = JSON.parse(readFileSync(resolve(ROOT, 'node_modules', pkg, 'package.json'), 'utf8'));
     version = wsPkg.version;
   }
   if (version) {
+    if (pkgJson.dependencies[pkg] === version) continue;
     pkgJson.dependencies[pkg] = version;
   } else {
     console.warn(`Warning: version not found for "${pkg}" in root package.json`);
   }
 }
 
+pkgJson.dependencies = Object.keys(pkgJson.dependencies).sort().reduce((acc, key) => {
+  acc[key] = pkgJson.dependencies[key];
+  return acc;
+}, {});
+
 pkgJson.version = rootPkg.version;
+
+if (rootPkg.overrides) {
+  pkgJson.overrides = rootPkg.overrides;
+}
 
 const outputPath = resolve(PKG_DIR, 'package.json');
 writeFileSync(outputPath, JSON.stringify(pkgJson, null, 2) + '\n');

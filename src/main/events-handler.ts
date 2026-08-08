@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 
 import {
   AgentProfile,
+  AutonomyMode,
   CloudflareTunnelStatus,
   CommandsData,
   CreateTaskParams,
@@ -10,6 +11,7 @@ import {
   EnvironmentVariable,
   FileEdit,
   InstalledExtension,
+  ExtensionToolInfo,
   McpServerConfig,
   McpTool,
   MemoryEntry,
@@ -40,7 +42,7 @@ import { compareBaseDirs, normalizeBaseDir } from '@common/utils';
 // @ts-expect-error istextorbinary is not typed properly
 import { isBinary } from 'istextorbinary';
 
-import type { ModeDefinition, ExtensionConfigComponent, ExtensionUIComponent } from '@common/types';
+import type { ModeDefinition, ExtensionConfigComponent, ExtensionOperationResult, ExtensionUIComponent } from '@common/types';
 import type { WindowManager } from '@/window-manager';
 
 import { McpManager, AgentProfileManager } from '@/agent';
@@ -54,8 +56,10 @@ import { VersionsManager } from '@/versions';
 import { DataManager } from '@/data-manager';
 import { TerminalManager } from '@/terminal/terminal-manager';
 import { ExtensionManager, LoadedExtension } from '@/extensions';
+import { PromptsManager } from '@/prompts';
 import logger, { eventTransport } from '@/logger';
 import { getDefaultProjectSettings, getEffectiveEnvironmentVariable, getFilePathSuggestions, isProjectPath, isValidPath, scrapeWeb, openUrl } from '@/utils';
+import { expandTilde } from '@/agent/utils';
 import { AIDER_DESK_TMP_DIR, LOGS_DIR } from '@/constants';
 import { EventManager } from '@/events';
 import { isElectron } from '@/app';
@@ -77,11 +81,16 @@ export class EventsHandler {
     private readonly memoryManager: MemoryManager,
     private readonly extensionManager: ExtensionManager,
     private readonly proxyManager: ProxyManager,
+    private readonly promptsManager: PromptsManager,
     private readonly windowManager?: WindowManager,
   ) {}
 
   loadSettings(): SettingsData {
     return this.store.getSettings();
+  }
+
+  getEventManager(): EventManager {
+    return this.eventManager;
   }
 
   async saveSettings(newSettings: SettingsData): Promise<SettingsData> {
@@ -95,6 +104,8 @@ export class EventsHandler {
     this.telemetryManager.settingsChanged(oldSettings, newSettings);
     void this.memoryManager.settingsChanged(oldSettings, newSettings);
     this.extensionManager.settingsChanged(oldSettings, newSettings);
+    void this.agentProfileManager.settingsChanged(oldSettings, newSettings);
+    void this.promptsManager.settingsChanged(oldSettings, newSettings);
     this.eventManager.sendSettingsUpdated(newSettings);
 
     return this.store.getSettings();
@@ -152,6 +163,13 @@ export class EventsHandler {
     }
   }
 
+  async restartAiderConnector(baseDir: string, taskId: string): Promise<void> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (task) {
+      await task.restartAiderConnector();
+    }
+  }
+
   getOpenProjects(): ProjectData[] {
     return this.store.getOpenProjects();
   }
@@ -163,9 +181,17 @@ export class EventsHandler {
     if (!existingProject) {
       logger.info('EventsHandler: addOpenProject', { baseDir });
       const providerModels = await this.modelManager.getProviderModels();
+      const defaultAgentProfileId = this.agentProfileManager.getDefaultAgentProfileId();
+      const settings = getDefaultProjectSettings(this.store, providerModels.models || [], baseDir, defaultAgentProfileId);
+      const agentProfile = this.agentProfileManager.getProfile(settings.agentProfileId);
+
+      if (!agentProfile || (agentProfile.projectDir && !compareBaseDirs(agentProfile.projectDir, baseDir))) {
+        settings.agentProfileId = defaultAgentProfileId;
+      }
+
       const newProject: ProjectData = {
         baseDir: baseDir.endsWith('/') ? baseDir.slice(0, -1) : baseDir,
-        settings: getDefaultProjectSettings(this.store, providerModels.models || [], baseDir, this.agentProfileManager.getDefaultAgentProfileId()),
+        settings,
         active: true,
       };
       const updatedProjects = [...projects.map((p) => ({ ...p, active: false })), newProject];
@@ -305,6 +331,10 @@ export class EventsHandler {
     return task.getAllFiles(useGit);
   }
 
+  async refreshContextFiles(baseDir: string, taskId: string): Promise<void> {
+    await this.projectManager.getProject(baseDir).getTask(taskId)?.refreshContextFiles();
+  }
+
   async getUpdatedFiles(baseDir: string, taskId: string): Promise<UpdatedFile[]> {
     const task = this.projectManager.getProject(baseDir).getTask(taskId);
     if (!task) {
@@ -377,11 +407,46 @@ export class EventsHandler {
   }
 
   async runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]): Promise<ResponseCompletedData[]> {
+    await Promise.all([this.modelManager.waitForInit(), this.extensionManager.waitForInit()]);
     return this.projectManager.getProject(baseDir).getTask(taskId)?.runPrompt(prompt, mode, true, undefined, true, images) || [];
+  }
+
+  async waitForTaskIdle(baseDir: string, taskId: string): Promise<void> {
+    const project = this.projectManager.getProject(baseDir);
+    const task = project?.getTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found in project ${baseDir}`);
+    }
+    await task.waitForIdle();
+  }
+
+  async ensureProjectAndCreateTask(projectDir: string, params?: CreateTaskParams): Promise<{ taskId: string; projectDir: string }> {
+    await Promise.all([this.modelManager.waitForInit(), this.extensionManager.waitForInit()]);
+
+    const projects = this.store.getOpenProjects();
+    const baseDir = projectDir.endsWith('/') ? projectDir.slice(0, -1) : projectDir;
+
+    const existingProject = projects.find((p) => compareBaseDirs(p.baseDir, baseDir));
+    if (!existingProject) {
+      await this.addOpenProject(baseDir);
+    }
+
+    const taskParams: CreateTaskParams = {
+      ...params,
+      autonomyMode: params?.autonomyMode ?? AutonomyMode.Autonomous,
+    };
+
+    const task = await this.createNewTask(baseDir, taskParams);
+
+    return { taskId: task.id, projectDir: baseDir };
   }
 
   async savePrompt(baseDir: string, taskId: string, prompt: string): Promise<void> {
     return this.projectManager.getProject(baseDir).getTask(taskId)?.savePromptOnly(prompt);
+  }
+
+  async saveEditedPrompt(baseDir: string, taskId: string, messageId: string, prompt: string): Promise<void> {
+    return this.projectManager.getProject(baseDir).getTask(taskId)?.saveEditedPrompt(messageId, prompt);
   }
 
   async answerQuestion(baseDir: string, taskId: string, answer: string): Promise<void> {
@@ -551,13 +616,39 @@ export class EventsHandler {
     await task.mergeWorktreeToMain(squash, targetBranch, commitMessage);
   }
 
-  async mergeAndSwitchToLocal(baseDir: string, taskId: string, targetBranch?: string): Promise<void> {
+  async switchToLocalWorkingMode(
+    baseDir: string,
+    taskId: string,
+    options?: { mergeBeforeSwitch?: boolean; targetBranch?: string; switchAllInWorktree?: boolean },
+  ): Promise<void> {
     const task = this.projectManager.getProject(baseDir).getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
 
-    await task.mergeAndSwitchToLocal(targetBranch);
+    await task.switchToLocalWorkingMode(options);
+  }
+
+  async switchToWorktreeWorkingMode(
+    baseDir: string,
+    taskId: string,
+    options?: { carryOverUncommittedChanges?: boolean; dropSourceChanges?: boolean },
+  ): Promise<void> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+
+    await task.switchToWorktreeWorkingMode(options);
+  }
+
+  async getLocalUncommittedFiles(baseDir: string, taskId: string): Promise<{ count: number; files: string[] }> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+
+    return await task.getLocalUncommittedFiles();
   }
 
   async applyUncommittedChanges(baseDir: string, taskId: string, targetBranch?: string): Promise<void> {
@@ -589,11 +680,12 @@ export class EventsHandler {
 
   async readFile(baseDir: string, taskId: string, filePath: string): Promise<string> {
     const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    const absolutePath = path.isAbsolute(filePath)
-      ? filePath
+    const expandedPath = expandTilde(filePath);
+    const absolutePath = path.isAbsolute(expandedPath)
+      ? expandedPath
       : task
-        ? ((await task.resolveContextFilePath(filePath)) ?? path.join(baseDir, filePath))
-        : path.join(baseDir, filePath);
+        ? ((await task.resolveContextFilePath(expandedPath)) ?? path.join(baseDir, expandedPath))
+        : path.join(baseDir, expandedPath);
     const fileContentBuffer = await fs.readFile(absolutePath);
 
     if (isBinary(filePath, fileContentBuffer)) {
@@ -619,6 +711,15 @@ export class EventsHandler {
     }
 
     await task.commitChanges(message, amend);
+  }
+
+  cancelCommitChanges(baseDir: string, taskId: string): void {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+
+    task.cancelCommitChanges();
   }
 
   async listBranches(projectDir: string): Promise<Array<{ name: string; isCurrent: boolean; hasWorktree: boolean }>> {
@@ -768,6 +869,10 @@ export class EventsHandler {
 
   async getTasks(baseDir: string): Promise<TaskData[]> {
     return this.projectManager.getProject(baseDir).getTasks();
+  }
+
+  async reloadTasks(baseDir: string): Promise<TaskData[]> {
+    return this.projectManager.getProject(baseDir).reloadTasks();
   }
 
   async loadTask(baseDir: string, taskId: string): Promise<TaskStateData> {
@@ -1149,11 +1254,15 @@ export class EventsHandler {
     }));
   }
 
+  getExtensionToolsInfo(projectDir?: string): ExtensionToolInfo[] {
+    return this.extensionManager.getToolsInfo(projectDir);
+  }
+
   async getAvailableExtensions(repositories: string[], forceRefresh?: boolean, fetchOnly?: boolean) {
     return await this.extensionManager.getAvailableExtensions(repositories, forceRefresh, fetchOnly);
   }
 
-  async installExtension(extensionId: string, repositoryUrl: string, projectDir?: string) {
+  async installExtension(extensionId: string, repositoryUrl: string, projectDir?: string): Promise<ExtensionOperationResult> {
     let project: Project | undefined = undefined;
     if (projectDir) {
       project = this.projectManager.getProject(projectDir);
@@ -1169,7 +1278,19 @@ export class EventsHandler {
     return await this.extensionManager.uninstallExtension(extensionId, projectDir);
   }
 
-  async updateExtension(extensionId: string, repositoryUrl: string, projectDir?: string) {
+  async reloadExtension(filePath: string, projectDir?: string): Promise<boolean> {
+    let project: Project | undefined = undefined;
+    if (projectDir) {
+      project = this.projectManager.getProject(projectDir);
+      if (!project) {
+        throw new Error('Project not found');
+      }
+    }
+
+    return await this.extensionManager.reloadExtension(filePath, project);
+  }
+
+  async updateExtension(extensionId: string, repositoryUrl: string, projectDir?: string): Promise<ExtensionOperationResult> {
     let project: Project | undefined = undefined;
     if (projectDir) {
       project = this.projectManager.getProject(projectDir);
@@ -1186,14 +1307,23 @@ export class EventsHandler {
     const task = taskId && project ? (project.getTask(taskId) ?? undefined) : undefined;
     const components = this.extensionManager.getUIComponents(project, task);
     const filtered = placement ? components.filter((c) => c.component.placement === placement) : components;
+    const librariesByExtension = this.extensionManager.getUIComponentsLibraries(project);
+
     return filtered.map((c) => ({
       extensionId: c.extensionId,
       componentId: c.component.id,
+      name: c.component.name,
       placement: c.component.placement,
       jsx: c.component.jsx,
       loadData: c.component.loadData,
       noDataCache: c.component.noDataCache,
+      libraries: librariesByExtension.get(c.extensionId),
+      messageFilter: c.component.messageFilter,
     }));
+  }
+
+  async loadExtensionLibrary(librarySpec: string): Promise<string> {
+    return await this.extensionManager.loadExtensionLibrary(librarySpec);
   }
 
   async getUIExtensionData(extensionId: string, componentId: string, projectDir?: string, taskId?: string): Promise<unknown> {

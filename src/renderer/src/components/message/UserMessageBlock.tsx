@@ -1,10 +1,10 @@
-import { useState } from 'react';
 import { FaRegUser } from 'react-icons/fa';
 import { clsx } from 'clsx';
 import { AnimatePresence, motion } from 'framer-motion';
 import { UserMessage } from '@common/types';
 
 import { MessageBar } from './MessageBar';
+import { MessageImages } from './MessageImages';
 
 import { useParsedContent } from '@/hooks/useParsedContent';
 
@@ -19,57 +19,6 @@ type Props = {
   onEdit?: (content: string, images?: string[]) => void;
   onFork?: () => void;
   onRemoveUpTo?: () => void;
-};
-
-const MessageImages = ({ images }: { images: string[] }) => {
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
-
-  const handleImageClick = (index: number) => {
-    setExpandedIndex(index);
-  };
-
-  const handleExpandedClick = () => {
-    setExpandedIndex(null);
-  };
-
-  return (
-    <>
-      <div className="flex flex-wrap gap-2 mt-2">
-        {images.map((src, index) => (
-          <img
-            key={index}
-            src={src}
-            alt={`Pasted image ${index + 1}`}
-            className="max-h-40 max-w-[200px] rounded-md border border-border-dark-light cursor-pointer hover:opacity-80 transition-opacity object-contain"
-            onClick={() => handleImageClick(index)}
-          />
-        ))}
-      </div>
-      <AnimatePresence>
-        {expandedIndex !== null && (
-          <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 cursor-pointer"
-            onClick={handleExpandedClick}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-          >
-            <motion.img
-              src={images[expandedIndex]}
-              alt={`Expanded image ${expandedIndex + 1}`}
-              className="max-h-[90vh] max-w-[90vw] rounded-lg shadow-2xl object-contain"
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              onClick={(e) => e.stopPropagation()}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </>
-  );
 };
 
 export const UserMessageBlock = ({ baseDir, message, allFiles, renderMarkdown, compact = false, onRemove, onRedo, onEdit, onFork, onRemoveUpTo }: Props) => {

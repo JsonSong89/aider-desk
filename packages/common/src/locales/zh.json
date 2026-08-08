@@ -1,7 +1,9 @@
 {
   "languages": {
     "en": "English",
-    "zh": "中文"
+    "zh": "中文",
+    "ru": "俄语",
+    "ko": "한국어"
   },
   "common": {
     "settings": "设置",
@@ -153,6 +155,7 @@
   },
   "home": {
     "title": "首页",
+    "loadingProjects": "正在加载项目...",
     "noProjectsOpen": "没有打开的项目",
     "openProject": "打开项目",
     "addFile": "添加文件",
@@ -255,14 +258,6 @@
       "invalidTemperature": "温度必须在 0 到 2 之间",
       "duplicateId": "提供商 ID 已存在"
     },
-    "claudeAgentSdkAuthRequired": "此提供商需要安装和认证 Claude Code CLI。请从 https://claude.com/product/claude-code 安装并运行 `claude login` 进行认证。",
-    "claudeAgentSdkAgentOnly": "此提供商仅在代理模式下工作，不支持代码/询问/架构/上下文模式。",
-    "auggieAuthRequired": "此提供商需要安装和认证 Auggie CLI。请从 https://www.npmjs.com/package/@augmentcode/auggie-sdk 安装并运行 `auggie login` 进行认证。",
-    "auggieAgentOnly": "此提供商仅在代理模式下工作，不支持代码/询问/架构/上下文模式。",
-    "geminiCliAuthRequired": "此提供商需要安装和认证 Gemini CLI。请从 https://geminicli.com 安装并运行 `gemini` 进行认证。",
-    "geminiCliAgentOnly": "此提供商仅在代理模式下工作，不支持代码/询问/架构/上下文模式。",
-    "projectId": "项目 ID",
-    "projectIdPlaceholder": "可选。组织和企业账户需要此项。",
     "overrides": {
       "title": "提供商覆盖",
       "resetToDefaults": "清除覆盖",
@@ -270,8 +265,13 @@
     },
     "disableStreaming": "禁用流式传输",
     "disableStreamingInfo": "禁用响应流式传输。当提供商或模型不支持流式传输时使用此选项。",
+    "disableToolCallStreaming": "禁用工具调用流式传输",
+    "disableToolCallStreamingInfo": "禁用工具调用输入的流式传输。工具调用仍将执行，但其参数不会逐步显示。",
     "trackTokenUsage": "跟踪 Token 使用量",
     "trackTokenUsageInfo": "在流式响应中包含 Token 使用量信息。如果提供商不支持流式块中的 usage 字段，请禁用此选项。",
+    "extraBody": "额外请求体参数",
+    "extraBodyInfo": "JSON 对象，其中的自定义字段将被合并到发送给提供商的请求体中。内置字段优先于此处的值。",
+    "extraBodyErrorInvalid": "无效的 JSON。请输入有效的 JSON 对象。",
     "disable": "禁用",
     "enable": "启用",
     "providerDisabled": "此提供商已被禁用。其模型将不可用。"
@@ -324,17 +324,13 @@
       "configured": "已配置"
     },
     "thinkingEnabled": "启用思考",
-    "thinkingEnabledTooltip": "启用时，模型将使用思考模式进行更深入的推理（默认）。对于简单任务，可以禁用以获得更快的响应速度。"
+    "thinkingEnabledTooltip": "启用时，模型将使用思考模式进行更深入的推理（默认）。对于简单任务，可以禁用以获得更快的响应速度。",
+    "reasoningEffortTooltip": "控制启用思考时模型的推理力度。更高的力度意味着更深入的推理，但响应速度会更慢。仅 GLM-5.2 支持。"
   },
   "anthropic": {
     "apiKey": "API 密钥",
     "baseUrl": "基础 URL",
     "baseUrlPlaceholder": "例如 https://api.anthropic.com"
-  },
-  "auggie": {
-    "apiKey": "API 令牌",
-    "apiUrl": "API URL",
-    "apiUrlPlaceholder": "https://api.augmentcode.com"
   },
   "minimax": {
     "apiKey": "API 密钥"
@@ -387,6 +383,9 @@
   "cerebras": {
     "apiKey": "API 密钥"
   },
+  "neuralwatt": {
+    "apiKey": "API 密钥"
+  },
   "openRouter": {
     "apiKey": "API 密钥",
     "modelPlaceholder": "例如 anthropic/claude-3.7-sonnet"
@@ -404,17 +403,17 @@
     "apiVersion": "API 版本",
     "addCustomModelInfo": "Azure 提供商的模型无法自动加载，您需要手动使用“+ 添加模型”添加它们，并确保模型名称与部署名称匹配。"
   },
+  "clinepass": {
+    "apiKey": "API 密钥"
+  },
   "providers": {
     "anthropic": "Anthropic",
     "anthropic-compatible": "Anthropic 兼容",
-    "auggie": "Augie SDK",
     "alibaba-plan": "阿里云编码计划",
     "bedrock": "Bedrock",
     "cerebras": "Cerebras",
-    "claude-agent-sdk": "Claude Agent SDK",
     "deepseek": "Deepseek",
     "gemini": "Gemini",
-    "gemini-cli": "Gemini CLI",
     "groq": "Groq",
     "kimi-plan": "Kimi Coding Plan",
     "gpustack": "GPUStack",
@@ -422,12 +421,14 @@
     "litellm": "LiteLLM",
     "minimax": "Minimax",
     "mistral": "Mistral",
+    "neuralwatt": "Neuralwatt",
     "ollama": "Ollama",
     "openai": "OpenAI",
     "opencode": "OpenCode ZEN",
     "openai-compatible": "OpenAI Compatible",
     "openrouter": "OpenRouter",
     "requesty": "Requesty",
+    "clinepass": "ClinePass",
     "synthetic": "Synthetic",
     "vertex-ai": "Vertex AI",
     "zai-plan": "Z.ai Coding Plan",
@@ -488,29 +489,36 @@
       "disabled": "已禁用",
       "projectSpecific": "项目",
       "hasDependencies": "有依赖",
+      "osNotSupported": "不支持",
+      "osNotSupportedTooltip": "此扩展可能无法在您的操作系统上运行。请查看扩展详情获取更多信息。",
       "install": "安装",
       "installing": "安装中...",
       "update": "更新",
       "updating": "更新中...",
       "uninstall": "卸载",
       "uninstalling": "卸载中...",
+      "reload": "重新加载",
+      "reloading": "重新加载中...",
       "success": {
         "install": "成功安装 {{name}}",
         "update": "成功更新 {{name}}",
         "uninstall": "成功卸载 {{name}}",
+        "reload": "成功重新加载 {{name}}",
         "saveSettings": "成功保存 {{name}} 的设置"
       },
       "errors": {
         "loadInstalled": "加载已安装扩展失败",
         "loadAvailable": "加载可用扩展失败",
         "loadSettings": "加载扩展设置组件失败",
-        "install": "安装扩展失败",
-        "update": "更新扩展失败",
+        "install": "安装扩展失败。请查看日志了解详情。",
+        "update": "更新扩展失败。请查看日志了解详情。",
         "uninstall": "卸载扩展失败",
+        "reload": "重新加载扩展失败",
         "saveSettings": "保存扩展设置失败",
         "settingsNotAvailable": "扩展设置不可用",
         "repositoryExists": "此仓库已添加",
-        "cannotRemoveDefault": "无法移除默认仓库"
+        "cannotRemoveDefault": "无法移除默认仓库",
+        "npmNotFound": "您的系统未安装 npm。此扩展需要 npm 来安装依赖项。请安装 Node.js（包含 npm）后重试。"
       },
       "previousContext": "上一个上下文",
       "nextContext": "下一个上下文",
@@ -640,6 +648,23 @@
     "windowTitleTemplateLabel": "窗口标题模板",
     "windowTitleTemplateTooltip": "使用 {project} 表示项目名称，{task} 表示当前任务名称。例如：'AiderDesk - {project}' 或 '{project} - {task}'",
     "agent": {
+      "tabs": {
+        "general": "常规",
+        "prompts": "提示词",
+        "tools": "工具",
+        "subagents": "子代理"
+      },
+      "systemPrompt": "系统提示词",
+      "systemPromptTooltip": "设置后，当此配置作为主代理运行时，将替换默认内置系统提示词。作为子代理使用时，如果未设置子代理专用系统提示词，将以此作为回退。留空则使用内置系统提示词。",
+      "systemPromptPlaceholder": "此代理的自定义系统提示词。留空则使用默认内置系统提示词。",
+      "systemPromptInfo": "覆盖代理的默认系统提示词。如需在默认系统提示词后追加指令，请使用下方的规则。",
+      "systemPromptPlaceholders": {
+        "projectDir": "项目根目录的绝对路径",
+        "taskDir": "此任务的工作目录（项目根目录，或使用工作树时的工作树路径）",
+        "currentDate": "当前日期字符串",
+        "osName": "主机操作系统名称",
+        "projectGitRootDirectory": "任务使用工作树时的项目 Git 根目录；否则为空"
+      },
       "mcpServers": "MCP 服务器",
       "provider": "提供商",
       "providerSettings": "提供商设置",
@@ -647,6 +672,7 @@
       "addRuleFiles": "将项目中的 `.aider-desk/rules` 目录下的规则文件添加为只读文件。",
       "runSettings": "运行参数",
       "maxIterations": "最大迭代次数",
+      "infinite": "无限",
       "minTimeBetweenToolCalls": "工具调用最小间隔时间(毫秒)",
       "maxTokens": "最大令牌数",
       "temperature": "温度",
@@ -673,7 +699,7 @@
       "includeFilesTooltip": "将上下文文件内容添加到代理的聊天中。这将增加令牌使用量。",
       "includeRepoMap": "包含仓库地图",
       "includeRepoMapTooltip": "在代理的上下文中包含仓库地图。这有助于代理理解项目结构，但可能会增加token使用量。",
-      "autoApprove": "自动批准",
+      "autonomyMode": "自主模式",
       "override": "覆盖",
       "clearOverride": "清除覆盖",
       "autoCompactThresholdPercentage": "自动压缩阈值 %",
@@ -703,6 +729,11 @@
         "enableAsSubagentInformation": "启用后，此配置可被其他代理用作子代理。",
         "canUseSubagents": "可以使用子代理",
         "canUseSubagentsInformation": "启用后，此代理可以使用其他代理作为子代理。",
+        "usingSubagents": "使用子代理",
+        "actingAsSubagent": "作为子代理",
+        "allowAllSubagents": "允许所有子代理",
+        "allowAllSubagentsInformation": "启用后，此代理可以使用任何已启用子代理功能的配置。禁用以选择此代理允许使用的特定子代理。",
+        "noSubagentsAvailable": "没有可用的子代理配置。在其他配置上启用「启用为子代理」以使其在此处可用。",
         "contextMemory": "上下文记忆",
         "contextMemoryTooltip": "控制子代理记住多少之前的对话上下文。'完整上下文' 保持所有历史记录，'最后消息' 仅使用最近的互动，'关闭' 每次重新开始。",
         "contextMemory.off": "关闭",
@@ -711,7 +742,7 @@
         "description": "描述",
         "descriptionPlaceholder": "描述此子代理的目的、能力和专长...",
         "systemPrompt": "系统提示",
-        "systemPromptPlaceholder": "输入此配置用作子代理时的自定义系统提示指令...",
+        "systemPromptPlaceholder": "此子代理的系统提示词。可以包含多个段落，应定义子代理的角色、能力和处理方式。如果留空，将使用代理的主系统提示词；如果主系统提示词也为空，则使用默认内置系统提示词。",
         "invocationMode": "调用方式",
         "invocationModeOnDemand": "按需",
         "invocationModeOnDemandInformation": "子代理仅在父代理明确请求时才使用。",
@@ -722,7 +753,9 @@
         "statusAutomatic": "自动",
         "descriptionRequiredForAutomatic": "需要设置描述才能自动使用此子代理，否则只能在用户明确请求时使用该子代理。",
         "on-demand": "仅在明确请求时按需使用",
-        "automatic": "在适当时自动使用"
+        "automatic": "在适当时自动使用",
+        "automaticSubagent": "自动子代理",
+        "onDemandSubagent": "按需子代理"
       },
       "skills": {
         "activating": "正在激活 {{name}} 技能...",
@@ -844,8 +877,8 @@
       "viewMode": "消息视图模式",
       "viewModeFull": "完整",
       "viewModeCompact": "紧凑",
-      "virtualizedRendering": "使用虚拟化渲染（实验性）",
-      "virtualizedRenderingTooltip": "实验性功能，当您在对话历史中有大量消息时可以通过仅渲染可见消息来提高性能。"
+      "fullMessageRendering": "使用完整消息渲染（旧版）",
+      "fullMessageRenderingTooltip": "在 DOM 中渲染所有消息而不使用虚拟化。在对话历史较多时可能影响性能。"
     },
     "memory": {
       "configuration": "配置",
@@ -885,6 +918,16 @@
         "projectId": "projectId",
         "id": "id"
       }
+    },
+    "fileWatchMode": {
+      "label": "文件监视模式",
+      "tooltip": "控制如何检测文件更改。自动：在 Docker 和网络驱动器上使用轮询，其他情况使用原生。原生：使用操作系统文件系统事件（更快）。轮询：使用定期扫描（在某些环境中更可靠）。",
+      "auto": "自动",
+      "native": "原生",
+      "polling": "轮询"
+    },
+    "notificationsAndFiles": {
+      "title": "通知与文件"
     }
   },
   "messages": {
@@ -899,14 +942,13 @@
     "redo": "重做",
     "edit": "编辑",
     "forkFromHere": "从这里创建子任务",
-    "editingLastMessage": "正在编辑最后一条消息",
+    "editingLastMessage": "正在编辑消息",
     "cancelEdit": "取消编辑",
     "group": "分组",
     "scrollToBottom": "滚动到底部",
     "previousUserMessage": "上一条用户消息",
     "nextUserMessage": "下一条用户消息",
     "messageBar": "消息栏",
-    "exportNotAvailableWithVirtualized": "使用虚拟化消息渲染时无法导出为图片。请在 设置 -> 常规 -> 消息显示 中更改为标准渲染。",
     "execute": "执行",
     "resume": "继续",
     "taskReadyForReview": "任务准备就绪，待审查",
@@ -930,7 +972,16 @@
     "frozenMessage": "Aider进程似乎已冻结。您想重启任务吗?",
     "removeMessageFailed": "删除消息失败 - 请重试",
     "forkTaskFailed": "从消息分叉任务失败 - 请重试",
-    "removeMessagesUpToFailed": "删除到此为止的消息失败 - 请重试"
+    "removeMessagesUpToFailed": "删除到此为止的消息失败 - 请重试",
+    "appCrash": {
+      "title": "出错了",
+      "message": "发生了意外错误，应用程序无法继续运行。",
+      "reportIssue": "如果可以，请在 <a>https://github.com/hotovo/aider-desk/issues</a> 上报告此问题。谢谢。",
+      "reload": "重新加载",
+      "details": "错误详情",
+      "copy": "复制",
+      "copied": "已复制！"
+    }
   },
   "dialogs": {
     "confirm": "确认",
@@ -987,7 +1038,7 @@
     "errorLoading": "加载文件失败"
   },
   "contextFiles": {
-"workspaceTitle": "工作区",
+    "workspaceTitle": "工作区",
     "title": "上下文文件",
     "updatedFiles": "已更新文件",
     "uncommittedChanges": "未提交的更改",
@@ -1051,6 +1102,8 @@
     "commit": "提交",
     "generatingMessage": "生成中...",
     "committing": "提交中...",
+    "cancelCommit": "取消提交",
+    "commitSuccess": "提交成功",
     "commitError": "提交错误",
     "groupByCommit": "按提交分组",
     "flatView": "平铺视图（与基线的差异）",
@@ -1174,6 +1227,7 @@
     "contextCompactingThreshold": "自动压缩上下文阈值",
     "contextCompactingThresholdOff": "关闭",
     "contextCompactingThresholdTooltip": "当令牌使用量超过此阈值时，对话将自动压缩以节省空间。",
+    "contextWindowNotSet": "未设置此模型的上下文窗口，因此自动压缩将无法工作。您可以在模型库中手动设置上下文窗口值。",
     "thresholdTokens": "阈值令牌数"
   },
   "commandOutput": {
@@ -1188,6 +1242,9 @@
     "cacheWriteTokens": "缓存写入令牌",
     "cacheReadTokens": "缓存读取令牌"
   },
+  "compaction": {
+    "fileEdited": "文件已编辑（上下文已压缩）"
+  },
   "thinkingAnswer": {
     "thinking": "思考中",
     "answer": "回答"
@@ -1196,10 +1253,13 @@
     "toolLabel": "工具: {{server}}/{{tool}}",
     "arguments": "参数:",
     "executing": "执行工具...",
+    "preparing": "准备工具...",
     "result": "结果:",
     "error": "执行工具时出错:",
     "denied": "拒绝访问",
     "deniedByReason": "用户拒绝: {{reason}}",
+    "images_one": "1 张图片",
+    "images_other": "{{count}} 张图片",
     "tasks": {
       "listTasks": "列出任务",
       "listTasksWithState": "列出状态为 {{state}} 的任务",
@@ -1207,6 +1267,7 @@
       "getTaskMessage": "获取任务消息",
       "createTask": "创建任务",
       "deleteTask": "删除任务",
+      "runPrompt": "在任务上运行提示",
       "searchTask": "搜索任务:",
       "inTask": "在",
       "searchTaskNoMatches": "未找到匹配项。",
@@ -1218,7 +1279,7 @@
       "execute": "执行",
       "executeInBackground": "在后台执行",
       "mode": "模式",
-      "autoApprove": "自动批准",
+      "autonomyMode": "自主模式",
       "worktree": "工作树",
       "executeAndWait": "执行并等待",
       "yes": "是",
@@ -1229,6 +1290,7 @@
       "agentProfile": "代理配置",
       "model": "模型",
       "state": "状态",
+      "result": "结果",
       "contextFiles": "上下文文件",
       "contextMessages": "上下文消息",
       "currentMode": "当前模式",
@@ -1287,7 +1349,6 @@
         "title": "在",
         "findingMatches": "正在查找...",
         "in": "中",
-
         "foundMatches": "找到 {{count}} 个匹配项",
         "noMatches": "未找到匹配项",
         "contextLines": "({{count}} 行上下文)",
@@ -1301,7 +1362,8 @@
         "stdout": "标准输出",
         "stderr": "标准错误",
         "commandFailed": "命令失败",
-        "timeout": "超时"
+        "timeout": "超时",
+        "workingDir": "工作目录"
       },
       "semanticSearch": {
         "title": "语义搜索:",
@@ -1351,7 +1413,9 @@
     "subagents": {
       "groupRunning": "{{name}}: 子代理正在工作...",
       "groupCompleted": "{{name}}: 子代理已完成任务。",
+      "groupCompletedWithDescription": "{{name}}: 子代理已完成 {{description}}",
       "groupCancelled": "{{name}}: 子代理运行已被用户取消。",
+      "groupCancelledWithDescription": "{{name}}: 子代理运行 ({{description}}) 已被用户取消",
       "running": "正在运行子代理...",
       "completed": "子代理执行了以下查询:",
       "prompt": "提示",
@@ -1381,9 +1445,13 @@
     "savePrompt": "保存提示",
     "savePromptDescription": "保存提示而不执行",
     "saveError": "保存提示失败: {{error}}",
-    "autoApprove": "自动批准",
-    "autoApproveTooltip": "启用后，自动批准工具执行而无需请求确认",
-    "autoApproveLockTooltip": "锁定后，新建任务将保持自动批准开启",
+    "autonomyManual": "手动",
+    "autonomyManualTooltip": "手动模式：每次工具执行和计划都需要您的明确批准才能继续。适用于不熟悉的代码库或高风险操作。",
+    "autonomyGuided": "引导",
+    "autonomyGuidedTooltip": "引导模式：代理在行动前制定计划，并等待您的批准后再执行更改。工具执行自动批准。适用于日常开发。",
+    "autonomyAutonomous": "自动",
+    "autonomyAutonomousTooltip": "自主模式：代理不间断地规划和执行，直到任务完成。适用于您想离开的受信任任务。",
+    "autonomyLockTooltip": "锁定后，新建任务将保持当前自主模式",
     "placeholders": {
       "0": "更新 UserValidator 类以添加邮箱格式验证...",
       "1": "修复 DataProcessor.processBatch() 中的内存泄漏，通过关闭...",
@@ -1436,6 +1504,7 @@
     "profileSettings": "代理配置: {{profileName}}",
     "newProfileName": "新配置",
     "manageProfiles": "管理配置",
+    "editProfile": "编辑配置",
     "createNew": "创建新配置",
     "profileName": "名称",
     "profileDescription": "描述",
@@ -1443,7 +1512,7 @@
     "tools": "工具",
     "model": "模型",
     "selectProfile": "选择...",
-    "saveAsProjectDefault": "保存为项目默认"
+    "useAsProjectDefault": "设为项目默认"
   },
   "projectBar": {
     "editFormatTooltip": "这是用于编辑代码的格式。更改它可能会导致模型表现不如预期。",
@@ -1467,9 +1536,25 @@
     "worktree": "工作树",
     "switching": "切换中...",
     "confirmLocalTitle": "切换到本地模式",
-    "confirmLocalMessage": "此工作树有未保存的工作：\n{{warnings}}\n\n您可以在切换前将更改合并到主分支，或删除工作树并丢失这些工作。",
-    "confirmLocalAction": "删除并切换",
-    "mergeAndSwitchAction": "合并并切换"
+    "confirmLocalMessage": "此工作树有未保存的工作：\n{{warnings}}",
+    "localOptionMergeLabel": "先合并更改，然后切换",
+    "localOptionMergeDescription": "在切换此任务到本地模式之前，将工作树提交合并回主分支",
+    "localOptionMergeAllLabel": "合并并切换工作树中的所有任务",
+    "localOptionMergeAllDescription": "将工作树提交合并回主分支，然后将共享此工作树的所有任务切换到本地模式",
+    "localOptionRemoveLabel": "删除工作树并切换",
+    "localOptionRemoveDescription": "丢弃未提交和未合并的更改，删除工作树，并切换到本地模式",
+    "confirmWorktreeTitle": "切换到工作树模式",
+    "confirmWorktreeMessage": "项目目录中有 {{count}} 个未提交的文件。",
+    "worktreeOptionJustSwitchLabel": "直接切换，不携带更改",
+    "worktreeOptionJustSwitchDescription": "将未提交的更改留在项目目录中，切换到工作树模式",
+    "worktreeOptionCarryOverRemoveLabel": "携带更改并从项目中移除",
+    "worktreeOptionCarryOverRemoveDescription": "将未提交的更改移至工作树，并从项目目录中移除",
+    "worktreeOptionCarryOverKeepLabel": "携带更改并保留在项目中",
+    "worktreeOptionCarryOverKeepDescription": "将未提交的更改复制到工作树，同时保留在项目目录中",
+    "switchToLocal": "切换到本地",
+    "switchToWorktree": "切换到工作树",
+    "switchToLocalTooltip": "当前在 git 工作树中工作。切换以在此任务中直接在本地项目目录中进行更改。",
+    "switchToWorktreeTooltip": "当前在本地项目目录中工作。切换以使用 git 工作树为此任务进行隔离的更改。"
   },
   "workingModeTooltip": {
     "local": "在此任务中直接在本地项目目录中进行更改",
@@ -1517,7 +1602,9 @@
     "undo": "撤消 Aider 完成的最后一次 git 提交",
     "task-info": "显示任务信息",
     "web": "抓取网页内容并保存到文件。使用 /web url [文件] 格式，其中 [文件] 为可选参数",
-    "handoff": "交接对话到新任务并聚焦"
+    "handoff": "交接对话到新任务并聚焦",
+    "subtask": "创建当前任务的子任务并切换到该子任务",
+    "subagent": "在指定子代理中运行提示。使用 /subagent <子代理ID> <提示>"
   },
   "telemetry": {
     "title": "遥测信息",
@@ -1543,7 +1630,10 @@
     "enableProxyDescription": "通过代理服务器路由所有 HTTP/HTTPS 流量。影响 LLM API 调用、扩展获取、更新检查和所有其他出站请求。",
     "proxyUrl": "代理 URL",
     "proxyUrlPlaceholder": "http://127.0.0.1:8888",
-    "proxyUrlDescription": "HTTP 或 SOCKS5 代理服务器地址"
+    "proxyUrlDescription": "HTTP 或 SOCKS5 代理服务器地址",
+    "noProxy": "不使用代理",
+    "noProxyPlaceholder": "localhost,127.0.0.1,.internal.example.com",
+    "noProxyDescription": "逗号分隔的应绕过代理的主机或域名列表。支持精确主机名、IP 地址和通配符域名（例如 .example.com）"
   },
   "server": {
     "description": "启用 服务器，允许您通过浏览器在端口 24337 访问 AiderDesk",
@@ -1551,6 +1641,10 @@
     "running": "运行中",
     "enableBasicAuth": "启用基本身份验证",
     "enableBasicAuthDescription": "需要用户名和密码用于浏览器访问和 API 调用",
+    "enableReadonly": "只读模式",
+    "enableReadonlyDescription": "限制浏览器客户端只能查看任务和对话的只读视图。Electron 桌面应用保留完全访问权限。需要重启服务器才能生效。",
+    "enableReadonlyExtensionUi": "启用扩展 UI 组件",
+    "enableReadonlyExtensionUiDescription": "在只读视图中渲染扩展 UI 组件。刷新浏览器后生效。",
     "username": "用户名",
     "password": "密码",
     "controlServer": "REST API 服务器",
@@ -1613,7 +1707,13 @@
       "tokens": "令牌",
       "cost": "成本",
       "share": "份额",
-      "moreItems": "+{{count}} 更多"
+      "moreItems": "+{{count}} 更多",
+      "cacheHitRateTrend": "缓存命中率趋势",
+      "cacheHitRate": "缓存命中率",
+      "cacheSavingsTrend": "缓存成本与节省",
+      "cacheSavings": "缓存节省",
+      "totalPaid": "已支付: {{amount}}",
+      "totalSaved": "总节省: {{amount}}"
     },
     "error": {
       "fetch": "获取使用数据失败。"
@@ -1626,6 +1726,7 @@
       "output": "输出",
       "cacheRead": "缓存读取",
       "cacheWrite": "缓存写入",
+      "cacheHitRate": "缓存命中率",
       "totalTokens": "总令牌数",
       "cost": "成本"
     }
@@ -1641,7 +1742,8 @@
     "close": "关闭",
     "closeOtherTabs": "关闭其他标签页",
     "closeAllTabs": "关闭所有标签页",
-    "openInNewWindow": "在新窗口中打开"
+    "openInNewWindow": "在新窗口中打开",
+    "copyLink": "复制链接地址"
   },
   "menu": {
     "file": {
@@ -1657,6 +1759,7 @@
     "rename": "重命名",
     "pinTask": "固定任务",
     "unpinTask": "取消固定任务",
+    "moveToTop": "移至顶部",
     "taskNamePlaceholder": "输入任务名称...",
     "untitled": "[未命名]",
     "exportAsMarkdown": "导出为 Markdown",
@@ -1688,6 +1791,8 @@
     "generatingName": "正在生成名称...",
     "changeState": "更改状态",
     "createSubtask": "创建子任务",
+    "dropToRoot": "拖放到此处以移动到顶级",
+    "dropToSubtask": "设为子任务",
     "deleteConfirmWithSubtasks": "此任务有 {{count}} 个子任务。仍然要删除吗？"
   },
   "taskInfo": {
@@ -1726,6 +1831,7 @@
     "squash": "压缩合并",
     "onlyUncommitted": "仅未提交的更改",
     "rebaseFromBranch": "从分支变基...",
+    "rebase": "变基",
     "abortRebase": "中止变基",
     "continueRebase": "继续变基",
     "rebaseConflictsDescription": "在以下文件中检测到变基冲突。请手动解决后继续，或使用 AI 代理协助。",
@@ -1797,7 +1903,8 @@
     "selectMode": "选择"
   },
   "aiderConnector": {
-    "starting": "Aider 连接器正在启动..."
+    "starting": "Aider 连接器正在启动...",
+    "restart": "重启 Aider 连接器"
   },
   "showModelSelector": "更换模型",
   "hideModelSelector": "隐藏模型选择器",
@@ -1818,5 +1925,20 @@
       "confirm": "清除",
       "cancel": "取消"
     }
+  },
+  "readonly": {
+    "noTasks": "没有任务",
+    "unnamedTask": "未命名任务",
+    "archived": "已归档",
+    "loading": "正在加载只读项目…",
+    "selectTask": "选择任务以查看其完整记录。",
+    "noProjects": "未配置项目。",
+    "label": "只读",
+    "searchTasks": "搜索任务",
+    "allStates": "所有状态",
+    "bootstrapError": "无法加载浏览器应用程序。",
+    "projectError": "无法加载此项目。",
+    "projects": "项目",
+    "openTasks": "打开任务"
   }
 }

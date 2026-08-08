@@ -4,7 +4,7 @@ import path from 'path';
 import Handlebars from 'handlebars';
 import { FSWatcher, watch } from 'chokidar';
 import debounce from 'lodash/debounce';
-import { AgentProfile, ConflictResolutionFileContext, SettingsData, ToolApprovalState } from '@common/types';
+import { AgentProfile, AutonomyMode, DEFAULT_AUTONOMY_MODE, ConflictResolutionFileContext, SettingsData, ToolApprovalState } from '@common/types';
 import {
   AIDER_TOOL_ADD_CONTEXT_FILES,
   AIDER_TOOL_DROP_CONTEXT_FILES,
@@ -54,10 +54,12 @@ import {
 } from './types';
 
 import type { ExtensionManager } from '@/extensions/extension-manager';
+import type { Store } from '@/store';
 
-import { AIDER_DESK_DEFAULT_PROMPTS_DIR, AIDER_DESK_GLOBAL_PROMPTS_DIR, AIDER_DESK_PROMPTS_DIR } from '@/constants';
+import { AIDER_DESK_BUILTIN_PROMPTS_DIR, AIDER_DESK_GLOBAL_PROMPTS_DIR, AIDER_DESK_PROMPTS_DIR } from '@/constants';
 import logger from '@/logger';
 import { Task } from '@/task';
+import { shouldUsePolling } from '@/utils/file-watch';
 
 export class PromptsManager {
   private globalTemplates = new Map<string, HandlebarsTemplateDelegate>();
@@ -66,7 +68,8 @@ export class PromptsManager {
 
   constructor(
     private readonly extensionManager: ExtensionManager,
-    private readonly defaultTemplatesDir = AIDER_DESK_DEFAULT_PROMPTS_DIR,
+    private readonly store: Store,
+    private readonly builtinTemplatesDir = AIDER_DESK_BUILTIN_PROMPTS_DIR,
     private readonly globalPromptsDir = AIDER_DESK_GLOBAL_PROMPTS_DIR,
   ) {
     registerAllHelpers();
@@ -145,8 +148,8 @@ export class PromptsManager {
 
     // Fall back to default templates from resources
     try {
-      const defaultPath = path.join(this.defaultTemplatesDir, fileName);
-      return await fs.readFile(defaultPath, 'utf8');
+      const builtinPath = path.join(this.builtinTemplatesDir, fileName);
+      return await fs.readFile(builtinPath, 'utf8');
     } catch (error) {
       logger.error(`Failed to load default template ${name}: ${error}`);
       return null;
@@ -179,7 +182,7 @@ export class PromptsManager {
 
     const watcher = watch(this.globalPromptsDir, {
       persistent: true,
-      usePolling: true,
+      usePolling: shouldUsePolling(this.globalPromptsDir, this.store.getSettings().fileWatchMode),
       ignoreInitial: true,
     });
 
@@ -215,7 +218,7 @@ export class PromptsManager {
 
     const watcher = watch(projectPromptsDir, {
       persistent: true,
-      usePolling: true,
+      usePolling: shouldUsePolling(projectPromptsDir, this.store.getSettings().fileWatchMode),
       ignoreInitial: true,
     });
 
@@ -254,6 +257,23 @@ export class PromptsManager {
     logger.info('PromptsManager disposed');
   }
 
+  async settingsChanged(oldSettings: SettingsData, newSettings: SettingsData): Promise<void> {
+    if (oldSettings.fileWatchMode === newSettings.fileWatchMode) {
+      return;
+    }
+
+    const watchedProjects = Array.from(this.watchers.keys()).filter((k) => k !== 'global');
+    for (const watcher of this.watchers.values()) {
+      await watcher.close();
+    }
+    this.watchers.clear();
+
+    await this.setupGlobalWatcher();
+    for (const projectDir of watchedProjects) {
+      await this.watchProject(projectDir);
+    }
+  }
+
   private async render(name: PromptTemplateName, data: unknown, projectDir: string, task?: Task): Promise<string> {
     const projectTemplates = this.projectTemplatesCache.get(projectDir);
     const projectTemplate = projectTemplates?.get(name);
@@ -285,7 +305,7 @@ export class PromptsManager {
     return prompt;
   }
 
-  private calculateToolPermissions = (settings: SettingsData, agentProfile: AgentProfile, autoApprove: boolean): ToolPermissions => {
+  private calculateToolPermissions = (settings: SettingsData, agentProfile: AgentProfile, autonomyMode: AutonomyMode): ToolPermissions => {
     const { usePowerTools = false, useMemoryTools = false, useSkillsTools = false } = agentProfile;
     const memoryEnabled = settings.memory.enabled && useMemoryTools;
 
@@ -315,7 +335,7 @@ export class PromptsManager {
       skills: {
         allowed: useSkillsTools && isAllowed(`${SKILLS_TOOL_GROUP_NAME}${TOOL_GROUP_NAME_SEPARATOR}${SKILLS_TOOL_ACTIVATE_SKILL}`),
       },
-      autoApprove,
+      autonomyMode,
     };
   };
 
@@ -323,14 +343,28 @@ export class PromptsManager {
     settings: SettingsData,
     task: Task,
     agentProfile: AgentProfile,
-    autoApprove = task.task.autoApprove ?? false,
+    autonomyMode?: AutonomyMode,
     additionalInstructions?: string,
   ) => {
-    const toolPermissions = this.calculateToolPermissions(settings, agentProfile, autoApprove);
+    const effectiveAutonomyMode = autonomyMode ?? task.task.autonomyMode ?? DEFAULT_AUTONOMY_MODE;
+    const toolPermissions = this.calculateToolPermissions(settings, agentProfile, effectiveAutonomyMode);
     toolPermissions.powerTools.anyEnabled = Object.values(toolPermissions.powerTools).some((v) => v);
 
     const rulesFiles = await this.getRulesContent(task, agentProfile);
     const customInstructions = [agentProfile.customInstructions, additionalInstructions].filter(Boolean).join('\n\n').trim();
+
+    const customSystemPrompt = agentProfile.systemPrompt?.trim();
+    if (customSystemPrompt) {
+      const compiledSystemPrompt = await this.compileCustomSystemPrompt(task, customSystemPrompt);
+      const parts = [compiledSystemPrompt];
+      if (rulesFiles) {
+        parts.push(`<Rules>\n${rulesFiles}\n</Rules>`);
+      }
+      if (customInstructions) {
+        parts.push(customInstructions);
+      }
+      return parts.join('\n\n');
+    }
 
     const osName = (await import('os-name')).default();
     const currentDate = new Date().toDateString();
@@ -380,6 +414,30 @@ export class PromptsManager {
     data.workflow = await this.render('workflow', data, projectDir, task);
 
     return await this.render('system-prompt', data, projectDir, task);
+  };
+
+  public compileCustomSystemPrompt = async (task: Task, template: string): Promise<string> => {
+    const trimmed = template.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    try {
+      const osName = (await import('os-name')).default();
+      const projectDir = task.getProjectDir();
+      const taskDir = task.getTaskDir();
+      const compiled = Handlebars.compile(trimmed, { noEscape: true });
+      return compiled({
+        projectDir,
+        taskDir,
+        currentDate: new Date().toDateString(),
+        osName,
+        projectGitRootDirectory: taskDir !== projectDir ? projectDir : '',
+      });
+    } catch (error) {
+      logger.warn(`Failed to compile custom system prompt placeholders: ${error}`);
+      return trimmed;
+    }
   };
 
   private getRulesContent = async (task: Task, agentProfile?: AgentProfile) => {

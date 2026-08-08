@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   AgentProfile,
+  AutonomyMode,
   CommandArgument,
   CommandsData,
   ConnectorMessage,
@@ -16,8 +17,12 @@ import {
   Mode,
   ModeDefinition,
   Model,
+  ModelCallSettings,
+  ModelCallTimeout,
+  OS,
   ProjectSettings,
   PromptContext,
+  Reasoning,
   SkillDefinition,
   ProviderProfile,
   QuestionData,
@@ -26,14 +31,18 @@ import {
   ResponseCompletedData,
   SettingsData,
   TaskData,
+  SwitchToLocalOptions,
+  SwitchToWorktreeOptions,
   TodoItem,
   ToolApprovalState,
   UpdatedFile,
   UsageReportData,
   VoiceSession,
-} from "@common/types";
+  WorktreeUncommittedFiles,
+} from '@common/types';
 
-export { ContextMemoryMode, InvocationMode, ToolApprovalState };
+export { AutonomyMode, ContextMemoryMode, InvocationMode, OS, ToolApprovalState };
+export type { ModelCallSettings, ModelCallTimeout, Reasoning, SwitchToLocalOptions, SwitchToWorktreeOptions, WorktreeUncommittedFiles };
 
 export type AgentStepResult = unknown;
 export type { ModeDefinition };
@@ -43,10 +52,12 @@ export const AIDER_DESK_EXTENSIONS_REPO_URL = 'https://github.com/hotovo/aider-d
 export interface ResponseMessage {
   id: string;
   content: string;
+  reasoning?: string;
   reflectedMessage?: string;
   finished: boolean;
   usageReport?: UsageReportData;
   promptContext?: PromptContext;
+  timestamp?: number;
 }
 
 /**
@@ -65,6 +76,8 @@ export interface ExtensionMetadata {
   capabilities?: string[];
   /** Optional URL to an icon image for the extension */
   iconUrl?: string;
+  /** Optional list of supported operating systems. If undefined, all OSes are supported. */
+  supportedOS?: OS[];
 }
 
 /**
@@ -150,15 +163,18 @@ export interface ExtensionProviderStrategy {
     model: Model,
     settings: SettingsData,
     projectDir: string,
+    toolSet?: unknown,
+    systemPrompt?: string,
+    providerMetadata?: unknown,
   ) => unknown | Promise<unknown>;
   loadModels: (profile: ProviderProfile, settings: SettingsData) => Promise<LoadModelsResponse>;
 
   getAiderMapping?: (provider: ProviderProfile, modelId: string, settings: SettingsData, projectDir: string) => AiderModelMapping;
   getUsageReport?: (task: unknown, provider: ProviderProfile, model: Model, usage: unknown, providerMetadata?: unknown) => UsageReportData;
-  getProviderOptions?: (model: Model) => Record<string, Record<string, JSONValue>> | undefined;
+  getProviderOptions?: (model: Model, reasoning?: Reasoning) => Record<string, Record<string, JSONValue | undefined>> | undefined;
   getCacheControl?: (model: Model) => CacheControl | undefined;
   getProviderTools?: (model: Model) => Record<string, Tool> | Promise<Record<string, Tool>>;
-  getProviderParameters?: (model: Model) => Record<string, unknown>;
+  getProviderParameters?: (model: Model, reasoning?: Reasoning) => Record<string, unknown>;
   createVoiceSession?: (profile: ProviderProfile, settings: SettingsData) => Promise<VoiceSession>;
   isRetryable?: (error: unknown) => boolean;
 }
@@ -194,6 +210,9 @@ export type UIComponentPlacement =
   | 'task-input-toolbar-right'
   | 'tasks-sidebar-header'
   | 'tasks-sidebar-bottom'
+  | 'tasks-sidebar-actions-left'
+  | 'tasks-sidebar-actions-right'
+  | 'task-message'
   | 'task-message-above'
   | 'task-message-below'
   | 'task-message-bar'
@@ -201,7 +220,11 @@ export type UIComponentPlacement =
   | 'task-top-bar-right'
   | 'task-state-actions'
   | 'task-state-actions-all'
-  | 'welcome-page';
+  | 'task-sidebar-item-badges'
+  | 'welcome-page'
+  | 'task-floating'
+  | 'project-floating'
+  | 'app-floating';
 
 /**
  * Definition of a React UI component that can be registered by an extension.
@@ -232,12 +255,26 @@ export interface UIComponentDefinition {
   id: string;
   /** Where in UI to render this component */
   placement: UIComponentPlacement;
+  /** Display name for the component (used as floating panel title, tooltip, etc.) */
+  name?: string;
   /** JSX/TSX component as string to be parsed by string-to-react-component */
   jsx: string;
   /** Optional flag to indicate if the component should load data from the extension to be passed as a prop (default: false) */
   loadData?: boolean;
   /** Optional flag to disable data caching - when true, data is always fetched fresh on render (default: false) */
   noDataCache?: boolean;
+  /** Optional filter for which messages this component should handle (for task-message placement) */
+  messageFilter?: MessageFilter;
+}
+
+/** Filter for which messages a task-message extension component should handle */
+export interface MessageFilter {
+  /** Message types this component handles (e.g. 'user', 'tool', 'response', 'log') */
+  types?: string[];
+  /** For tool messages: filter by server name */
+  serverName?: string;
+  /** For tool messages: filter by tool name */
+  toolName?: string;
 }
 
 /**
@@ -265,6 +302,7 @@ export interface UIComponents {
   Tooltip: UIComponent;
   LoadingOverlay: UIComponent;
   ConfirmDialog: UIComponent;
+  ModalOverlayLayout: UIComponent;
 }
 
 export interface UIComponentProps {
@@ -275,6 +313,8 @@ export interface UIComponentProps {
   providers: ProviderProfile[];
   ui: UIComponents;
   icons: Record<string, unknown>;
+  libraries: Record<string, Record<string, unknown>>;
+  activateTask?: (taskId: string) => void;
 }
 
 /**
@@ -348,6 +388,12 @@ export interface TaskUpdatedEvent {
   task: TaskData;
 }
 
+/** Event payload for task deleted events */
+export interface TaskDeletedEvent {
+  readonly task: TaskData;
+  blocked?: boolean;
+}
+
 /** Event payload for project opened events */
 export interface ProjectStartedEvent {
   readonly baseDir: string;
@@ -393,6 +439,14 @@ export interface AgentStartedEvent {
   contextMessages: ContextMessage[];
   contextFiles: ContextFile[];
   blocked?: boolean;
+  images?: string[];
+  skillsToActivate?: string[];
+  /**
+   * Model call settings (both defaults and overrides).
+   * On dispatch, contains the agent's computed defaults (e.g. maxRetries, abortSignal).
+   * Extensions can return a partial override; the final values are `{...defaults, ...overrides}`.
+   */
+  modelCallSettings?: ModelCallSettings;
 }
 
 /** Event payload for agent finished events */
@@ -418,7 +472,7 @@ export interface AgentStepFinishedEvent {
   readonly agentProfile: AgentProfile;
   readonly currentResponseId: string;
   readonly stepResult: AgentStepResult;
-  finishReason: 'stop' | 'length' | 'content-filter' | 'tool-calls' | 'error' | 'other' | 'unknown';
+  finishReason: 'stop' | 'length' | 'content-filter' | 'tool-calls' | 'error' | 'other';
   responseMessages: ContextMessage[];
 }
 
@@ -446,6 +500,7 @@ export interface ToolApprovalEvent {
 
 /** Event payload for tool called events */
 export interface ToolCalledEvent {
+  readonly toolCallId: string;
   readonly toolName: string;
   readonly agentProfile: AgentProfile;
   readonly abortSignal?: AbortSignal;
@@ -455,6 +510,7 @@ export interface ToolCalledEvent {
 
 /** Event payload for tool finished events */
 export interface ToolFinishedEvent {
+  readonly toolCallId: string;
   readonly toolName: string;
   readonly agentProfile: AgentProfile;
   readonly input: Record<string, unknown> | undefined;
@@ -513,6 +569,7 @@ export interface SubagentFinishedEvent {
 /** Event payload for question asked events */
 export interface QuestionAskedEvent {
   question: QuestionData;
+  readonly storedAnswer?: string;
   answer?: string;
 }
 
@@ -545,7 +602,7 @@ export interface AiderPromptStartedEvent {
   messages: ConnectorMessage[];
   files: ContextFile[];
   blocked?: boolean;
-  autoApprove?: boolean;
+  autonomyMode?: AutonomyMode;
   denyCommands?: boolean;
 }
 
@@ -915,6 +972,18 @@ export interface TaskContext {
    */
   generateText(modelId: string, systemPrompt: string, prompt: string): Promise<string | undefined>;
 
+  /**
+   * Generate a structured object using a specific model without running the full agent loop.
+   * Delegates to the Agent's generateObject method using the project directory.
+   * Useful for extracting structured data (e.g., classification, parsing) within extensions.
+   * @param modelId - The model identifier to use (format: "provider/model")
+   * @param systemPrompt - System prompt for the generation request
+   * @param prompt - User prompt for the generation request
+   * @param schema - Zod schema defining the expected output structure
+   * @returns The generated object matching the schema, or undefined if generation failed
+   */
+  generateObject<T = unknown>(modelId: string, systemPrompt: string, prompt: string, schema: z.ZodType<T>): Promise<T | undefined>;
+
   // User Interaction
 
   /**
@@ -1066,6 +1135,54 @@ export interface TaskContext {
    * @returns True if a pending question was answered, false if no question is pending
    */
   answerQuestion(answer: string, userInput?: string): Promise<boolean>;
+
+  // Working Mode & Worktrees
+
+  /**
+   * Switch the task to worktree working mode, optionally carrying over uncommitted changes
+   * from the project root (or current worktree) into the new worktree.
+   * Stashes uncommitted changes, creates a git worktree, applies the stash to the new worktree,
+   * and optionally re-applies to the source if `dropSourceChanges` is false.
+   * @param options - Optional configuration: `carryOverUncommittedChanges` to transfer uncommitted
+   *   changes, `dropSourceChanges` to keep (false) or remove (true, default) them from the source
+   */
+  switchToWorktreeWorkingMode(options?: SwitchToWorktreeOptions): Promise<void>;
+
+  /**
+   * Switch the task to local working mode, optionally merging the worktree branch first.
+   * @param options - Optional configuration: `mergeBeforeSwitch` to merge worktree to main before
+   *   switching, `targetBranch` to specify a merge target, `switchAllInWorktree` to switch all
+   *   tasks sharing the same worktree
+   */
+  switchToLocalWorkingMode(options?: SwitchToLocalOptions): Promise<void>;
+
+  /**
+   * Get uncommitted files from the project's main repository (not from a worktree).
+   * @returns Object containing arrays of unstaged, staged, and untracked file paths
+   */
+  getLocalUncommittedFiles(): Promise<WorktreeUncommittedFiles>;
+
+  /**
+   * Apply uncommitted changes from the task's worktree to a target branch in the main repository.
+   * @param targetBranch - Optional target branch name (defaults to the project's main branch)
+   */
+  applyUncommittedChanges(targetBranch?: string): Promise<void>;
+
+  /**
+   * Merge commits and optionally uncommitted changes from this task's worktree to a target worktree directory.
+   * Useful for carrying over changes between worktrees when running multiple models.
+   * @param targetWorktreeDir - The absolute path to the target worktree directory
+   * @param includeUncommitted - Whether to include uncommitted changes (default: false)
+   */
+  mergeWorktreeToWorktree(targetWorktreeDir: string, includeUncommitted?: boolean): Promise<void>;
+
+  /**
+   * Resume the task — starts execution as if the user clicked the "Execute"/"Resume" button.
+   * In agent mode, this runs the last user prompt through the agent pipeline.
+   * In Aider modes, this re-executes the last user message.
+   * No-op if the task is already running or has no prior user message to resume from.
+   */
+  resumeTask(): Promise<void>;
 }
 
 /**
@@ -1103,6 +1220,13 @@ export interface ProjectContext {
    * @returns Array of all task data objects sorted by updatedAt (most recent first)
    */
   getTasks(): Promise<TaskData[]>;
+
+  /**
+   * Reload task data and context from the task folders on disk.
+   * Tasks currently in progress are left unchanged.
+   * @returns Array of all current task data objects after reloading
+   */
+  reloadTasks(): Promise<TaskData[]>;
 
   /**
    * Get the TaskContext for the most recently updated task.
@@ -1179,6 +1303,75 @@ export interface ProjectContext {
 }
 
 /**
+ * A narrow subset of Electron's `App` object, exposed to extensions via
+ * {@link ExtensionContext.getElectronApp}.
+ *
+ * This is a hand-maintained interface (not imported from the `electron`
+ * package) so that it can be published in `@aiderdesk/extensions` without
+ * adding `electron` as a dependency.  When running inside Electron the real
+ * `App` object is structurally assignable to this interface; when running
+ * outside Electron `getElectronApp()` returns `null`.
+ */
+export interface ElectronApp {
+  /**
+   * Returns an array of `ProcessMetric` objects that correspond to memory
+   * and CPU usage statistics of all the processes associated with the app.
+   *
+   * Each metric's `memory.workingSetSize` is expressed in **kilobytes**.
+   */
+  getAppMetrics(): ElectronProcessMetric[];
+
+  /** The current application version. */
+  getVersion(): string;
+
+  /** The current application name. */
+  getName(): string;
+
+  /** A boolean that is true when the application has finished initializing. */
+  isReady(): boolean;
+}
+
+/** CPU usage statistics for a single Electron process. */
+export interface ElectronCPUUsage {
+  /** Percentage of CPU used since the last call (0–100). */
+  percentCPUUsage?: number;
+  /** Cumulative CPU time in seconds since process start. */
+  cumulativeCPUUsage?: number;
+}
+
+/** Memory usage statistics for a single Electron process. */
+export interface ElectronMemoryInfo {
+  /** Working set size in **kilobytes**. */
+  workingSetSize?: number;
+  /** Peak working set size in **kilobytes**. */
+  peakWorkingSetSize?: number;
+}
+
+/**
+ * Process metric returned by {@link ElectronApp.getAppMetrics}.
+ *
+ * All fields are optional because Electron may omit some of them depending
+ * on the process type and platform.
+ */
+export interface ElectronProcessMetric {
+  /** Process ID. */
+  pid?: number;
+  /**
+   * One of: `Browser` (main process), `Renderer`, `GPU`, `Utility`,
+   * `ForkedWorker`, `ServiceWorker`, etc.
+   */
+  type?: string;
+  /** Service name (only present for utility processes). */
+  serviceName?: string;
+  /** Display name of the process. */
+  name?: string;
+  /** CPU usage breakdown. */
+  cpu?: ElectronCPUUsage;
+  /** Memory usage breakdown. */
+  memory?: ElectronMemoryInfo;
+}
+
+/**
  * Context object passed to extension methods providing access to AiderDesk APIs.
  *
  * Availability depends on where the context is created:
@@ -1216,6 +1409,13 @@ export interface ExtensionContext {
    * @returns Absolute path to the project directory, or empty string if not in a project context
    */
   getProjectDir(): string;
+
+  /**
+   * Get the base directories of all currently open projects (open project tabs/windows).
+   * Available regardless of whether the context itself is scoped to a project or task.
+   * @returns Array of absolute paths to currently open projects' base directories
+   */
+  getOpenProjectDirs(): string[];
 
   /**
    * Get the task context for the current task.
@@ -1297,12 +1497,48 @@ export interface ExtensionContext {
   openPath(path: string): Promise<boolean>;
 
   /**
+   * Get a narrowed Electron `App` object for accessing host-level APIs
+   * (e.g. `getAppMetrics()` for CPU/memory statistics).
+   *
+   * Only available when AiderDesk is running as an Electron desktop
+   * application.  Returns `null` when running in Node.js server / headless
+   * mode, so extensions should perform a null-check before use.
+   *
+   * @returns Promise resolving to an {@link ElectronApp} instance, or
+   * `null` if Electron is not available.
+   */
+  getElectronApp(): Promise<ElectronApp | null>;
+
+  /**
    * Get the memory context for vector store operations (store, retrieve, update, delete memories).
    * Uses the same underlying vector store as the built-in memory tools.
    * @returns MemoryContext instance (the MemoryManager itself)
    * @throws Error if the MemoryManager is not available
    */
   getMemoryContext(): MemoryContext;
+
+  /**
+   * Truncate a tool result string that exceeds size limits.
+   * Checks line count, byte size, and token count against the provided limits.
+   * When content exceeds any limit, it is truncated with head/tail preservation
+   * and a notice indicating the truncation reason.
+   * The full content is saved to a temporary file referenced in the notice.
+   * @param content - The text content to potentially truncate
+   * @param maxLines - Maximum number of lines before truncation (default: 1000)
+   * @param maxSizeKB - Maximum size in kilobytes before truncation (default: 50)
+   * @param maxTokens - Maximum token count before truncation (defaut: 50000)
+   * @param saveToFile - Whether to save the full content to a file and include a reference in the notice (default: true)
+   * @param truncationSuffix - Optional custom suffix to append to truncated content (default: autogenerated notice)
+   * @returns Promise resolving to the original or truncated content
+   */
+  truncateToolResult(
+    content: string,
+    maxLines?: number,
+    maxSizeKB?: number,
+    maxTokens?: number,
+    saveToFile?: boolean,
+    truncationSuffix?: string,
+  ): Promise<string>;
 }
 
 /**
@@ -1477,6 +1713,23 @@ export interface Extension {
   getUIComponents?(context: ExtensionContext): UIComponentDefinition[];
 
   /**
+   * Return list of npm packages that this extension's UI components need.
+   * Libraries are resolved via esm.sh and cached to disk for offline reuse.
+   * Resolved libraries are passed to UI components as `props.libraries.<key>`.
+   *
+   * @example
+   * ```typescript
+   * getUIComponentsLibraries(): Record<string, string> {
+   *   return {
+   *     kanban: 'react-kanban-kit@^1.0.0',
+   *     lodash: 'lodash@^4.17.0',
+   *   };
+   * }
+   * ```
+   */
+  getUIComponentsLibraries?(): Record<string, string>;
+
+  /**
    * Return data for a specific UI component
    * Called when the component is mounted or when UI refresh is triggered
    * @param componentId - The ID of the component to get data for
@@ -1555,6 +1808,13 @@ export interface Extension {
    * @returns void or partial event to modify task data
    */
   onTaskUpdated?(event: TaskUpdatedEvent, context: ExtensionContext): Promise<void | Partial<TaskUpdatedEvent>>;
+
+  /**
+   * Called when a task is about to be deleted
+   * Set `blocked: true` in the returned partial event to prevent deletion
+   * @returns void or partial event to block deletion
+   */
+  onTaskDeleted?(event: TaskDeletedEvent, context: ExtensionContext): Promise<void | Partial<TaskDeletedEvent>>;
 
   // Project Events
 
@@ -1728,6 +1988,9 @@ export interface Extension {
 
   /**
    * Called when a question is asked to the user
+   * The event includes an optional `storedAnswer` field — when present, the question
+   * already has a cached/auto answer and extensions may choose to skip side effects
+   * (e.g., sound notifications) since the user will not be prompted.
    * @returns void or partial event to modify question
    */
   onQuestionAsked?(event: QuestionAskedEvent, context: ExtensionContext): Promise<void | Partial<QuestionAskedEvent>>;

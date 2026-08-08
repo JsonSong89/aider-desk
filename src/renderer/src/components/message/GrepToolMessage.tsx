@@ -1,11 +1,15 @@
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RiCheckboxCircleFill, RiCloseCircleFill, RiErrorWarningFill } from 'react-icons/ri';
 import { LuFileSearch } from 'react-icons/lu';
 import { CgSpinner } from 'react-icons/cg';
 import { ToolMessage } from '@common/types';
 
+import { areMessagesEqual } from './utils';
+
 import { CodeInline } from '@/components/common/CodeInline';
 import { ExpandableMessageBlock } from '@/components/message/ExpandableMessageBlock';
+import { StreamingToolMessage } from '@/components/message/StreamingToolMessage';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 interface Match {
@@ -94,13 +98,13 @@ const parseMarkdownResults = (md: string): Array<Match> | null => {
   return results.length > 0 ? results : null;
 };
 
-export const GrepToolMessage = ({ message, onRemove, compact = false, onFork, onRemoveUpTo, hideMessageBar }: Props) => {
+const GrepToolMessageComponent = ({ message, onRemove, compact = false, onFork, onRemoveUpTo, hideMessageBar }: Props) => {
   const { t } = useTranslation();
 
-  const filePattern = message.args.filePattern as string;
-  const searchTerm = message.args.searchTerm as string;
-  const contextLines = message.args.contextLines as number;
-  const rawContent = message.content && JSON.parse(message.content);
+  const filePattern = (message.args.filePattern as string) || '';
+  const searchTerm = (message.args.searchTerm as string) || '';
+  const contextLines = (message.args.contextLines as number) ?? 0;
+  const rawContent = useMemo(() => message.content && JSON.parse(message.content), [message.content]);
   const isMarkdown = rawContent && typeof rawContent === 'string' && rawContent.startsWith('## Grep Results:');
   const isError =
     rawContent &&
@@ -108,9 +112,39 @@ export const GrepToolMessage = ({ message, onRemove, compact = false, onFork, on
     (rawContent.startsWith('Error:') || rawContent.startsWith('No files found') || rawContent.startsWith('No matches found'));
   const isDenied = rawContent && typeof rawContent === 'string' && rawContent.startsWith('Grep search for');
 
-  const content: Array<Match> | null =
-    isMarkdown && typeof rawContent === 'string' ? parseMarkdownResults(rawContent) : Array.isArray(rawContent) ? rawContent : null;
+  const content: Array<Match> | null = useMemo(
+    () => (isMarkdown && typeof rawContent === 'string' ? parseMarkdownResults(rawContent) : Array.isArray(rawContent) ? rawContent : null),
+    [isMarkdown, rawContent],
+  );
   const matchCount = content ? content.length : 0;
+
+  const groupedMatches: Record<string, Array<Match>> = useMemo(
+    () =>
+      (content || []).reduce((acc: Record<string, Array<Match>>, match: Match) => {
+        const file = match.filePath;
+        if (!acc[file]) {
+          acc[file] = [];
+        }
+        acc[file].push(match);
+        return acc;
+      }, {}),
+    [content],
+  );
+
+  if (message.isStreaming) {
+    return (
+      <StreamingToolMessage
+        message={message}
+        icon={<LuFileSearch className="w-4 h-4" />}
+        label={t('toolMessage.power.grep.findingMatches')}
+        compact={compact}
+        onRemove={onRemove}
+        onFork={onFork}
+        onRemoveUpTo={onRemoveUpTo}
+        hideMessageBar={hideMessageBar}
+      />
+    );
+  }
 
   const title = (
     <div className="flex items-center gap-2 w-full text-left">
@@ -192,15 +226,6 @@ export const GrepToolMessage = ({ message, onRemove, compact = false, onFork, on
       );
     }
 
-    const groupedMatches: Record<string, Array<Match>> = content.reduce((acc: Record<string, Array<Match>>, match: Match) => {
-      const file = match.filePath;
-      if (!acc[file]) {
-        acc[file] = [];
-      }
-      acc[file].push(match);
-      return acc;
-    }, {});
-
     return (
       <div className="px-4 py-1 text-2xs text-text-tertiary bg-bg-secondary">
         <div className="flex items-center gap-2 mb-2">
@@ -270,3 +295,19 @@ export const GrepToolMessage = ({ message, onRemove, compact = false, onFork, on
     />
   );
 };
+
+const arePropsEqual = (prevProps: Props, nextProps: Props): boolean => {
+  if (
+    prevProps.compact !== nextProps.compact ||
+    prevProps.hideMessageBar !== nextProps.hideMessageBar ||
+    (prevProps.onRemove === undefined) !== (nextProps.onRemove === undefined) ||
+    (prevProps.onFork === undefined) !== (nextProps.onFork === undefined) ||
+    (prevProps.onRemoveUpTo === undefined) !== (nextProps.onRemoveUpTo === undefined)
+  ) {
+    return false;
+  }
+
+  return areMessagesEqual(prevProps.message, nextProps.message);
+};
+
+export const GrepToolMessage = memo(GrepToolMessageComponent, arePropsEqual);

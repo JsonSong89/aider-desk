@@ -3,8 +3,7 @@ import { isRequestyProvider, LlmProvider, RequestyProvider } from '@common/agent
 import { createRequesty, type RequestyProviderMetadata } from '@requesty/ai-sdk';
 import { v4 as uuidv4 } from 'uuid';
 
-import type { LanguageModelUsage, ModelMessage } from 'ai';
-import type { LanguageModelV2 } from '@ai-sdk/provider';
+import type { LanguageModel, LanguageModelUsage, ModelMessage } from 'ai';
 
 import { AIDER_DESK_TITLE, AIDER_DESK_WEBSITE } from '@/constants';
 import { AiderModelMapping, CacheControl, LlmProviderStrategy, LoadModelsResponse } from '@/models';
@@ -126,7 +125,7 @@ export const getRequestyAiderMapping = (provider: ProviderProfile, modelId: stri
 };
 
 // === LLM Creation Functions ===
-export const createRequestyLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModelV2 => {
+export const createRequestyLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel => {
   const provider = profile.provider as RequestyProvider;
   let apiKey = provider.apiKey;
 
@@ -197,17 +196,17 @@ export const getRequestyUsageReport = (
   const totalSentTokens = usage.inputTokens || 0;
   const receivedTokens = usage.outputTokens || 0;
 
-  // Extract cache tokens from provider metadata
+  // Extract cache tokens from usage details, falling back to Requesty provider metadata
   const { requesty } = providerMetadata ? (providerMetadata as RequestyProviderMetadata) : {};
-  logger.info('Requesty usage report', {
+  logger.debug('Requesty usage report', {
     requesty,
     usage,
   });
-  const cacheWriteTokens = requesty?.usage?.cachingTokens ?? 0;
-  const cacheReadTokens = requesty?.usage?.cachedTokens ?? 0;
+  const cacheWriteTokens = usage.inputTokenDetails?.cacheWriteTokens ?? requesty?.usage?.cachingTokens ?? 0;
+  const cacheReadTokens = usage.inputTokenDetails?.cacheReadTokens ?? requesty?.usage?.cachedTokens ?? 0;
 
-  // Calculate sentTokens after deducting cached tokens
-  const sentTokens = totalSentTokens - cacheReadTokens;
+  // Prefer non-cached token count from usage details to avoid double counting cached tokens
+  const sentTokens = usage.inputTokenDetails?.noCacheTokens ?? totalSentTokens - cacheReadTokens;
 
   // Calculate cost internally with already deducted sentTokens
   const messageCost = calculateRequestyCost(model, sentTokens, receivedTokens, cacheWriteTokens, cacheReadTokens);

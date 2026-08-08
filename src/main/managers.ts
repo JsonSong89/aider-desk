@@ -31,6 +31,7 @@ export interface ManagersResult {
   agentProfileManager: AgentProfileManager;
   extensionManager: ExtensionManager;
   pythonInstaller: PythonDependenciesInstaller;
+  projectManager: ProjectManager;
 }
 
 export const initManagers = async (store: Store, windowManager?: WindowManager): Promise<ManagersResult> => {
@@ -79,7 +80,7 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
   });
 
   // Initialize prompts manager (non-blocking - templates compile lazily)
-  const promptsManager = new PromptsManager(extensionManager);
+  const promptsManager = new PromptsManager(extensionManager, store);
   promptsManager.init().catch((error) => {
     logger.error('[Prompts] Prompts system initialization failed:', error);
   });
@@ -87,7 +88,7 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
   const worktreeManager = new WorktreeManager();
 
   // Initialize agent profile manager with extension manager for unified profile access
-  const agentProfileManager = new AgentProfileManager(eventManager, extensionManager);
+  const agentProfileManager = new AgentProfileManager(eventManager, extensionManager, store);
   agentProfileManager.init().catch((error) => {
     logger.error('[AgentProfile] Agent profile system initialization failed:', error);
   });
@@ -136,6 +137,7 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
     memoryManager,
     extensionManager,
     proxyManager,
+    promptsManager,
     windowManager,
   );
 
@@ -201,5 +203,6 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
     agentProfileManager,
     extensionManager,
     pythonInstaller,
+    projectManager,
   };
 };

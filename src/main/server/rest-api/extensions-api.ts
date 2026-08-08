@@ -9,6 +9,10 @@ const GetInstalledExtensionsSchema = z.object({
   projectDir: z.string().optional(),
 });
 
+const GetExtensionToolsInfoSchema = z.object({
+  projectDir: z.string().optional(),
+});
+
 const GetAvailableExtensionsSchema = z.object({
   repositories: z.string().optional(), // Comma-separated URLs
   forceRefresh: z.coerce.boolean().optional(),
@@ -32,6 +36,11 @@ const UpdateExtensionSchema = z.object({
   projectDir: z.string().optional(),
 });
 
+const ReloadExtensionSchema = z.object({
+  filePath: z.string().min(1, 'File path is required'),
+  projectDir: z.string().optional(),
+});
+
 export class ExtensionsApi extends BaseApi {
   constructor(private readonly eventsHandler: EventsHandler) {
     super();
@@ -50,6 +59,21 @@ export class ExtensionsApi extends BaseApi {
         const { projectDir } = parsed;
         const extensions = this.eventsHandler.getInstalledExtensions(projectDir);
         res.status(200).json(extensions);
+      }),
+    );
+
+    // Get extension tools info
+    router.get(
+      '/extensions/tools-info',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(GetExtensionToolsInfoSchema, req.query, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir } = parsed;
+        const toolsInfo = this.eventsHandler.getExtensionToolsInfo(projectDir);
+        res.status(200).json(toolsInfo);
       }),
     );
 
@@ -78,12 +102,12 @@ export class ExtensionsApi extends BaseApi {
         }
 
         const { extensionId, repositoryUrl, projectDir } = parsed;
-        const success = await this.eventsHandler.installExtension(extensionId, repositoryUrl, projectDir);
+        const result = await this.eventsHandler.installExtension(extensionId, repositoryUrl, projectDir);
 
-        if (success) {
-          res.status(200).json({ message: 'Extension installed successfully', success });
+        if (result.success) {
+          res.status(200).json({ message: 'Extension installed successfully', success: true });
         } else {
-          res.status(500).json({ message: 'Failed to install extension', success });
+          res.status(500).json({ message: 'Failed to install extension', success: false, error: result.error });
         }
       }),
     );
@@ -118,12 +142,32 @@ export class ExtensionsApi extends BaseApi {
         }
 
         const { extensionId, repositoryUrl, projectDir } = parsed;
-        const success = await this.eventsHandler.updateExtension(extensionId, repositoryUrl, projectDir);
+        const result = await this.eventsHandler.updateExtension(extensionId, repositoryUrl, projectDir);
+
+        if (result.success) {
+          res.status(200).json({ message: 'Extension updated successfully', success: true });
+        } else {
+          res.status(500).json({ message: 'Failed to update extension', success: false, error: result.error });
+        }
+      }),
+    );
+
+    // Reload extension
+    router.post(
+      '/extensions/reload',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(ReloadExtensionSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { filePath, projectDir } = parsed;
+        const success = await this.eventsHandler.reloadExtension(filePath, projectDir);
 
         if (success) {
-          res.status(200).json({ message: 'Extension updated successfully', success });
+          res.status(200).json({ message: 'Extension reloaded successfully', success: true });
         } else {
-          res.status(500).json({ message: 'Failed to update extension', success });
+          res.status(500).json({ message: 'Failed to reload extension', success: false });
         }
       }),
     );
@@ -179,6 +223,22 @@ export class ExtensionsApi extends BaseApi {
 
         const result = await this.eventsHandler.executeUIExtensionAction(extensionId, componentId, action, args ?? [], projectDir, taskId);
         res.status(200).json(result);
+      }),
+    );
+
+    // Load extension library (resolve from esm.sh with disk cache)
+    router.post(
+      '/extensions/load-library',
+      this.handleRequest(async (req, res) => {
+        const { librarySpec } = req.body as { librarySpec?: string };
+
+        if (!librarySpec) {
+          res.status(400).json({ message: 'librarySpec is required' });
+          return;
+        }
+
+        const source = await this.eventsHandler.loadExtensionLibrary(librarySpec);
+        res.status(200).type('application/javascript').send(source);
       }),
     );
 

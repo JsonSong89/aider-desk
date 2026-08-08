@@ -5,10 +5,27 @@ import path from 'path';
 // @ts-expect-error istextorbinary is not typed properly
 import { isBinary } from 'istextorbinary';
 import { encode } from 'gpt-tokenizer/model/gpt-4o';
-import { ContextMessage, ContextUserMessage, MessageRole, PromptContext } from '@common/types';
+import { z } from 'zod';
+import { ContextMessage, ContextUserMessage, JSONValue, MessageRole, PromptContext, ToolResultOutput } from '@common/types';
 
-export const THINKING_RESPONSE_STAR_TAG = '---\n► **THINKING**\n';
-export const ANSWER_RESPONSE_START_TAG = '---\n► **ANSWER**\n';
+/**
+ * Zod schema that coerces string values to booleans before validation.
+ * Handles the case where LLMs send boolean parameters as strings ("true"/"false").
+ */
+export const coerceBoolean = z.preprocess((val) => {
+  if (typeof val === 'boolean') {
+    return val;
+  }
+  if (typeof val === 'string') {
+    if (val.toLowerCase() === 'true') {
+      return true;
+    }
+    if (val.toLowerCase() === 'false') {
+      return false;
+    }
+  }
+  return val;
+}, z.boolean());
 
 /**
  * Extracts PromptContext from a tool result if available.
@@ -98,7 +115,14 @@ export const readFileContent = async (
   return resultLines.join('\n');
 };
 
-export const truncateToolResult = async (content: string, maxLines = 1000, maxSizeKB = 50, maxTokens = 50000): Promise<string> => {
+export const truncateToolResult = async (
+  content: string,
+  maxLines = 1000,
+  maxSizeKB = 50,
+  maxTokens = 50000,
+  saveToFile = true,
+  truncationSuffix?: string,
+): Promise<string> => {
   const lines = content.split('\n');
   const sizeBytes = Buffer.byteLength(content, 'utf8');
   const sizeKB = sizeBytes / 1024;
@@ -108,11 +132,14 @@ export const truncateToolResult = async (content: string, maxLines = 1000, maxSi
     return content;
   }
 
-  const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
-  const tmpFileName = `aider-desk-tool-result-${id}.txt`;
-  const tmpFilePath = path.join(tmpdir(), tmpFileName);
+  let tmpFilePath: string | undefined;
 
-  await fs.writeFile(tmpFilePath, content, 'utf8');
+  if (saveToFile) {
+    const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
+    const tmpFileName = `aider-desk-tool-result-${id}.txt`;
+    tmpFilePath = path.join(tmpdir(), tmpFileName);
+    await fs.writeFile(tmpFilePath, content, 'utf8');
+  }
 
   const reasons: string[] = [];
   if (lines.length > maxLines) {
@@ -124,6 +151,14 @@ export const truncateToolResult = async (content: string, maxLines = 1000, maxSi
   if (tokenCount > maxTokens) {
     reasons.push(`${tokenCount} tokens exceeded limit of ${maxTokens}`);
   }
+
+  const getSuffix = () => {
+    if (truncationSuffix) {
+      return truncationSuffix;
+    }
+    const fileNote = tmpFilePath ? ` Full content saved to ${tmpFilePath}.` : '';
+    return `Content truncated (${reasons.join(', ')}).${fileNote}`;
+  };
 
   if (tokenCount > maxTokens) {
     const headBudget = Math.floor(maxTokens / 2);
@@ -157,6 +192,11 @@ export const truncateToolResult = async (content: string, maxLines = 1000, maxSi
     const omittedLines = lines.length - headLines.length - tailLines.length;
     const truncationNotice = `\n\n... ${omittedLines} lines omitted (${reasons.join(', ')}). Full content saved to ${tmpFilePath}.\n\n`;
 
+    if (truncationSuffix) {
+      const suffixNotice = `\n\n... ${omittedLines} lines omitted. ${truncationSuffix}\n\n`;
+      return headLines.join('\n') + suffixNotice + tailLines.join('\n');
+    }
+
     return headLines.join('\n') + truncationNotice + tailLines.join('\n');
   }
 
@@ -170,7 +210,7 @@ export const truncateToolResult = async (content: string, maxLines = 1000, maxSi
     preview = lines.slice(0, maxLines).join('\n');
   }
 
-  return preview + `\n... Content truncated (${reasons.join(', ')}). Full content saved to ${tmpFilePath}.`;
+  return preview + `\n... ${getSuffix()}`;
 };
 
 const NETWORK_ERROR_CODES = ['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH', 'EAI_AGAIN'] as const;
@@ -203,6 +243,58 @@ export const isNetworkError = (error: unknown): boolean => {
   }
 
   return false;
+};
+
+/**
+ * Converts MCP tool result output to AI SDK's ToolResultOutput format,
+ * extracting image parts into `content`-type output with `file` parts.
+ * The AI SDK handles per-provider conversion (e.g. OpenAI `input_image`,
+ * Anthropic `image` with base64, Google `inlineData`).
+ *
+ * Handles MCP content parts of type `image`, `image-data`, and `media`,
+ * with `data` or `image` fields, and optional `mimeType`/`mediaType`.
+ */
+export const convertMcpResultToModelOutput = (output: unknown): ToolResultOutput => {
+  if (output && typeof output === 'object' && 'content' in output && Array.isArray((output as { content: unknown[] }).content)) {
+    const content = (output as { content: Array<Record<string, unknown>> }).content;
+    const hasNonTextParts = content.some((part) => part && typeof part === 'object' && part.type !== 'text');
+
+    if (hasNonTextParts) {
+      const value: Array<{ type: 'text'; text: string } | { type: 'file'; data: { type: 'data'; data: string }; mediaType: string }> = [];
+
+      for (const part of content) {
+        if (!part || typeof part !== 'object') {
+          continue;
+        }
+
+        if (part.type === 'text' && typeof part.text === 'string') {
+          value.push({ type: 'text', text: part.text });
+        } else if ((part.type === 'image' || part.type === 'image-data' || part.type === 'media') && typeof (part.data ?? part.image) === 'string') {
+          const data = (part.data ?? part.image) as string;
+          const mediaType = typeof (part.mimeType ?? part.mediaType) === 'string' ? ((part.mimeType ?? part.mediaType) as string) : 'image/png';
+          value.push({ type: 'file', data: { type: 'data', data }, mediaType });
+        }
+      }
+
+      if (value.length > 0) {
+        return { type: 'content', value };
+      }
+    }
+
+    const textParts = content
+      .filter((part) => part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text as string);
+
+    if (textParts.length > 0) {
+      return { type: 'text', value: textParts.join('') };
+    }
+  }
+
+  if (typeof output === 'string') {
+    return { type: 'text', value: output };
+  }
+
+  return { type: 'json', value: (output as JSONValue) ?? null };
 };
 
 const IMAGE_TOKEN_ESTIMATE = 1000;
@@ -252,7 +344,7 @@ export const estimateMessageTokens = (messages: CountableMessage[]): number => {
         textParts.push(extractToolResultText(part.output));
       } else if (type === 'reasoning' && typeof part.text === 'string') {
         textParts.push(part.text);
-      } else if (type === 'image') {
+      } else if (type === 'image' || (type === 'file' && typeof part.mediaType === 'string' && part.mediaType.startsWith('image/'))) {
         estimatedImageTokens += IMAGE_TOKEN_ESTIMATE;
       }
     }

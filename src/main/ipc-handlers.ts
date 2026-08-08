@@ -45,6 +45,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     return await eventsHandler.savePrompt(baseDir, taskId, prompt);
   });
 
+  ipcMain.handle('save-edited-prompt', async (_, baseDir: string, taskId: string, messageId: string, prompt: string) => {
+    return await eventsHandler.saveEditedPrompt(baseDir, taskId, messageId, prompt);
+  });
+
   ipcMain.on('answer-question', (_, baseDir: string, taskId: string, answer: string) => {
     void eventsHandler.answerQuestion(baseDir, taskId, answer);
   });
@@ -87,6 +91,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.on('reset-task', async (_, baseDir: string, taskId: string) => {
     await eventsHandler.resetTask(baseDir, taskId);
+  });
+
+  ipcMain.on('restart-aider-connector', async (_, baseDir: string, taskId: string) => {
+    await eventsHandler.restartAiderConnector(baseDir, taskId);
   });
 
   ipcMain.handle('show-open-dialog', async (_, options: OpenDialogOptions) => {
@@ -159,6 +167,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle('get-updated-files', async (_, baseDir: string, taskId: string) => {
     return await eventsHandler.getUpdatedFiles(baseDir, taskId);
+  });
+
+  ipcMain.handle('refresh-context-files', async (_, baseDir: string, taskId: string) => {
+    await eventsHandler.refreshContextFiles(baseDir, taskId);
   });
 
   ipcMain.handle('is-project-path', async (_, path: string) => {
@@ -300,6 +312,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     return eventsHandler.getInstalledExtensions(projectDir);
   });
 
+  ipcMain.handle('get-extension-tools-info', (_, projectDir?: string) => {
+    return eventsHandler.getExtensionToolsInfo(projectDir);
+  });
+
   ipcMain.handle('get-available-extensions', async (_, repositories: string[], forceRefresh?: boolean, fetchOnly?: boolean) => {
     return await eventsHandler.getAvailableExtensions(repositories, forceRefresh, fetchOnly);
   });
@@ -316,6 +332,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     return await eventsHandler.updateExtension(extensionId, repositoryUrl, projectDir);
   });
 
+  ipcMain.handle('reload-extension', async (_, filePath: string, projectDir?: string) => {
+    return await eventsHandler.reloadExtension(filePath, projectDir);
+  });
+
   ipcMain.handle('get-extension-ui-components', (_, placement?: string, projectDir?: string, taskId?: string) => {
     return eventsHandler.getUIComponents(placement, projectDir, taskId);
   });
@@ -330,6 +350,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
       return await eventsHandler.executeUIExtensionAction(extensionId, componentId, action, args, projectDir, taskId);
     },
   );
+
+  ipcMain.handle('load-extension-library', async (_, librarySpec: string) => {
+    return await eventsHandler.loadExtensionLibrary(librarySpec);
+  });
 
   // Extension config handlers (per-extension settings)
   ipcMain.handle('get-extension-config-component', (_, extensionId: string, projectDir?: string) => {
@@ -470,8 +494,22 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     await eventsHandler.mergeWorktreeToMain(baseDir, taskId, squash, targetBranch, commitMessage);
   });
 
-  ipcMain.handle('merge-and-switch-to-local', async (_, baseDir: string, taskId: string, targetBranch?: string) => {
-    await eventsHandler.mergeAndSwitchToLocal(baseDir, taskId, targetBranch);
+  ipcMain.handle(
+    'switch-to-local-working-mode',
+    async (_, baseDir: string, taskId: string, options?: { mergeBeforeSwitch?: boolean; targetBranch?: string; switchAllInWorktree?: boolean }) => {
+      await eventsHandler.switchToLocalWorkingMode(baseDir, taskId, options);
+    },
+  );
+
+  ipcMain.handle(
+    'switch-to-worktree-working-mode',
+    async (_, baseDir: string, taskId: string, options?: { carryOverUncommittedChanges?: boolean; dropSourceChanges?: boolean }) => {
+      await eventsHandler.switchToWorktreeWorkingMode(baseDir, taskId, options);
+    },
+  );
+
+  ipcMain.handle('get-local-uncommitted-files', async (_, baseDir: string, taskId: string) => {
+    return await eventsHandler.getLocalUncommittedFiles(baseDir, taskId);
   });
 
   ipcMain.handle('apply-uncommitted-changes', async (_, baseDir: string, taskId: string, targetBranch?: string) => {
@@ -496,6 +534,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle('commit-changes', async (_, baseDir: string, taskId: string, message: string, amend: boolean) => {
     await eventsHandler.commitChanges(baseDir, taskId, message, amend);
+  });
+
+  ipcMain.handle('cancel-commit-changes', async (_, baseDir: string, taskId: string) => {
+    eventsHandler.cancelCommitChanges(baseDir, taskId);
   });
 
   ipcMain.handle('list-branches', async (_, baseDir: string) => {

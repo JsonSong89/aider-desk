@@ -14,7 +14,7 @@ import fs from 'fs/promises';
 import os from 'os';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentProfile, SettingsData } from '@common/types';
+import { AgentProfile, AutonomyMode, SettingsData } from '@common/types';
 
 import type { ExtensionManager } from '@/extensions/extension-manager';
 
@@ -38,6 +38,7 @@ describe('Prompts with Handlebars', () => {
     // so they test the functionality with simple default templates
     promptsManager = new PromptsManager(
       createMockExtensionManager(),
+      { getSettings: () => ({ fileWatchMode: 'auto' }) } as any,
       path.join(__dirname, 'templates', 'default'),
       path.join(__dirname, 'templates', 'nonexistent-global'),
     );
@@ -64,9 +65,9 @@ describe('Prompts with Handlebars', () => {
     expect(prompt).toContain('<DefaultSystemPrompt version="1.0">');
   });
 
-  it('should respect autoApprove setting in workflow steps', async () => {
-    mockTask.task.autoApprove = true;
-    const prompt = await promptsManager.getSystemPrompt(mockSettings, mockTask, mockProfile, true);
+  it('should respect autonomyMode setting in workflow steps', async () => {
+    mockTask.task.autonomyMode = AutonomyMode.Autonomous;
+    const prompt = await promptsManager.getSystemPrompt(mockSettings, mockTask, mockProfile, AutonomyMode.Autonomous);
 
     expect(prompt).toContain('<DefaultSystemPrompt version="1.0">');
   });
@@ -165,7 +166,7 @@ describe('Prompts with Handlebars', () => {
   describe('System prompt advanced features', () => {
     it('should include custom instructions in system prompt', async () => {
       const additionalInstructions = 'Always use TypeScript strict mode';
-      const prompt = await promptsManager.getSystemPrompt(mockSettings, mockTask, mockProfile, false, additionalInstructions);
+      const prompt = await promptsManager.getSystemPrompt(mockSettings, mockTask, mockProfile, undefined, additionalInstructions);
 
       expect(prompt).toContain('<DefaultSystemPrompt version="1.0">');
     });
@@ -173,9 +174,40 @@ describe('Prompts with Handlebars', () => {
     it('should include both agent custom instructions and additional instructions', async () => {
       mockProfile.customInstructions = 'Prefer functional programming patterns';
       const additionalInstructions = 'Always use TypeScript strict mode';
-      const prompt = await promptsManager.getSystemPrompt(mockSettings, mockTask, mockProfile, false, additionalInstructions);
+      const prompt = await promptsManager.getSystemPrompt(mockSettings, mockTask, mockProfile, undefined, additionalInstructions);
 
       expect(prompt).toContain('<DefaultSystemPrompt version="1.0">');
+    });
+
+    it('should use custom system prompt with compiled placeholders', async () => {
+      mockProfile.systemPrompt = 'Work in {{taskDir}} on {{projectDir}}. Date: {{currentDate}}. OS: {{osName}}.';
+      mockProfile.customInstructions = 'Prefer TypeScript';
+
+      const prompt = await promptsManager.getSystemPrompt(mockSettings, mockTask, mockProfile);
+
+      expect(prompt).toContain(`Work in ${mockTask.getTaskDir()} on ${mockTask.getProjectDir()}.`);
+      expect(prompt).toContain('OS: Test OS.');
+      expect(prompt).toContain('Prefer TypeScript');
+      expect(prompt).not.toContain('{{taskDir}}');
+      expect(prompt).not.toContain('{{projectDir}}');
+      expect(prompt).not.toContain('{{osName}}');
+      expect(prompt).not.toContain('<DefaultSystemPrompt');
+    });
+
+    it('should compile custom system prompt placeholders via compileCustomSystemPrompt', async () => {
+      const compiled = await promptsManager.compileCustomSystemPrompt(mockTask, 'Task: {{taskDir}}, Project: {{projectDir}}, Git: {{projectGitRootDirectory}}');
+
+      expect(compiled).toBe(`Task: ${mockTask.getTaskDir()}, Project: ${mockTask.getProjectDir()}, Git: `);
+      expect(compiled).not.toContain('{{');
+    });
+
+    it('should set projectGitRootDirectory when taskDir differs from projectDir', async () => {
+      mockTask.getTaskDir = vi.fn().mockReturnValue('/test/project/.aider-desk/tasks/abc/worktree');
+      mockTask.getProjectDir = vi.fn().mockReturnValue('/test/project');
+
+      const compiled = await promptsManager.compileCustomSystemPrompt(mockTask, 'Git root: {{projectGitRootDirectory}}');
+
+      expect(compiled).toBe('Git root: /test/project');
     });
   });
 
@@ -184,6 +216,7 @@ describe('Prompts with Handlebars', () => {
       const mockExtensionManager = createMockExtensionManager();
       const manager = new PromptsManager(
         mockExtensionManager,
+        { getSettings: () => ({ fileWatchMode: 'auto' }) } as any,
         path.join(__dirname, 'templates', 'default'),
         path.join(__dirname, 'templates', 'nonexistent-global'),
       );
@@ -218,6 +251,7 @@ describe('Prompts with Handlebars', () => {
 
       const manager = new PromptsManager(
         mockExtensionManager,
+        { getSettings: () => ({ fileWatchMode: 'auto' }) } as any,
         path.join(__dirname, 'templates', 'default'),
         path.join(__dirname, 'templates', 'nonexistent-global'),
       );
@@ -232,6 +266,7 @@ describe('Prompts with Handlebars', () => {
       const mockExtensionManager = createMockExtensionManager();
       const manager = new PromptsManager(
         mockExtensionManager,
+        { getSettings: () => ({ fileWatchMode: 'auto' }) } as any,
         path.join(__dirname, 'templates', 'default'),
         path.join(__dirname, 'templates', 'nonexistent-global'),
       );
@@ -284,7 +319,12 @@ describe('Prompts with Handlebars', () => {
       await fs.writeFile(path.join(tmpGlobalDir, 'task-name.hbs'), '# Global Task Name\nGlobal task name prompt - should override default.\n');
 
       // Create a new PromptsManager with the temporary global directory
-      promptsManagerWithGlobal = new PromptsManager(createMockExtensionManager(), path.join(__dirname, 'templates', 'default'), tmpGlobalDir);
+      promptsManagerWithGlobal = new PromptsManager(
+        createMockExtensionManager(),
+        { getSettings: () => ({ fileWatchMode: 'auto' }) } as any,
+        path.join(__dirname, 'templates', 'default'),
+        tmpGlobalDir,
+      );
       await promptsManagerWithGlobal.init();
     });
 
@@ -367,6 +407,7 @@ describe('Prompts with Handlebars', () => {
       // Create a prompts manager with a non-existent global directory
       promptsManagerNoGlobal = new PromptsManager(
         createMockExtensionManager(),
+        { getSettings: () => ({ fileWatchMode: 'auto' }) } as any,
         path.join(__dirname, 'templates', 'default'),
         path.join(__dirname, 'templates', 'nonexistent-global'),
       );

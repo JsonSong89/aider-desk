@@ -4,14 +4,15 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import {
   AgentProfile,
+  ContextAssistantMessage,
   ContextCompactionType,
   ContextFile,
   ContextMessage,
+  ContextToolMessage,
   ContextUserMessage,
   DefaultTaskState,
-  McpTool,
-  McpToolInputSchema,
   Mode,
+  ModelCallSettings,
   PromptContext,
   ProviderProfile,
   ToolApprovalState,
@@ -19,25 +20,23 @@ import {
 } from '@common/types';
 import {
   APICallError,
+  type FilePart,
   type FinishReason,
   generateText,
-  type ImagePart,
   InvalidToolInputError,
-  jsonSchema,
   type ModelMessage,
   NoSuchToolError,
+  Output,
   smoothStream,
   type StepResult,
   streamText,
-  type Tool,
-  type ToolCallOptions,
+  type TelemetryOptions,
+  type ToolExecutionOptions,
   type ToolSet,
   type TypedToolResult,
   wrapLanguageModel,
 } from 'ai';
-import { delay, extractProviderModel, extractServerNameToolName, extractTextContent } from '@common/utils';
-import { LlmProviderName } from '@common/agent';
-import { Client as McpSdkClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { extractProviderModel, extractServerNameToolName, extractTextContent } from '@common/utils';
 // @ts-expect-error istextorbinary is not typed properly
 import { isBinary } from 'istextorbinary';
 import { fileTypeFromBuffer } from 'file-type';
@@ -49,7 +48,6 @@ import {
   TASKS_TOOL_SEARCH_PARENT_TASK,
   TOOL_GROUP_NAME_SEPARATOR,
 } from '@common/tools';
-import { TextPart } from '@ai-sdk/provider-utils';
 
 import { createPowerToolset } from './tools/power';
 import { createTodoToolset } from './tools/todo';
@@ -58,21 +56,15 @@ import { createAiderToolset } from './tools/aider';
 import { createHelpersToolset } from './tools/helpers';
 import { createMemoryToolset } from './tools/memory';
 import { createSkillsToolset } from './tools/skills';
-import { MCP_CLIENT_TIMEOUT, McpConnector, McpManager } from './mcp-manager';
+import { McpManager } from './mcp-manager';
 import { ApprovalManager } from './tools/approval-manager';
-import {
-  ANSWER_RESPONSE_START_TAG,
-  estimateMessageTokens,
-  extractPromptContextFromToolResult,
-  findLastUserMessage,
-  isNetworkError,
-  readFileContent,
-  THINKING_RESPONSE_STAR_TAG,
-  truncateToolResult,
-} from './utils';
+import { estimateMessageTokens, extractPromptContextFromToolResult, findLastUserMessage, isNetworkError, readFileContent } from './utils';
 import { extractReasoningMiddleware } from './middlewares/extract-reasoning-middleware';
+import { CompactionLevel, generateCompactedSummary, getReloadableMessages, getSubagentOldResultIds, smartCompactMessages } from './compaction';
 
-import type { JSONSchema7Definition } from '@ai-sdk/provider';
+import type { TextPart } from '@ai-sdk/provider-utils';
+import type { z } from 'zod';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 
 import { MemoryManager } from '@/memory/memory-manager';
 import { PromptsManager } from '@/prompts';
@@ -92,7 +84,6 @@ const MAX_RETRIES = 3;
 
 export class Agent {
   private abortControllers: Map<string, AbortController> = new Map();
-  private lastToolCallTime: number = 0;
 
   constructor(
     private readonly store: Store,
@@ -105,9 +96,19 @@ export class Agent {
     private readonly extensionManager: ExtensionManager,
   ) {}
 
-  private async getFilesContentForPrompt(files: ContextFile[], task: Task): Promise<{ textFileContents: string[]; imageParts: (TextPart | ImagePart)[] }> {
+  private getTelemetrySettings(): TelemetryOptions {
+    return {
+      isEnabled: true,
+      metadata: {
+        // PostHog specific metadata
+        posthog_distinct_id: this.store.getUserId(),
+      },
+    } as TelemetryOptions;
+  }
+
+  private async getFilesContentForPrompt(files: ContextFile[], task: Task): Promise<{ textFileContents: string[]; imageParts: (TextPart | FilePart)[] }> {
     const textFileContents: string[] = [];
-    const imageParts: (TextPart | ImagePart)[] = [];
+    const imageParts: (TextPart | FilePart)[] = [];
 
     const fileInfos = await Promise.all(
       files.map(async (file) => {
@@ -181,9 +182,9 @@ export class Agent {
           text: `Here is image ${path.basename(file!.path)} for your reference.`,
         });
         imageParts.push({
-          type: 'image',
-          image: file!.imageBase64,
-          mediaType: file!.mimeType,
+          type: 'file',
+          data: file!.imageBase64,
+          mediaType: 'image',
         });
       } else if (!file!.isImage && file!.content) {
         // Add to textFileContents array
@@ -218,7 +219,7 @@ export class Agent {
         ([readOnly, editable], file) => (file.readOnly ? [[...readOnly, file], editable] : [readOnly, [...editable, file]]),
         [[], []] as [ContextFile[], ContextFile[]],
       );
-      const allImageParts: (TextPart | ImagePart)[] = [];
+      const allImageParts: (TextPart | FilePart)[] = [];
 
       // Process readonly files first
       if (readOnlyFiles.length > 0) {
@@ -285,7 +286,7 @@ export class Agent {
     const messages: ModelMessage[] = [];
 
     if (contextFiles.length > 0) {
-      const imageParts: (TextPart | ImagePart)[] = [];
+      const imageParts: (TextPart | FilePart)[] = [];
       const nonImageFiles: ContextFile[] = [];
 
       // Separate image files from non-image files
@@ -313,9 +314,9 @@ export class Agent {
                   text: `Here is image ${path.basename(file.path)} for your reference.`,
                 });
                 imageParts.push({
-                  type: 'image',
-                  image: imageBase64,
-                  mediaType: detected.mime,
+                  type: 'file',
+                  data: imageBase64,
+                  mediaType: 'image',
                 });
                 continue;
               }
@@ -338,15 +339,18 @@ export class Agent {
         logger.debug('Adding file list for non-image files', {
           files: nonImageFiles.map((f) => f.path),
         });
+        const hasReadOnlyFiles = nonImageFiles.some((file) => file.readOnly);
         const fileList = nonImageFiles
           .map((file) => {
-            return `- ${file.path}`;
+            return `- ${file.path}${file.readOnly ? ' (read-only)' : ''}`;
           })
           .join('\n');
 
+        const readOnlyNote = hasReadOnlyFiles ? '\n\nNote: Files marked as read-only must NOT be modified. Use them only for understanding context.' : '';
+
         messages.push({
           role: 'user',
-          content: `The following files are currently in the working context:\n\n${fileList}`,
+          content: `The following files are currently in the working context:\n\n${fileList}${readOnlyNote}`,
         });
         messages.push({
           role: 'assistant',
@@ -379,7 +383,6 @@ export class Agent {
     profile: AgentProfile,
     provider: ProviderProfile,
     model: string,
-    mcpConnectors: McpConnector[] = [],
     messages?: ContextMessage[],
     resultMessages?: ContextMessage[],
     abortSignal?: AbortSignal,
@@ -392,41 +395,18 @@ export class Agent {
 
     const approvalManager = new ApprovalManager(task, profile);
 
-    // Build the toolSet directly from enabled clients and tools
-    const toolSet: ToolSet = mcpConnectors.reduce((acc, mcpConnector) => {
-      // Skip if serverName is not in the profile's enabledServers
-      if (!profile.enabledServers.includes(mcpConnector.serverName)) {
-        return acc;
-      }
+    const toolSet: ToolSet = {};
 
-      // Process tools for this enabled server
-      mcpConnector.tools.forEach((tool) => {
-        const toolId = `${mcpConnector.serverName}${TOOL_GROUP_NAME_SEPARATOR}${tool.name}`;
-        const normalizedToolId = toolId.toLowerCase().replaceAll(/\s+/g, '_');
-
-        // Check approval state first from the profile
-        const approvalState = profile.toolApprovals[toolId];
-
-        // Skip tools marked as 'Never' approved
-        if (approvalState === ToolApprovalState.Never) {
-          logger.debug(`Skipping tool due to 'Never' approval state: ${toolId}`);
-          return; // Do not add the tool if it's never approved
-        }
-
-        acc[normalizedToolId] = this.convertMpcToolToAiSdkTool(
-          provider.provider.name,
-          mcpConnector.serverName,
-          task,
-          profile,
-          mcpConnector.client,
-          tool,
-          approvalManager,
-          promptContext,
-        );
-      });
-
-      return acc;
-    }, {} as ToolSet);
+    // MCP tools
+    const mcpTools = await this.mcpManager.createToolset(
+      task,
+      profile,
+      provider.provider.name,
+      this.store.getSettings().mcpServers,
+      approvalManager,
+      promptContext,
+    );
+    Object.assign(toolSet, mcpTools);
 
     if (profile.useAiderTools) {
       const aiderTools = createAiderToolset(task, profile, promptContext);
@@ -486,7 +466,7 @@ export class Agent {
 
     // Add extension tools
     if (this.extensionManager.isInitialized() && profile.useExtensionTools !== false) {
-      const extensionTools = this.extensionManager.createExtensionToolset(task, mode, profile, toolSet, abortSignal);
+      const extensionTools = this.extensionManager.createExtensionToolset(task, mode, profile, toolSet, approvalManager, abortSignal);
       Object.assign(toolSet, extensionTools);
     }
 
@@ -499,7 +479,7 @@ export class Agent {
     for (const [toolName, toolDef] of Object.entries(toolSet)) {
       wrappedToolSet[toolName] = {
         ...toolDef,
-        execute: async (input: Record<string, unknown> | undefined, options: ToolCallOptions) => {
+        execute: async (input: Record<string, unknown> | undefined, options: ToolExecutionOptions<unknown>) => {
           let effectiveInput = input as Record<string, unknown> | undefined;
           const [serverName, messageToolName] = extractServerNameToolName(toolName);
 
@@ -507,7 +487,7 @@ export class Agent {
 
           const toolCalledExtensionResult = await this.extensionManager.dispatchEvent(
             'onToolCalled',
-            { toolName, agentProfile: profile, input: effectiveInput, abortSignal: options.abortSignal || abortSignal },
+            { toolCallId: options.toolCallId, toolName, agentProfile: profile, input: effectiveInput, abortSignal: options.abortSignal || abortSignal },
             task.project,
             task,
           );
@@ -530,7 +510,7 @@ export class Agent {
 
           const toolFinishedExtensionResult = await this.extensionManager.dispatchEvent(
             'onToolFinished',
-            { toolName, agentProfile: profile, input: effectiveInput, output: result },
+            { toolCallId: options.toolCallId, toolName, agentProfile: profile, input: effectiveInput, output: result },
             task.project,
             task,
           );
@@ -547,203 +527,6 @@ export class Agent {
     return wrappedToolSet;
   }
 
-  private convertMpcToolToAiSdkTool(
-    providerName: LlmProviderName,
-    serverName: string,
-    task: Task,
-    profile: AgentProfile,
-    mcpClient: McpSdkClient,
-    toolDef: McpTool,
-    approvalManager: ApprovalManager,
-    promptContext?: PromptContext,
-  ): Tool {
-    const toolId = `${serverName}${TOOL_GROUP_NAME_SEPARATOR}${toolDef.name}`;
-
-    const execute = async (args: { [x: string]: unknown } | undefined, { toolCallId }: ToolCallOptions) => {
-      task.addToolMessage(toolCallId, serverName, toolDef.name, args, undefined, undefined, promptContext);
-
-      // --- Tool Approval Logic ---
-      const toolName = toolId;
-      const questionKey = toolId;
-      const questionText = `Approve tool ${toolDef.name} from ${serverName} MCP server?`;
-      const questionSubject = args ? JSON.stringify(args) : undefined;
-
-      const [isApproved, userInput] = await approvalManager.handleToolApproval(toolName, args, questionKey, questionText, questionSubject);
-
-      if (!isApproved) {
-        logger.warn(`Tool execution denied by user: ${toolId}`);
-        return `Tool execution denied by user.${userInput ? ` User input: ${userInput}` : ''}`;
-      }
-      logger.debug(`Tool execution approved: ${toolId}`);
-      // --- End Tool Approval Logic ---
-
-      // Enforce minimum time between tool calls
-      const timeSinceLastCall = Date.now() - this.lastToolCallTime;
-      const currentMinTime = profile.minTimeBetweenToolCalls;
-      const remainingDelay = currentMinTime - timeSinceLastCall;
-
-      if (remainingDelay > 0) {
-        logger.debug(`Delaying tool call by ${remainingDelay}ms to respect minTimeBetweenToolCalls (${currentMinTime}ms)`);
-        await delay(remainingDelay);
-      }
-
-      try {
-        const response = await mcpClient.callTool(
-          {
-            name: toolDef.name,
-            arguments: args,
-          },
-          undefined,
-          {
-            timeout: MCP_CLIENT_TIMEOUT,
-          },
-        );
-
-        logger.debug(`Tool ${toolDef.name} returned response`, { response });
-
-        // Truncate large text content in the response
-        if (response && typeof response === 'object' && 'content' in response && Array.isArray(response.content)) {
-          for (let i = 0; i < response.content.length; i++) {
-            const part = response.content[i];
-            if (part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string') {
-              part.text = await truncateToolResult(part.text);
-            }
-          }
-        }
-
-        // Update last tool call time
-        this.lastToolCallTime = Date.now();
-        return response;
-      } catch (error) {
-        logger.error(`Error calling tool ${serverName}${TOOL_GROUP_NAME_SEPARATOR}${toolDef.name}:`, error);
-        // Update last tool call time even if there's an error
-        this.lastToolCallTime = Date.now();
-        // Return an error message string to the agent
-        return `Error executing tool ${toolDef.name}: ${error instanceof Error ? error.message : String(error)}`;
-      }
-    };
-
-    logger.debug(`Converting MCP tool to AI SDK tool: ${toolDef.name}`, toolDef);
-    const inputSchema = this.fixInputSchema(providerName, toolDef.inputSchema);
-
-    return {
-      description: toolDef.description ?? '',
-      inputSchema: jsonSchema({
-        ...inputSchema,
-        properties: inputSchema.properties ? inputSchema.properties : {},
-        additionalProperties: false,
-      }),
-      execute,
-    };
-  }
-
-  /**
-   * Recursively strips unsupported JSON Schema 2019-09 keywords that are not
-   * recognized by some MCP servers (like gemini-cli).
-   */
-  private stripUnsupportedSchemaKeywords(schema: Record<string, unknown>): Record<string, unknown> {
-    // JSON Schema 2019-09 keywords to remove
-    const unsupportedKeywords = [
-      'propertyNames',
-      'unevaluatedProperties',
-      'dependentSchemas',
-      'dependentRequired',
-      'contains',
-      'contentMediaType',
-      'contentEncoding',
-      'examples',
-      '$defs',
-      '$anchor',
-      '$recursiveRef',
-      '$recursiveAnchor',
-    ];
-
-    // Recursive helper to process schema objects
-    const processObject = (obj: Record<string, unknown>): Record<string, unknown> => {
-      const result: Record<string, unknown> = {};
-
-      for (const [key, value] of Object.entries(obj)) {
-        // Skip unsupported keywords
-        if (unsupportedKeywords.includes(key)) {
-          continue;
-        }
-
-        // Recursively process objects
-        if (value !== null && typeof value === 'object') {
-          if (Array.isArray(value)) {
-            // Process arrays (e.g., anyOf, oneOf, allOf, enum items)
-            result[key] = value.map((item) => (item !== null && typeof item === 'object' ? processObject(item as Record<string, unknown>) : item));
-          } else {
-            // Process nested objects (e.g., properties, items, additionalProperties)
-            result[key] = processObject(value as Record<string, unknown>);
-          }
-        } else {
-          result[key] = value;
-        }
-      }
-
-      return result;
-    };
-
-    return processObject(schema);
-  }
-
-  private fixInputSchema(provider: LlmProviderName, inputSchema: McpToolInputSchema): McpToolInputSchema {
-    if (provider === 'gemini' || provider === 'gemini-cli') {
-      // Deep clone to avoid modifying the original schema
-      const fixedSchema = JSON.parse(JSON.stringify(inputSchema));
-
-      // First, strip JSON Schema 2019-09 keywords that are not supported
-      const strippedSchema = this.stripUnsupportedSchemaKeywords(fixedSchema) as unknown as McpToolInputSchema;
-
-      if (strippedSchema.properties) {
-        for (const key of Object.keys(strippedSchema.properties)) {
-          let property = strippedSchema.properties[key] as Record<string, unknown>;
-
-          // Gemini requires that when any_of/one_of/all_of is present,
-          // it must be the ONLY field in the property
-          if (property.anyOf) {
-            property = { any_of: property.anyOf };
-            strippedSchema.properties[key] = property as JSONSchema7Definition;
-          } else if (property.oneOf) {
-            property = { one_of: property.oneOf };
-            strippedSchema.properties[key] = property as JSONSchema7Definition;
-          } else if (property.allOf) {
-            property = { all_of: property.allOf };
-            strippedSchema.properties[key] = property as JSONSchema7Definition;
-          } else {
-            // gemini does not like "default" in the schema
-            if (property.default !== undefined) {
-              delete property.default;
-            }
-
-            if (property.type === 'string' && property.format && !['enum', 'date-time'].includes(property.format as string)) {
-              logger.debug(`Removing unsupported format '${property.format}' for property '${key}' in Gemini schema`);
-              delete property.format;
-            }
-
-            if (!property.type || property.type === 'null') {
-              property.type = 'string';
-            }
-          }
-        }
-        if (Object.keys(strippedSchema.properties).length === 0) {
-          // gemini requires at least one property in the schema
-          strippedSchema.properties = {
-            placeholder: {
-              type: 'string',
-              description: 'Placeholder property to satisfy Gemini schema requirements',
-            },
-          };
-        }
-      }
-
-      return strippedSchema;
-    }
-
-    return inputSchema;
-  }
-
   async runAgent(
     task: Task,
     profile: AgentProfile,
@@ -756,6 +539,7 @@ export class Agent {
     includeInContext = true,
     abortSignal?: AbortSignal,
     images?: string[],
+    skillsToActivate?: string[],
   ): Promise<ContextMessage[]> {
     let contextMessages = initialContextMessages ?? (await task.getContextMessages());
     let contextFiles = initialContextFiles ?? (await task.getContextFiles());
@@ -764,53 +548,16 @@ export class Agent {
       systemPrompt = await this.promptsManager.getSystemPrompt(this.store.getSettings(), task, profile);
     }
 
-    const userRequestMessage: ContextUserMessage | null = prompt
-      ? {
-          id: promptContext?.id || uuidv4(),
-          role: 'user',
-          content:
-            images && images.length > 0
-              ? [
-                  { type: 'text' as const, text: prompt },
-                  ...images.map((dataUrl) => {
-                    const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
-                    return {
-                      type: 'image' as const,
-                      image: match ? match[2] : dataUrl,
-                      mediaType: match ? match[1] : undefined,
-                    };
-                  }),
-                ]
-              : prompt,
-          promptContext,
-        }
-      : null;
-
-    if (userRequestMessage) {
-      logger.info('User request message created:', {
-        id: userRequestMessage.id,
-        contentType: typeof userRequestMessage.content === 'string' ? 'string' : 'parts',
-        ...(typeof userRequestMessage.content === 'string'
-          ? { contentPreview: userRequestMessage.content.substring(0, 200) }
-          : {
-              parts: (userRequestMessage.content as Array<{ type: string; text?: string; mediaType?: string; image?: string }>).map((part) => ({
-                type: part.type,
-                ...(part.type === 'text' ? { textPreview: part.text?.substring(0, 100) } : {}),
-                ...(part.type === 'image'
-                  ? { mediaType: part.mediaType, imagePreview: typeof part.image === 'string' ? part.image.substring(0, 80) : typeof part.image }
-                  : {}),
-              })),
-            }),
-      });
-    }
-
     const settings = this.store.getSettings();
     const projectProfiles = this.agentProfileManager.getProjectProfiles(task.project);
-    let resultMessages: ContextMessage[] = userRequestMessage ? [userRequestMessage] : [];
-
     const providers = this.modelManager.getProviders();
+
     let provider = providers.find((p) => p.id === profile.provider);
     let modelName = profile.model;
+    let modelCallSettings: ModelCallSettings = {
+      maxRetries: MAX_RETRIES,
+      abortSignal,
+    };
 
     if (provider) {
       const extensionResult = await this.extensionManager.dispatchEvent(
@@ -825,6 +572,9 @@ export class Agent {
           contextMessages,
           contextFiles,
           systemPrompt,
+          images,
+          skillsToActivate,
+          modelCallSettings,
         },
         task.project,
         task,
@@ -841,11 +591,78 @@ export class Agent {
       contextMessages = extensionResult.contextMessages;
       contextFiles = extensionResult.contextFiles;
       systemPrompt = extensionResult.systemPrompt;
+      images = extensionResult.images ?? images;
+      skillsToActivate = extensionResult.skillsToActivate;
+      modelCallSettings = {
+        ...modelCallSettings,
+        ...extensionResult.modelCallSettings,
+      };
     }
+
+    const userRequestMessage: ContextUserMessage | null = prompt
+      ? {
+          id: promptContext?.id || uuidv4(),
+          role: 'user',
+          content:
+            images && images.length > 0
+              ? [
+                  { type: 'text' as const, text: prompt },
+                  ...images.map((dataUrl) => {
+                    const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+                    return {
+                      type: 'file' as const,
+                      data: match ? match[2] : dataUrl,
+                      mediaType: match ? match[1] : 'image/png',
+                    };
+                  }),
+                ]
+              : prompt,
+          promptContext,
+          timestamp: Date.now(),
+        }
+      : null;
+
+    if (userRequestMessage) {
+      logger.info('User request message created:', {
+        id: userRequestMessage.id,
+        contentType: typeof userRequestMessage.content === 'string' ? 'string' : 'parts',
+        ...(typeof userRequestMessage.content === 'string'
+          ? { contentPreview: userRequestMessage.content.substring(0, 200) }
+          : {
+              parts: (userRequestMessage.content as Array<{ type: string; text?: string; mediaType?: string; data?: string }>).map((part) => ({
+                type: part.type,
+                ...(part.type === 'text' ? { textPreview: part.text?.substring(0, 100) } : {}),
+                ...(part.type === 'file'
+                  ? { mediaType: part.mediaType, dataPreview: typeof part.data === 'string' ? part.data.substring(0, 80) : typeof part.data }
+                  : {}),
+              })),
+            }),
+      });
+    }
+
+    let resultMessages: ContextMessage[] = userRequestMessage ? [userRequestMessage] : [];
 
     if (userRequestMessage && includeInContext) {
       await task.addContextMessage(userRequestMessage);
     }
+
+    // Activate skills after the user message is persisted to context so the
+    // agent sees: [history -> user message -> skill activation] and doesn't
+    // re-activate them itself.
+    if (skillsToActivate && skillsToActivate.length > 0) {
+      try {
+        const skillMessages = await task.createSkillMessages(...skillsToActivate);
+        if (skillMessages) {
+          for (const message of skillMessages) {
+            await task.addContextMessage(message);
+            resultMessages.push(message);
+          }
+        }
+      } catch (error) {
+        logger.warn(`Failed to activate skills: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     if (!provider) {
       logger.error(`Provider ${profile.provider} not found`);
       task.addLogMessage('error', 'Selected model is not configured. Select another model and try again.', true, promptContext);
@@ -867,8 +684,7 @@ export class Agent {
       systemPrompt: systemPrompt?.substring(0, 100),
     });
 
-    // Create new abort controller for this run only if abortSignal is not provided
-    const shouldCreateAbortController = !abortSignal;
+    const shouldCreateAbortController = !modelCallSettings.abortSignal;
     let controllerId: string | null = null;
 
     if (shouldCreateAbortController) {
@@ -880,11 +696,10 @@ export class Agent {
       const newController = new AbortController();
       this.abortControllers.set(controllerId, newController);
     }
-    const effectiveAbortSignal = abortSignal || (controllerId ? this.abortControllers.get(controllerId)?.signal : undefined);
-
+    const effectiveAbortSignal = modelCallSettings.abortSignal || (controllerId ? this.abortControllers.get(controllerId)?.signal : undefined);
     const cacheControl = this.modelManager.getCacheControl(provider, modelName);
-    const providerOptions = this.modelManager.getProviderOptions(provider, modelName);
-    const providerParameters = this.modelManager.getProviderParameters(provider, modelName);
+    const providerParameters = this.modelManager.getProviderParameters(provider, modelName, modelCallSettings.reasoning);
+    const providerOptions = this.modelManager.getProviderOptions(provider, modelName, modelCallSettings?.reasoning);
 
     const firstUserMessage = contextMessages.length > 0 ? contextMessages[0] : null;
     let messages = await this.prepareMessages(task, profile, contextMessages, contextFiles);
@@ -892,38 +707,13 @@ export class Agent {
       ? messages.findIndex((message) => message.role === 'user' && message.content === firstUserMessage.content)
       : messages.length;
 
-    // add user message
-    messages.push(...resultMessages);
+    // add user message and skill activation messages (skills right after the
+    // user message so the agent sees them already active and doesn't
+    // re-activate them itself)
+    messages.push(...(resultMessages as ModelMessage[]));
 
     // Normalize messages for provider-specific requirements
     messages = this.modelManager.normalizeMessages(provider, modelName, messages);
-
-    let mcpConnectors: McpConnector[] = [];
-    try {
-      // Lazily initialize MCP clients for the current task
-      const initStartTime = Date.now();
-      let loadingMessageShown = false;
-
-      const loadingTimeout = setTimeout(() => {
-        loadingMessageShown = true;
-        task.addLogMessage('loading', 'Initializing MCP servers...', false, promptContext);
-      }, 3000);
-
-      try {
-        mcpConnectors = await this.mcpManager.initMcpConnectors(settings.mcpServers, task.getProjectDir(), task.getTaskDir(), false, profile.enabledServers);
-      } finally {
-        clearTimeout(loadingTimeout);
-        if (loadingMessageShown) {
-          task.addLogMessage('loading', undefined, false, promptContext);
-        }
-      }
-
-      const initTime = Date.now() - initStartTime;
-      logger.debug(`MCP servers initialized in ${initTime}ms`);
-    } catch (error) {
-      logger.error('Error initializing MCP clients:', error);
-      task.addLogMessage('error', `Error initializing MCP clients: ${error}`, false, promptContext);
-    }
 
     if (effectiveAbortSignal?.aborted) {
       logger.debug('Prompt aborted by user (before Agent run)');
@@ -936,7 +726,6 @@ export class Agent {
       profile,
       provider,
       modelName,
-      mcpConnectors,
       contextMessages,
       resultMessages,
       effectiveAbortSignal,
@@ -968,7 +757,7 @@ export class Agent {
         task.task.lastAgentProviderMetadata,
       );
       logger.debug('LLM model created successfully', {
-        model: model.modelId,
+        model: typeof model !== 'string' ? model.modelId : model,
       });
 
       // repairToolCall function that attempts to repair tool calls
@@ -1068,7 +857,7 @@ export class Agent {
       const effectiveMaxOutputTokens = profile.maxTokens ?? modelSettings?.maxOutputTokens;
 
       logger.debug('Parameters:', {
-        model: model.modelId,
+        model: typeof model !== 'string' ? model.modelId : model,
         temperature: effectiveTemperature,
         maxOutputTokens: effectiveMaxOutputTokens,
         minTimeBetweenToolCalls: profile.minTimeBetweenToolCalls,
@@ -1103,58 +892,24 @@ export class Agent {
 
         const optimizedMessages = await getOptimizedMessages();
 
-        logger.info('Optimized messages for LLM:', {
-          count: optimizedMessages.length,
-          lastUserMessage: (() => {
-            for (let i = optimizedMessages.length - 1; i >= 0; i--) {
-              if (optimizedMessages[i].role === 'user') {
-                const msg = optimizedMessages[i];
-                return {
-                  index: i,
-                  contentType: typeof msg.content,
-                  contentIsArray: Array.isArray(msg.content),
-                  contentPreview:
-                    typeof msg.content === 'string'
-                      ? msg.content.substring(0, 200)
-                      : Array.isArray(msg.content)
-                        ? (msg.content as Array<{ type: string; text?: string; image?: string; mediaType?: string }>).map((p) => ({
-                            type: p.type,
-                            ...(p.type === 'text' ? { textPreview: p.text?.substring(0, 100) } : {}),
-                            ...(p.type === 'image'
-                              ? {
-                                  mediaType: p.mediaType,
-                                  imageType: typeof p.image,
-                                  imagePreview: typeof p.image === 'string' ? p.image.substring(0, 80) : undefined,
-                                }
-                              : {}),
-                          }))
-                        : String(msg.content).substring(0, 200),
-                };
-              }
-            }
-            return null;
-          })(),
-        });
-
         return {
           providerOptions,
           model: wrapLanguageModel({
-            model,
+            model: model as LanguageModelV4,
             middleware: extractReasoningMiddleware({
               tagName: 'think',
             }),
           }),
-          system: systemPrompt,
+          instructions: systemPrompt,
           messages: optimizedMessages,
           tools: toolSet,
-          abortSignal: effectiveAbortSignal,
           maxOutputTokens: effectiveMaxOutputTokens,
-          maxRetries: 5,
+          maxRetries: MAX_RETRIES,
           temperature: effectiveTemperature,
-          experimental_telemetry: {
-            isEnabled: true,
-          },
+          telemetry: this.getTelemetrySettings(),
+          ...modelCallSettings,
           ...providerParameters,
+          abortSignal: effectiveAbortSignal,
         };
       };
 
@@ -1162,10 +917,10 @@ export class Agent {
       let retryCount = 0;
 
       while (true) {
-        logger.info(`Starting iteration ${iterationCount}`);
+        logger.info(`Starting iteration ${iterationCount}`, { task: task.taskId });
         iterationCount++;
 
-        if (iterationCount > profile.maxIterations) {
+        if (profile.maxIterations > 0 && iterationCount > profile.maxIterations) {
           logger.warn(`Max iterations (${profile.maxIterations}) reached. Stopping agent.`);
           task.addLogMessage(
             'warning',
@@ -1177,12 +932,11 @@ export class Agent {
         }
 
         let iterationError: unknown | null = null;
-        let hasReasoning: boolean = false;
         let finishReason: null | FinishReason = null;
         let currentStepMessages: ContextMessage[] = [];
         let responseMessageIndex: number = 0;
 
-        const onStepFinish = async (stepResult: StepResult<typeof toolSet>) => {
+        const onStepEnd = async (stepResult: StepResult<typeof toolSet>) => {
           finishReason = stepResult.finishReason;
 
           if (finishReason === 'error') {
@@ -1195,7 +949,7 @@ export class Agent {
             return;
           }
 
-          currentStepMessages = await this.processStep(currentResponseId, stepResult, task, provider, modelName, promptContext, abortSignal);
+          currentStepMessages = await this.processStep(currentResponseId, stepResult, task, provider, modelName, promptContext, effectiveAbortSignal);
           const extensionResult = await this.extensionManager.dispatchEvent(
             'onAgentStepFinished',
             {
@@ -1214,7 +968,6 @@ export class Agent {
 
           currentResponseId = uuidv4();
           responseMessageIndex = 0;
-          hasReasoning = false;
           streamingMessageIds.clear();
 
           if (currentStepMessages.length > 0) {
@@ -1236,7 +989,7 @@ export class Agent {
           task,
         );
         if (extensionStepStartedResult.messages) {
-          messages = extensionStepStartedResult.messages;
+          messages = extensionStepStartedResult.messages as ModelMessage[];
         }
 
         const shouldContinue = await this.compactMessagesIfNeeded(
@@ -1265,11 +1018,12 @@ export class Agent {
           logger.debug('Streaming disabled, using generateText');
           await generateText({
             ...(await getBaseModelCallParams()),
-            onStepFinish,
+            onStepEnd,
             experimental_repairToolCall: repairToolCall,
           });
         } else {
           logger.debug('Streaming enabled, using streamText');
+          const toolCallStreamingDisabled = this.modelManager.isToolCallStreamingDisabled(provider, modelName);
           const result = streamText({
             ...(await getBaseModelCallParams()),
             experimental_transform: smoothStream({
@@ -1294,29 +1048,21 @@ export class Agent {
                 task.addLogMessage('error', JSON.stringify(error), false, promptContext);
               }
             },
-            onStepFinish,
+            onStepEnd,
             experimental_repairToolCall: repairToolCall,
           });
 
+          let currentMessageHasReasoning = false;
           try {
-            for await (const chunk of result.fullStream) {
-              logger.debug('Chunk:', { chunk: chunk.type, responseMessageIndex });
+            for await (const chunk of result.stream) {
+              logger.debug('Chunk:', { chunk, responseMessageIndex });
 
               const responseMessageId = responseMessageIndex > 0 ? `${currentResponseId}-${responseMessageIndex}` : currentResponseId;
               if (chunk.type === 'text-start') {
-                if (hasReasoning) {
-                  streamingMessageIds.add(responseMessageId);
-                  await task.processResponseMessage({
-                    id: responseMessageId,
-                    action: 'response',
-                    content: ANSWER_RESPONSE_START_TAG,
-                    finished: false,
-                    promptContext,
-                  });
-                  hasReasoning = false;
-                }
+                // no-op
               } else if (chunk.type === 'text-end') {
                 responseMessageIndex++;
+                currentMessageHasReasoning = false;
               } else if (chunk.type === 'text-delta') {
                 if (chunk.text.trim()) {
                   streamingMessageIds.add(responseMessageId);
@@ -1330,26 +1076,45 @@ export class Agent {
                 }
               } else if (chunk.type === 'reasoning-start') {
                 streamingMessageIds.add(responseMessageId);
-                await task.processResponseMessage({
-                  id: responseMessageId,
-                  action: 'response',
-                  content: THINKING_RESPONSE_STAR_TAG,
-                  finished: false,
-                  promptContext,
-                });
-                hasReasoning = true;
+                if (currentMessageHasReasoning) {
+                  await task.processResponseMessage({
+                    id: responseMessageId,
+                    action: 'response',
+                    content: '',
+                    reasoning: '\n\n',
+                    finished: false,
+                    promptContext,
+                  });
+                }
               } else if (chunk.type === 'reasoning-delta') {
                 streamingMessageIds.add(responseMessageId);
+                currentMessageHasReasoning = true;
                 await task.processResponseMessage({
                   id: responseMessageId,
                   action: 'response',
-                  content: chunk.text,
+                  content: '',
+                  reasoning: chunk.text,
                   finished: false,
                   promptContext,
                 });
               } else if (chunk.type === 'tool-input-start') {
+                if (toolCallStreamingDisabled) {
+                  continue;
+                }
+                const [serverName, toolName] = extractServerNameToolName(chunk.toolName);
+                task.startToolInput(chunk.id, serverName, toolName, promptContext);
                 task.addLogMessage('loading', 'Preparing tool...', false, promptContext);
                 streamingMessageIds.add(chunk.id);
+              } else if (chunk.type === 'tool-input-delta') {
+                if (toolCallStreamingDisabled) {
+                  continue;
+                }
+                task.processToolInputDelta(chunk.id, chunk.delta);
+              } else if (chunk.type === 'tool-input-end') {
+                if (toolCallStreamingDisabled) {
+                  continue;
+                }
+                task.finishToolInput(chunk.id);
               } else if (chunk.type === 'tool-call') {
                 task.addLogMessage('loading', 'Executing tool...', false, promptContext);
                 streamingMessageIds.add(chunk.toolCallId);
@@ -1391,18 +1156,22 @@ export class Agent {
           } else if (
             iterationError instanceof APICallError &&
             iterationError.isRetryable &&
+            retryCount < MAX_RETRIES &&
             this.modelManager.isRetryable(resolvedProvider, modelName, iterationError)
           ) {
             // try again
+            retryCount++;
             continue;
           } else {
-            // stop
+            await task.updateTask({
+              state: DefaultTaskState.Interrupted,
+            });
             break;
           }
         }
 
         const newMessages = this.filterResultMessages(currentStepMessages);
-        messages.push(...currentStepMessages);
+        messages.push(...(currentStepMessages as ModelMessage[]));
         resultMessages.push(...newMessages);
 
         if (includeInContext) {
@@ -1427,7 +1196,7 @@ export class Agent {
           break;
         }
 
-        if ((finishReason === 'unknown' || finishReason === 'other' || !finishReason) && retryCount < MAX_RETRIES) {
+        if ((finishReason === 'other' || !finishReason) && retryCount < MAX_RETRIES) {
           logger.debug(`Finish reason is "${finishReason}". Retrying...`);
           retryCount++;
           continue;
@@ -1528,7 +1297,7 @@ export class Agent {
 
     return resultMessages.reduce<ContextMessage[]>((acc, message) => {
       if (message.role === 'tool') {
-        const nonHelpersContent = message.content.filter((part) => !part.toolName.startsWith(helpersPrefix));
+        const nonHelpersContent = message.content.filter((part) => part.type === 'tool-result' && !part.toolName.startsWith(helpersPrefix));
         if (nonHelpersContent.length === 0) {
           // All content parts are helpers — drop the message entirely
           return acc;
@@ -1745,7 +1514,7 @@ export class Agent {
     return messages;
   }
 
-  private async prepareMessages(task: Task, profile: AgentProfile, contextMessages: ModelMessage[], contextFiles: ContextFile[]): Promise<ModelMessage[]> {
+  private async prepareMessages(task: Task, profile: AgentProfile, contextMessages: ContextMessage[], contextFiles: ContextFile[]): Promise<ModelMessage[]> {
     const messages: ModelMessage[] = [];
 
     // Add repo map if enabled
@@ -1767,13 +1536,13 @@ export class Agent {
     if (profile.includeContextFiles) {
       const contextFilesMessages = await this.getContextFilesAsToolCallMessages(task, profile, contextFiles);
       // Add message history before context files
-      messages.push(...contextMessages);
+      messages.push(...(contextMessages as ModelMessage[]));
       messages.push(...contextFilesMessages);
     } else {
       const workingFilesMessages = await this.getWorkingFilesMessages(task, contextFiles);
       messages.push(...workingFilesMessages);
       // Add message history after working files
-      messages.push(...contextMessages);
+      messages.push(...(contextMessages as ModelMessage[]));
     }
 
     return messages;
@@ -1825,11 +1594,12 @@ export class Agent {
     try {
       const result = await generateText({
         model,
-        system: systemPrompt,
-        messages: await optimizeMessages(messages, cacheControl),
+        instructions: systemPrompt,
+        messages: await optimizeMessages(messages as ModelMessage[], cacheControl),
         abortSignal: effectiveAbortSignal,
         providerOptions,
         ...providerParameters,
+        telemetry: this.getTelemetrySettings(),
       });
 
       return result.text;
@@ -1839,6 +1609,78 @@ export class Agent {
         return undefined;
       }
       logger.error('Error generating text:', error);
+      throw error;
+    } finally {
+      if (newController) {
+        logger.debug('Cleaned up abort controller', { controllerId });
+        this.abortControllers.delete(controllerId);
+      }
+    }
+  }
+
+  async generateObject<T>(
+    modelId: string,
+    systemPrompt: string,
+    prompt: string,
+    schema: z.ZodType<T>,
+    projectDir: string,
+    messages: ContextMessage[] = [],
+    abortable = true,
+    abortSignal?: AbortSignal,
+  ): Promise<T | undefined> {
+    const [providerId, modelName] = extractProviderModel(modelId);
+    const providers = this.modelManager.getProviders();
+    const provider = providers.find((p) => p.id === providerId);
+    if (!provider) {
+      throw new Error(`Provider ${providerId} not found`);
+    }
+
+    const settings = this.store.getSettings();
+    const model = await this.modelManager.createLlm(provider, modelName, settings, projectDir, undefined, systemPrompt, undefined);
+    const cacheControl = this.modelManager.getCacheControl(provider, modelName);
+    const providerOptions = this.modelManager.getProviderOptions(provider, modelName);
+    const providerParameters = this.modelManager.getProviderParameters(provider, modelName);
+
+    const controllerId = uuidv4();
+    const newController = abortable ? new AbortController() : null;
+    if (newController) {
+      this.abortControllers.set(controllerId, newController);
+    }
+    const effectiveAbortSignal = abortSignal || newController?.signal;
+
+    logger.info('Generating object:', {
+      providerId: provider.id,
+      providerName: provider.provider.name,
+      modelName,
+      systemPrompt: systemPrompt.substring(0, 100),
+      prompt: prompt.substring(0, 100),
+    });
+
+    messages.push({
+      id: uuidv4(),
+      role: 'user',
+      content: prompt,
+    });
+
+    try {
+      const result = await generateText({
+        model,
+        output: Output.object({ schema }),
+        instructions: systemPrompt,
+        messages: await optimizeMessages(messages as ModelMessage[], cacheControl),
+        abortSignal: effectiveAbortSignal,
+        providerOptions,
+        ...providerParameters,
+        telemetry: this.getTelemetrySettings(),
+      });
+
+      return result.output as T;
+    } catch (error) {
+      if (effectiveAbortSignal?.aborted) {
+        logger.info('Generating object aborted by user');
+        return undefined;
+      }
+      logger.error('Error generating object:', error);
       throw error;
     } finally {
       if (newController) {
@@ -1927,14 +1769,14 @@ export class Agent {
 
   private async processStep<TOOLS extends ToolSet>(
     currentResponseId: string,
-    { content, reasoningText, text, toolCalls, toolResults, finishReason, usage, providerMetadata, response }: StepResult<TOOLS>,
+    { content, reasoningText, text, toolCalls, toolResults, finishReason, rawFinishReason, usage, providerMetadata, response }: StepResult<TOOLS>,
     task: Task,
     provider: ProviderProfile,
     model: string,
     promptContext?: PromptContext,
     abortSignal?: AbortSignal,
   ): Promise<ContextMessage[]> {
-    logger.info(`Step finished. Reason: ${finishReason}`, {
+    logger.info(`Step finished. Reason: ${finishReason} (${rawFinishReason})`, {
       currentResponseId,
       reasoningText: reasoningText?.substring(0, 100), // Log truncated reasoning
       text: text?.substring(0, 100), // Log truncated text
@@ -1943,6 +1785,7 @@ export class Agent {
       usage,
       providerMetadata,
       promptContext,
+      contentLength: content.length,
     });
 
     const messages: ContextMessage[] = [];
@@ -1952,77 +1795,113 @@ export class Agent {
       await task.updateTask({ lastAgentProviderMetadata: providerMetadata });
     }
 
-    let responseMessageIndex: number = 0;
+    const hasAssistantMessage = content.some((part) => (part.type === 'text' || part.type === 'reasoning') && part.text?.trim());
 
-    const processToolResult = (toolResult: TypedToolResult<TOOLS>) => {
+    let responseMessageIndex: number = 0;
+    let localReasoningText: string | undefined;
+    let localText: string | undefined;
+
+    const processToolResult = (toolResult: TypedToolResult<TOOLS>, isLast: boolean) => {
       const [serverName, toolName] = extractServerNameToolName(toolResult.toolName);
       const toolPromptContext = extractPromptContextFromToolResult(toolResult.output) ?? promptContext;
 
       // Update the existing tool message with the result
-      task.addToolMessage(toolResult.toolCallId, serverName, toolName, toolResult.input, JSON.stringify(toolResult.output), undefined, toolPromptContext);
+      // Only attach usage report to the last tool message when there is no assistant message
+      task.addToolMessage(
+        toolResult.toolCallId,
+        serverName,
+        toolName,
+        toolResult.input,
+        JSON.stringify(toolResult.output),
+        !hasAssistantMessage && isLast ? usageReport : undefined,
+        toolPromptContext,
+      );
     };
 
     for (let i = 0; i < content.length; i++) {
-      let part = content[i];
+      const part = content[i];
       if (part.type === 'reasoning') {
-        reasoningText = part.text;
-        // move to the next one right away
-        part = content[++i];
+        if (localReasoningText) {
+          localReasoningText += '\n\n' + part.text;
+        } else {
+          localReasoningText = part.text;
+        }
+        continue;
       }
-      if (part?.type === 'text') {
-        text = part.text;
+      if (part.type === 'text') {
+        localText = part.text;
       }
 
-      if (text || reasoningText) {
+      if (localText || localReasoningText) {
         const message: ResponseMessage = {
           id: responseMessageIndex > 0 ? `${currentResponseId}-${responseMessageIndex}` : currentResponseId,
           action: 'response',
-          content: reasoningText?.trim() ? `${THINKING_RESPONSE_STAR_TAG}${reasoningText.trim()}${ANSWER_RESPONSE_START_TAG}${text.trim()}` : text,
+          content: localText || '',
+          reasoning: localReasoningText?.trim() || undefined,
           finished: true,
-          usageReport,
+          usageReport: hasAssistantMessage ? usageReport : undefined,
           promptContext,
         };
         await task.processResponseMessage(message);
 
-        text = '';
-        reasoningText = undefined;
+        localText = undefined;
+        localReasoningText = undefined;
         responseMessageIndex++;
       }
 
-      if (part?.type === 'tool-result') {
+      if (part.type === 'tool-result') {
         const toolResult = toolResults.find((toolResult) => toolResult.toolCallId === part.toolCallId);
         if (toolResult) {
           toolResults = toolResults.filter((toolResult) => toolResult.toolCallId !== part.toolCallId);
-          processToolResult(toolResult);
+          processToolResult(toolResult, i === content.length - 1 && toolResults.length === 0);
         }
       }
+    }
+
+    if (localReasoningText) {
+      const message: ResponseMessage = {
+        id: responseMessageIndex > 0 ? `${currentResponseId}-${responseMessageIndex}` : currentResponseId,
+        action: 'response',
+        content: '',
+        reasoning: localReasoningText.trim() || undefined,
+        finished: true,
+        usageReport: hasAssistantMessage ? usageReport : undefined,
+        promptContext,
+      };
+      await task.processResponseMessage(message);
+      localReasoningText = undefined;
     }
 
     // Process successful tool results *after* sending text/reasoning and handling errors
     for (let i = 0; i < toolResults.length; i++) {
       const toolResult = toolResults[i];
-      processToolResult(toolResult);
+      processToolResult(toolResult, i === toolResults.length - 1);
     }
 
     if (!abortSignal?.aborted) {
       task.addLogMessage('loading', undefined, false, promptContext);
     }
 
+    const lastToolMessage = response.messages.findLast((m) => m.role === 'tool');
+
     response.messages.forEach((message) => {
       if (message.role === 'assistant') {
         messages.push({
           ...message,
           id: currentResponseId,
-          usageReport,
+          usageReport: hasAssistantMessage ? usageReport : undefined,
           promptContext,
-        });
+          timestamp: Date.now(),
+        } as ContextAssistantMessage);
       } else if (message.role === 'tool') {
         messages.push({
           ...message,
           // @ts-expect-error the id is there
           id: message.id || uuidv4(),
           promptContext,
-        });
+          usageReport: !hasAssistantMessage && message === lastToolMessage ? usageReport : undefined,
+          timestamp: Date.now(),
+        } as ContextToolMessage);
       }
     });
 
@@ -2050,8 +1929,8 @@ export class Agent {
     const taskTokensOverride = task.task.contextCompactingThresholdTokens;
     let contextCompactionType = profile.autoCompactionType ?? taskSettings.contextCompactionType ?? ContextCompactionType.Compact;
     if (profile.isSubagent && contextCompactionType === ContextCompactionType.Handoff) {
-      // subagent cannot use Handoff, so we fallback to Compact
-      contextCompactionType = ContextCompactionType.Compact;
+      // subagent cannot use Handoff, so we fallback to Smart compaction
+      contextCompactionType = ContextCompactionType.Smart;
     }
 
     logger.debug('Compaction threshold', {
@@ -2067,8 +1946,8 @@ export class Agent {
       contextCompactionType,
     });
 
-    const lastAssistantMessage = [...resultMessages].reverse().find((m) => m.role === 'assistant');
-    const usageReport = lastAssistantMessage?.usageReport;
+    const lastUsageReportMessage = [...resultMessages].reverse().find((m) => (m.role === 'assistant' || m.role === 'tool') && m.usageReport);
+    const usageReport = lastUsageReportMessage?.usageReport;
     const maxTokens = this.modelManager.getModelSettings(provider.id, model)?.maxInputTokens;
 
     if (!usageReport || !maxTokens) {
@@ -2084,10 +1963,7 @@ export class Agent {
     let effectiveThreshold: number;
     let thresholdDescription: string;
 
-    if (taskTokensOverride !== undefined) {
-      if (taskTokensOverride === 0) {
-        return true;
-      }
+    if (taskTokensOverride !== undefined && taskTokensOverride > 0) {
       effectiveThreshold = taskTokensOverride;
       thresholdDescription = `task override: ${taskTokensOverride}`;
     } else {
@@ -2096,7 +1972,11 @@ export class Agent {
       }
       const percentageThreshold = (maxTokens * thresholdConfig.percentage) / 100;
       const tokenThreshold = thresholdConfig.tokens;
-      effectiveThreshold = Math.min(percentageThreshold, tokenThreshold);
+      if (tokenThreshold > 0) {
+        effectiveThreshold = Math.min(percentageThreshold, tokenThreshold);
+      } else {
+        effectiveThreshold = percentageThreshold;
+      }
       thresholdDescription = `percentage: ${percentageThreshold}, tokens: ${tokenThreshold}`;
     }
 
@@ -2111,7 +1991,53 @@ export class Agent {
         `Token usage ${totalTokens} exceeds effective threshold of ${effectiveThreshold} (${thresholdDescription}). Compacting conversation with type: ${contextCompactionType}.`,
       );
 
-      if (contextCompactionType === ContextCompactionType.Compact) {
+      if (profile.isSubagent) {
+        const allMessages = [...contextMessages, ...resultMessages];
+
+        if (contextCompactionType === ContextCompactionType.Smart) {
+          const oldResultIds = getSubagentOldResultIds(resultMessages, userRequestMessage.id);
+
+          const compactedMessages = await smartCompactMessages(allMessages, 10, CompactionLevel.One);
+
+          contextMessages.length = 0;
+          messages.length = 0;
+          resultMessages.length = 0;
+
+          resultMessages.push(...compactedMessages);
+          messages.push(...(await this.prepareMessages(task, profile, compactedMessages, contextFiles)));
+
+          task.sendTaskMessageRemoved(oldResultIds);
+          task.reloadGroupMessages(getReloadableMessages(compactedMessages));
+          task.addLogMessage('info', 'Subagent conversation smart-compacted.', false, promptContext);
+        } else {
+          const oldResultIds = getSubagentOldResultIds(resultMessages, userRequestMessage.id);
+
+          task.addLogMessage('loading', 'Token usage exceeds threshold. Compacting subagent conversation...', false, promptContext);
+
+          const finalMessages = await generateCompactedSummary(
+            userRequestMessage,
+            allMessages,
+            profile,
+            task,
+            promptContext,
+            abortSignal,
+            (t, instructions) => this.promptsManager.getCompactConversationPrompt(t, instructions),
+            (modelId, systemPrompt, prompt, projectDir, msgs, abortable, signal) =>
+              this.generateText(modelId, systemPrompt, prompt, projectDir, msgs, abortable, signal),
+          );
+
+          contextMessages.length = 0;
+          messages.length = 0;
+          resultMessages.length = 0;
+
+          resultMessages.push(...finalMessages);
+          messages.push(...(await this.prepareMessages(task, profile, finalMessages, contextFiles)));
+
+          task.sendTaskMessageRemoved(oldResultIds);
+          task.reloadGroupMessages(getReloadableMessages(finalMessages));
+          task.addLogMessage('info', 'Subagent conversation compacted.', false, promptContext);
+        }
+      } else if (contextCompactionType === ContextCompactionType.Compact) {
         await task.compactConversation(
           'agent',
           undefined,
@@ -2129,9 +2055,7 @@ export class Agent {
 
         messages.push(...(await this.prepareMessages(task, profile, await task.getContextMessages(), contextFiles)));
         const continuationText = `Based on your compacted summary of our previous conversation, please continue our work with my request:\n\n${extractTextContent(userRequestMessage.content)}`;
-        const originalImageParts = Array.isArray(userRequestMessage.content)
-          ? userRequestMessage.content.filter((part): part is ImagePart => part.type === 'image')
-          : [];
+        const originalImageParts = Array.isArray(userRequestMessage.content) ? userRequestMessage.content.filter((part) => part.type === 'file') : [];
 
         resultMessages.push({
           id: uuidv4(),
@@ -2139,7 +2063,7 @@ export class Agent {
           content: originalImageParts.length > 0 ? [{ type: 'text' as const, text: continuationText }, ...originalImageParts] : continuationText,
           promptContext,
         });
-        messages.push(...resultMessages);
+        messages.push(...(resultMessages as ModelMessage[]));
       } else if (contextCompactionType === ContextCompactionType.Smart) {
         const compactedMessages = await task.smartCompactConversation([...contextMessages, ...resultMessages], 'Previous conversation has been compacted.');
 

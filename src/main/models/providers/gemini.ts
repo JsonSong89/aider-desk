@@ -1,16 +1,17 @@
-import { ContextUserMessage, Model, ModelInfo, ProviderProfile, SettingsData, UsageReportData, VoiceSession } from '@common/types';
+import { ContextUserMessage, Model, ModelInfo, ProviderProfile, SettingsData, UsageReportData, VoiceSession, Reasoning } from '@common/types';
 import { DEFAULT_VOICE_SYSTEM_INSTRUCTIONS, GeminiProvider, GeminiVoiceModel, isGeminiProvider, LlmProvider } from '@common/agent';
-import { createGoogleGenerativeAI, google, type GoogleGenerativeAIProviderOptions } from '@ai-sdk/google';
+import { createGoogle, google, type GoogleLanguageModelOptions } from '@ai-sdk/google';
 import { Modality } from '@google/genai';
 import { v4 as uuidv4 } from 'uuid';
 
-import type { LanguageModelUsage, ModelMessage, ToolSet } from 'ai';
-import type { LanguageModelV2, SharedV2ProviderOptions } from '@ai-sdk/provider';
+import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from 'ai';
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 
 import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
 import logger from '@/logger';
 import { getEffectiveEnvironmentVariable } from '@/utils';
 import { Task } from '@/task/task';
+import { calculateCost } from '@/models/providers/default';
 
 const loadGeminiModels = async (profile: ProviderProfile, settings: SettingsData): Promise<LoadModelsResponse> => {
   if (!isGeminiProvider(profile.provider)) {
@@ -87,7 +88,7 @@ const getGeminiAiderMapping = (provider: ProviderProfile, modelId: string): Aide
 };
 
 // === LLM Creation Functions ===
-const createGeminiLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModelV2 => {
+const createGeminiLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel => {
   const provider = profile.provider as GeminiProvider;
   let apiKey = provider.apiKey;
   let baseUrl = provider.customBaseUrl;
@@ -112,7 +113,7 @@ const createGeminiLlm = (profile: ProviderProfile, model: Model, settings: Setti
     }
   }
 
-  const googleProvider = createGoogleGenerativeAI({
+  const googleProvider = createGoogle({
     apiKey,
     baseURL: baseUrl || undefined,
     headers: profile.headers,
@@ -122,21 +123,8 @@ const createGeminiLlm = (profile: ProviderProfile, model: Model, settings: Setti
 
 type GoogleMetadata = {
   google: {
-    cachedInputTokens?: number;
+    cachedContentTokenCount?: number;
   };
-};
-
-// === Cost and Usage Functions ===
-const calculateGeminiCost = (model: Model, sentTokens: number, receivedTokens: number, cacheReadTokens: number = 0): number => {
-  const inputCostPerToken = model.inputCostPerToken ?? 0;
-  const outputCostPerToken = model.outputCostPerToken ?? 0;
-  const cacheReadInputTokenCost = model.cacheReadInputTokenCost ?? inputCostPerToken * 0.25;
-
-  const inputCost = sentTokens * inputCostPerToken;
-  const outputCost = receivedTokens * outputCostPerToken;
-  const cacheCost = cacheReadTokens * cacheReadInputTokenCost;
-
-  return inputCost + outputCost + cacheCost;
 };
 
 const getGeminiUsageReport = (task: Task, provider: ProviderProfile, model: Model, usage: LanguageModelUsage, providerMetadata?: unknown): UsageReportData => {
@@ -145,13 +133,13 @@ const getGeminiUsageReport = (task: Task, provider: ProviderProfile, model: Mode
 
   // Extract cache read tokens from provider metadata or usage
   const { google } = (providerMetadata as GoogleMetadata) || {};
-  const cacheReadTokens = google?.cachedInputTokens ?? usage.cachedInputTokens ?? 0;
+  const cacheReadTokens = google?.cachedContentTokenCount ?? usage.inputTokenDetails?.cacheReadTokens ?? 0;
 
   // Calculate sentTokens after deducting cached tokens
   const sentTokens = totalSentTokens - cacheReadTokens;
 
   // Calculate cost internally with already deducted sentTokens
-  const messageCost = calculateGeminiCost(model, sentTokens, receivedTokens, cacheReadTokens);
+  const messageCost = calculateCost(model, sentTokens, receivedTokens, cacheReadTokens);
 
   return {
     model: `${provider.id}/${model.id}`,
@@ -163,13 +151,28 @@ const getGeminiUsageReport = (task: Task, provider: ProviderProfile, model: Mode
   };
 };
 
-const getGeminiProviderOptions = (llmProvider: LlmProvider, model: Model): SharedV2ProviderOptions | undefined => {
+const getGeminiProviderOptions = (llmProvider: LlmProvider, model: Model, reasoning?: Reasoning): SharedV4ProviderOptions | undefined => {
   if (isGeminiProvider(llmProvider)) {
     const providerOverrides = model.providerOverrides as Partial<GeminiProvider> | undefined;
 
     // Use model-specific overrides, falling back to provider defaults
     const includeThoughts = providerOverrides?.includeThoughts ?? llmProvider.includeThoughts;
     const thinkingBudget = providerOverrides?.thinkingBudget ?? llmProvider.thinkingBudget;
+
+    // When the top-level reasoning parameter is set (not undefined or 'provider-default'),
+    // omit thinkingBudget from thinkingConfig so the AI SDK's portable reasoning takes effect.
+    // Keep includeThoughts if set so reasoning output is still returned.
+    if (reasoning && reasoning !== 'provider-default') {
+      return {
+        google: {
+          ...(includeThoughts && {
+            thinkingConfig: {
+              includeThoughts: true,
+            },
+          }),
+        } satisfies GoogleLanguageModelOptions,
+      };
+    }
 
     return {
       google: {
@@ -179,7 +182,7 @@ const getGeminiProviderOptions = (llmProvider: LlmProvider, model: Model): Share
             thinkingBudget,
           },
         }),
-      } satisfies GoogleGenerativeAIProviderOptions,
+      } satisfies GoogleLanguageModelOptions,
     };
   }
 
@@ -258,7 +261,7 @@ const createGeminiVoiceSession = async (profile: ProviderProfile, settings: Sett
     });
 
     // Default to the model specified in requirements or fallback
-    const modelId = provider.voice?.model ?? GeminiVoiceModel.GeminiLive25FlashNativeAudio;
+    const modelId = provider.voice?.model ?? GeminiVoiceModel.Gemini31FlashLivePreview;
     const temperature = provider.voice?.temperature ?? 0.7;
     const systemInstruction = provider.voice?.systemInstructions ?? DEFAULT_VOICE_SYSTEM_INSTRUCTIONS;
     const idleTimeoutMs = provider.voice?.idleTimeoutMs ?? 5000;
@@ -275,11 +278,6 @@ const createGeminiVoiceSession = async (profile: ProviderProfile, settings: Sett
           model: modelId,
           config: {
             inputAudioTranscription: {},
-            realtimeInputConfig: {
-              automaticActivityDetection: {
-                disabled: true,
-              },
-            },
             temperature,
             responseModalities: [Modality.AUDIO],
             systemInstruction,

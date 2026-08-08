@@ -8,11 +8,14 @@ import {
   AIDER_COMMANDS,
   AIDER_MODES,
   AiderRunOptions,
+  AutonomyMode,
   ChangeRequestItem,
   ConnectorMessage,
   ContextAssistantMessage,
   ContextFile,
   ContextMessage,
+  ContextToolMessage,
+  DEFAULT_AUTONOMY_MODE,
   DefaultTaskState,
   EditFormat,
   FileEdit,
@@ -37,21 +40,47 @@ import {
   TokensInfoData,
   ToolCallPart,
   ToolData,
+  ToolInputChunkData,
   ToolResultPart,
   UpdatedFile,
   UpdatedFilesGroupMode,
   UsageReportData,
   UserMessageData,
+  SwitchToLocalOptions,
+  SwitchToWorktreeOptions,
   WorkingMode,
+  WorktreeUncommittedFiles,
 } from '@common/types';
-import { extractImagesFromContent, extractProviderModel, extractServerNameToolName, extractTextContent, fileExists, parseUsageReport } from '@common/utils';
-import { COMPACT_CONVERSATION_AGENT_PROFILE, CONFLICT_RESOLUTION_PROFILE, HANDOFF_AGENT_PROFILE, INIT_PROJECT_AGENTS_PROFILE } from '@common/agent';
-import { SKILLS_TOOL_ACTIVATE_SKILL, SKILLS_TOOL_GROUP_NAME, TOOL_GROUP_NAME_SEPARATOR } from '@common/tools';
+import { parsePartialJson } from 'ai';
+import {
+  extractImagesFromContent,
+  extractProviderModel,
+  extractServerNameToolName,
+  extractTextContent,
+  fileExists,
+  parseCommandArgs,
+  parseUsageReport,
+} from '@common/utils';
+import {
+  COMPACT_CONVERSATION_AGENT_PROFILE,
+  CONFLICT_RESOLUTION_PROFILE,
+  HANDOFF_AGENT_PROFILE,
+  INIT_PROJECT_AGENTS_PROFILE,
+  getSubagentId,
+} from '@common/agent';
+import {
+  SKILLS_TOOL_ACTIVATE_SKILL,
+  SKILLS_TOOL_GROUP_NAME,
+  SUBAGENTS_TOOL_GROUP_NAME,
+  SUBAGENTS_TOOL_RUN_TASK,
+  TOOL_GROUP_NAME_SEPARATOR,
+} from '@common/tools';
 import { v4 as uuidv4 } from 'uuid';
 import debounce from 'lodash/debounce';
 import { isEqual } from 'lodash';
 
-import type { ToolContent } from '@common/types';
+import type { z } from 'zod';
+import type { ToolContent, JSONValue } from '@common/types';
 import type { SimpleGit } from 'simple-git';
 import type { RegisteredCommand } from '@/extensions/extension-manager';
 
@@ -66,6 +95,7 @@ import {
   WORKTREE_BRANCH_PREFIX,
 } from '@/constants';
 import { Agent, AgentProfileManager, McpManager } from '@/agent';
+import { findEnabledSubagent, runSubagentTask } from '@/agent/subagent';
 import { Connector } from '@/connector';
 import { DataManager } from '@/data-manager';
 import logger from '@/logger';
@@ -86,10 +116,11 @@ import { getElectronApp } from '@/app';
 import { PromptsManager } from '@/prompts';
 import { PythonDependenciesInstaller } from '@/python-dependencies-installer';
 import { getProxyEnvVars } from '@/proxy-manager';
-import { smartCompactMessages } from '@/agent/smart-compaction';
+import { CompactionLevel, extractSummary, smartCompactMessages } from '@/agent/compaction';
 
 export const INTERNAL_TASK_ID = 'internal';
 export const RESPONSE_CHUNK_FLUSH_INTERVAL_MS = 10;
+export const TOOL_INPUT_FLUSH_INTERVAL_MS = 50;
 
 export const EMPTY_TASK_DATA: TaskData = {
   id: '',
@@ -130,15 +161,28 @@ export class Task {
   private autocompletionAllFiles: string[] | null = null;
   private agentRunResolves: (() => void)[] = [];
   private git: SimpleGit | null = null;
-  private responseChunkMap: Map<string, { buffer: string; interval: NodeJS.Timeout }> = new Map();
+  private responseChunkMap: Map<string, { contentBuffer: string; reasoningBuffer: string; interval: NodeJS.Timeout }> = new Map();
+  private toolInputChunkMap: Map<
+    string,
+    {
+      accumulatedDelta: string;
+      serverName: string;
+      toolName: string;
+      promptContext?: PromptContext;
+      interval: NodeJS.Timeout | null;
+    }
+  > = new Map();
   private isDeterminingTaskState = false;
   private resolutionAbortControllers: Record<string, AbortController> = {};
   private subagentAbortControllers: Record<string, AbortController> = {};
   private tokensInfo: TokensInfoData;
   private queuedPrompts: QueuedPromptData[] = [];
   private isCompacting = false;
+  private lastSmartCompactionMessageCount = 0;
+  private smartCompactionLevel = CompactionLevel.One;
 
   private readonly taskDataPath: string;
+  private readonly taskDataLoadPromise: Promise<void>;
   private readonly contextManager: ContextManager;
   private readonly agent: Agent;
   private readonly aiderManager: AiderManager;
@@ -194,7 +238,11 @@ export class Task {
     };
     this.aiderManager = new AiderManager(this, this.store, this.modelManager, this.eventManager, () => this.connectors, this.pythonInstaller);
 
-    void this.loadTaskData();
+    this.taskDataLoadPromise = this.loadTaskData();
+  }
+
+  public async waitForTaskDataLoad(): Promise<void> {
+    await this.taskDataLoadPromise;
   }
 
   public async getTaskAgentProfile(): Promise<AgentProfile | null> {
@@ -242,22 +290,72 @@ export class Task {
       baseDir: this.project.baseDir,
       taskId: this.taskId,
     });
-    if (await fileExists(this.taskDataPath)) {
-      const content = await fs.readFile(this.taskDataPath, 'utf8');
-      const data = JSON.parse(content) as TaskData;
-
-      logger.debug('Loaded task data', {
-        baseDir: this.project.baseDir,
-        taskId: this.taskId,
-        data,
-      });
-
-      for (const key of Object.keys(data)) {
-        this.task[key] = data[key];
-      }
-      // make sure we always have the most recent project baseDir, in case the task was migrated from another path
-      this.task.baseDir = this.project.baseDir;
+    const data = await this.readTaskDataFromDisk();
+    if (data) {
+      this.applyTaskData(data);
     }
+  }
+
+  private async readTaskDataFromDisk(): Promise<Partial<TaskData> | null> {
+    if (!(await fileExists(this.taskDataPath))) {
+      return null;
+    }
+
+    const content = await fs.readFile(this.taskDataPath, 'utf8');
+    const data = JSON.parse(content) as Partial<TaskData>;
+
+    logger.debug('Loaded task data', {
+      baseDir: this.project.baseDir,
+      taskId: this.taskId,
+      data,
+    });
+
+    return data;
+  }
+
+  private applyTaskData(data: Partial<TaskData>) {
+    const nextTaskData = {
+      ...EMPTY_TASK_DATA,
+      ...data,
+      id: this.taskId,
+      baseDir: this.project.baseDir,
+    };
+
+    for (const key of Object.keys(this.task) as Array<keyof TaskData>) {
+      delete (this.task as Partial<TaskData>)[key];
+    }
+
+    Object.assign(this.task, nextTaskData);
+  }
+
+  public async reloadFromDisk(): Promise<{ taskDataChanged: boolean; contextChanged: boolean }> {
+    await this.waitForTaskDataLoad();
+
+    const previousTaskData = { ...this.task };
+    const data = await this.readTaskDataFromDisk();
+    const nextTaskData = {
+      ...EMPTY_TASK_DATA,
+      ...(data || {}),
+      id: this.taskId,
+      baseDir: this.project.baseDir,
+    };
+    const taskDataChanged = !isEqual(previousTaskData, nextTaskData);
+
+    if (taskDataChanged) {
+      this.applyTaskData(data || {});
+    }
+
+    const contextChanged = await this.contextManager.reloadFromDisk();
+    if (contextChanged && this.initialized) {
+      this.eventManager.sendClearTask(this.project.baseDir, this.taskId, true, false);
+      this.reloadGroupMessages(await this.contextManager.getContextMessages());
+      await this.reloadConnectorMessages();
+      await this.sendContextFilesUpdated();
+      await this.updateContextInfo();
+      void this.sendSkillsUpdated();
+    }
+
+    return { taskDataChanged, contextChanged };
   }
 
   /**
@@ -310,17 +408,13 @@ export class Task {
   }
 
   /**
-   * @deprecated This migration ensures older task data has the `branch` field
-   * and `baseBranch` stores the branch the worktree was created from.
-   * Can be removed once all users have migrated past v0.64.0.
+   * Resolves missing `baseBranch` for worktrees created while the main repo
+   * was in detached HEAD state, where `baseBranch` was never stored.
    */
-  private async migrateWorktreeData(): Promise<void> {
-    if (!this.task.worktree || this.task.worktree.branch) {
-      return;
+  private async resolveMissingWorktreeBaseBranch(): Promise<boolean> {
+    if (!this.task.worktree || this.task.worktree.baseBranch) {
+      return false;
     }
-
-    const currentBranch = this.task.worktree.baseBranch;
-    this.task.worktree.branch = currentBranch;
 
     let resolvedBase = '';
     if (this.task.worktree.baseCommit) {
@@ -336,9 +430,11 @@ export class Task {
         resolvedBase = '';
       }
     }
-    this.task.worktree.baseBranch = resolvedBase || undefined;
 
-    await this.saveTask({ worktree: this.task.worktree });
+    this.task.worktree.baseBranch = resolvedBase || undefined;
+    await this.saveTask({ worktree: this.task.worktree }, false);
+
+    return true;
   }
 
   private isInternal() {
@@ -394,13 +490,16 @@ export class Task {
     return this.task;
   }
 
-  public async init() {
+  public async init(readonly = false) {
     if (this.initialized) {
       logger.debug('Task already initialized, skipping', {
         baseDir: this.project.baseDir,
         taskId: this.taskId,
       });
       this.eventManager.sendTaskInitialized(this.task);
+      if (readonly) {
+        return;
+      }
       this.aiderManager.sendUpdateAiderModels();
       await this.updateAutocompletionData(undefined, true);
       await this.updateContextInfo();
@@ -412,12 +511,26 @@ export class Task {
       return;
     }
 
-    this.initPromise = this.initInternal();
+    this.initPromise = this.initInternal(readonly);
     await this.initPromise;
     this.initPromise = null;
   }
 
-  private async initInternal() {
+  private async initInternal(readonly: boolean) {
+    if (readonly) {
+      // Readonly init must not mutate worktrees, spawn connectors, or run expensive scans
+      if (await fileExists(this.getTaskDir())) {
+        this.git = simpleGit(this.getTaskDir());
+      }
+
+      await this.loadContext();
+      this.eventManager.sendTaskInitialized(this.task);
+
+      this.initialized = true;
+      await this.extensionManager.dispatchEvent('onTaskInitialized', { task: this.task }, this.project, this);
+      return;
+    }
+
     // Check if worktree is enabled for this task
     const workingMode = this.task.workingMode;
     const existingWorktree = await this.worktreeManager.getTaskWorktree(this.project.baseDir, this.taskId);
@@ -465,7 +578,11 @@ export class Task {
       }
     }
 
-    await this.migrateWorktreeData();
+    const worktreeBaseBranchResolved = await this.resolveMissingWorktreeBaseBranch();
+
+    if (worktreeBaseBranchResolved && this.task.worktree) {
+      void this.sendWorktreeIntegrationStatusUpdated();
+    }
 
     if (await fileExists(this.getTaskDir())) {
       this.git = simpleGit(this.getTaskDir());
@@ -484,13 +601,15 @@ export class Task {
     await this.extensionManager.dispatchEvent('onTaskInitialized', { task: this.task }, this.project, this);
   }
 
-  public async load(): Promise<TaskStateData> {
-    logger.info('Loading task', {
-      baseDir: this.project.baseDir,
-      taskId: this.taskId,
-    });
+  public async load(readonly = false): Promise<TaskStateData> {
+    if (!this.initialized) {
+      logger.info('Loading task', {
+        baseDir: this.project.baseDir,
+        taskId: this.taskId,
+      });
+    }
 
-    await this.init();
+    await this.init(readonly);
 
     const mode = this.getCurrentMode();
     return {
@@ -566,6 +685,10 @@ export class Task {
     return this.task.worktree ? this.task.worktree.path : this.project.baseDir;
   }
 
+  public compileCustomSystemPrompt(template: string): Promise<string> {
+    return this.promptsManager.compileCustomSystemPrompt(this, template);
+  }
+
   /**
    * Resolves a relative file path against taskDir first, then falls back to projectDir.
    * This handles git worktree cases where files may exist in the project directory
@@ -623,6 +746,13 @@ export class Task {
       clearInterval(entry.interval);
     }
     this.responseChunkMap.clear();
+
+    for (const entry of this.toolInputChunkMap.values()) {
+      if (entry.interval) {
+        clearInterval(entry.interval);
+      }
+    }
+    this.toolInputChunkMap.clear();
   }
 
   public async close(clearContext = false, cleanupEmptyTask = true) {
@@ -685,7 +815,7 @@ export class Task {
     }
   }
 
-  private async waitForCurrentAgentToFinish() {
+  public async waitForCurrentAgentToFinish() {
     if (this.agent.isRunning()) {
       logger.warn('Agent is already running, waiting for current operation to complete...', {
         baseDir: this.project.baseDir,
@@ -707,8 +837,22 @@ export class Task {
     }
   }
 
-  private isPromptRunning() {
+  public isPromptRunning() {
     return !!this.currentPromptContext || this.agent.isRunning() || this.isCompacting;
+  }
+
+  public hasQueuedPrompts(): boolean {
+    return this.queuedPrompts.length > 0;
+  }
+
+  public async waitForIdle(): Promise<void> {
+    while (this.isPromptRunning() || this.hasQueuedPrompts()) {
+      if (this.agent.isRunning()) {
+        await this.waitForCurrentAgentToFinish();
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
   }
 
   public async runPrompt(
@@ -777,6 +921,10 @@ export class Task {
         throw new Error('No active Agent profile found');
       }
 
+      if (!this.task.agentProfileId) {
+        await this.saveTask({ agentProfileId: profile.id });
+      }
+
       responses = await this.runPromptInAgent(profile, mode, prompt, promptContext, undefined, undefined, undefined, true, sendNotification, images);
     } else {
       responses = await this.runPromptInAider(mode, prompt, promptContext, sendNotification);
@@ -806,6 +954,7 @@ export class Task {
       role: MessageRole.User,
       content: prompt,
       promptContext,
+      timestamp: Date.now(),
     });
 
     // Add user message to context
@@ -815,6 +964,21 @@ export class Task {
       name: this.task.name || this.getTaskNameFromPrompt(prompt),
       state: DefaultTaskState.Todo,
     });
+  }
+
+  public async saveEditedPrompt(messageId: string, prompt: string): Promise<void> {
+    const contextMessages = await this.contextManager.getContextMessages();
+    const savedPrompt = contextMessages[0];
+
+    if (contextMessages.length !== 1 || savedPrompt?.id !== messageId || savedPrompt.role !== MessageRole.User) {
+      throw new Error('Only a task with a single saved prompt can be edited and saved.');
+    }
+
+    await this.project.addToInputHistory(prompt);
+    this.contextManager.setContextMessages([{ ...savedPrompt, content: prompt }]);
+    this.addUserMessage(savedPrompt.id, prompt, savedPrompt.promptContext);
+
+    await this.saveTask({ state: DefaultTaskState.Todo });
   }
 
   private async runNextQueuedPrompt(): Promise<ResponseCompletedData[]> {
@@ -851,6 +1015,7 @@ export class Task {
       role: MessageRole.User,
       content: prompt,
       promptContext,
+      timestamp: Date.now(),
     });
 
     let messages = this.contextManager.toConnectorMessages();
@@ -873,8 +1038,9 @@ export class Task {
     messages = extensionResult.messages;
     files = extensionResult.files;
 
+    const effectiveAutonomyMode = extensionResult.autonomyMode ?? this.task.autonomyMode ?? DEFAULT_AUTONOMY_MODE;
     let responses = await this.sendPromptToAider(prompt, promptContext, mode, messages, files, {
-      autoApprove: extensionResult.autoApprove ?? this.task.autoApprove,
+      autoApprove: effectiveAutonomyMode === AutonomyMode.Autonomous,
       denyCommands: extensionResult.denyCommands,
     });
     logger.debug('Responses:', { responses });
@@ -889,7 +1055,12 @@ export class Task {
         const assistantMessage: ContextAssistantMessage = {
           id: response.messageId,
           role: MessageRole.Assistant,
-          content: response.content,
+          content: response.reasoning
+            ? [
+                { type: 'reasoning' as const, text: response.reasoning },
+                { type: 'text' as const, text: response.content },
+              ]
+            : response.content,
           usageReport: response.usageReport,
           reflectedMessage: response.reflectedMessage,
           editedFiles: response.editedFiles,
@@ -932,6 +1103,7 @@ export class Task {
     waitForCurrentAgentToFinish = true,
     sendNotification = true,
     images?: string[],
+    skillsToActivate?: string[],
   ): Promise<ResponseCompletedData[]> {
     if (waitForCurrentAgentToFinish) {
       await this.waitForCurrentAgentToFinish();
@@ -945,6 +1117,9 @@ export class Task {
       model: this.task.model || profile.model,
     });
 
+    // reset smart compaction level on agent start
+    this.smartCompactionLevel = 1;
+
     const agentMessages = await this.agent.runAgent(
       this,
       profile,
@@ -957,6 +1132,7 @@ export class Task {
       true,
       undefined,
       images,
+      skillsToActivate,
     );
     if (agentMessages.length > 0) {
       // send messages to connectors
@@ -1090,6 +1266,8 @@ export class Task {
       this.addLogMessage('loading', 'Updating task state...');
 
       const answer = await this.agent.generateText(modelId, await this.promptsManager.getUpdateTaskStatePrompt(this), wrappedMessage, this.getProjectDir());
+
+      this.addLogMessage('loading', undefined, true);
       if (!answer) {
         logger.warn('Task state determination interrupted');
         return null;
@@ -1251,13 +1429,20 @@ export class Task {
   }
 
   public async processResponseMessage(message: ResponseMessage, saveToDb = true) {
+    logger.debug('Processing response message', {
+      baseDir: this.project.baseDir,
+      taskId: this.taskId,
+      messageData: message,
+    });
+
     if (!message.finished) {
-      const sendResponseChunk = async (chunk: string) => {
+      const sendResponseChunk = async (content?: string, reasoning?: string) => {
         let data: ResponseChunkData = {
           messageId: message.id,
           baseDir: this.project.baseDir,
           taskId: this.taskId,
-          chunk,
+          chunk: content || '',
+          reasoning,
           reflectedMessage: message.reflectedMessage,
           promptContext: message.promptContext,
         };
@@ -1282,25 +1467,25 @@ export class Task {
           taskId: this.taskId,
           messageId: message.id,
         });
-        await sendResponseChunk(message.content);
+        await sendResponseChunk(message.content, message.reasoning);
 
         const messageId = message.id;
         const interval = setInterval(async () => {
           const entry = this.responseChunkMap.get(messageId);
-          if (entry && entry.buffer.length > 0) {
-            await sendResponseChunk(entry.buffer);
+          if (entry && (entry.contentBuffer.length > 0 || entry.reasoningBuffer.length > 0)) {
+            await sendResponseChunk(entry.contentBuffer || undefined, entry.reasoningBuffer || undefined);
             logger.debug('Sending buffered chunk', {
               baseDir: this.project.baseDir,
               taskId: this.taskId,
-              messageId: message.id,
-              chunk: entry.buffer,
+              messageId,
             });
-            entry.buffer = '';
+            entry.contentBuffer = '';
+            entry.reasoningBuffer = '';
           } else {
             logger.debug('No buffered chunk, stopping interval', {
               baseDir: this.project.baseDir,
               taskId: this.taskId,
-              messageId: message.id,
+              messageId,
             });
             // No buffered chunk, stop interval
             clearInterval(interval);
@@ -1312,7 +1497,7 @@ export class Task {
           taskId: this.taskId,
           messageId: message.id,
         });
-        this.responseChunkMap.set(messageId, { buffer: '', interval });
+        this.responseChunkMap.set(messageId, { contentBuffer: '', reasoningBuffer: '', interval });
       } else {
         logger.debug('Appending to buffer', {
           baseDir: this.project.baseDir,
@@ -1321,7 +1506,12 @@ export class Task {
         });
         // Subsequent chunks: append to buffer
         const entry = this.responseChunkMap.get(message.id)!;
-        entry.buffer += message.content;
+        if (message.content) {
+          entry.contentBuffer += message.content;
+        }
+        if (message.reasoning) {
+          entry.reasoningBuffer += message.reasoning;
+        }
       }
     } else {
       const entry = this.responseChunkMap.get(message.id);
@@ -1337,7 +1527,10 @@ export class Task {
         : undefined;
 
       if (usageReport && saveToDb) {
-        this.dataManager.saveMessage(message.id, 'assistant', this.project.baseDir, usageReport.model, usageReport, message.content);
+        this.dataManager.saveMessage(message.id, 'assistant', this.project.baseDir, usageReport.model, usageReport, {
+          content: message.content,
+          reasoning: message.reasoning,
+        });
       }
 
       if (usageReport) {
@@ -1348,6 +1541,7 @@ export class Task {
         type: 'response-completed',
         messageId: message.id,
         content: message.content,
+        reasoning: message.reasoning,
         reflectedMessage: message.reflectedMessage,
         baseDir: this.project.baseDir,
         taskId: this.taskId,
@@ -1358,6 +1552,7 @@ export class Task {
         usageReport,
         sequenceNumber: message.sequenceNumber,
         promptContext: message.promptContext,
+        timestamp: Date.now(),
       };
 
       const extensionResult = await this.extensionManager.dispatchEvent('onResponseCompleted', { response: data }, this.project, this);
@@ -1375,6 +1570,81 @@ export class Task {
 
   sendResponseCompleted(data: ResponseCompletedData) {
     this.eventManager.sendResponseCompleted(data);
+  }
+
+  public startToolInput(toolCallId: string, serverName: string, toolName: string, promptContext?: PromptContext): void {
+    this.toolInputChunkMap.set(toolCallId, {
+      accumulatedDelta: '',
+      serverName,
+      toolName,
+      promptContext,
+      interval: null,
+    });
+    this.sendToolInputChunk(toolCallId, {}, false);
+  }
+
+  public processToolInputDelta(toolCallId: string, delta: string): void {
+    const entry = this.toolInputChunkMap.get(toolCallId);
+    if (!entry) {
+      return;
+    }
+    entry.accumulatedDelta += delta;
+    if (!entry.interval) {
+      entry.interval = setInterval(async () => {
+        await this.flushToolInput(toolCallId, false);
+      }, TOOL_INPUT_FLUSH_INTERVAL_MS);
+    }
+  }
+
+  public finishToolInput(toolCallId: string): void {
+    const entry = this.toolInputChunkMap.get(toolCallId);
+    if (!entry) {
+      return;
+    }
+    if (entry.interval) {
+      clearInterval(entry.interval);
+      entry.interval = null;
+    }
+    void this.flushToolInput(toolCallId, true);
+  }
+
+  private async flushToolInput(toolCallId: string, isComplete: boolean): Promise<void> {
+    const entry = this.toolInputChunkMap.get(toolCallId);
+    if (!entry) {
+      return;
+    }
+
+    let partialArgs: unknown = undefined;
+    try {
+      const result = await parsePartialJson(entry.accumulatedDelta);
+      if (result.state !== 'failed-parse' && result.state !== 'undefined-input') {
+        partialArgs = result.value;
+      }
+    } catch {
+      // Graceful fallback — skip this flush
+    }
+
+    if (partialArgs !== undefined || isComplete) {
+      this.sendToolInputChunk(toolCallId, partialArgs, isComplete);
+    }
+  }
+
+  private sendToolInputChunk(toolCallId: string, partialArgs: unknown, isComplete: boolean): void {
+    const entry = this.toolInputChunkMap.get(toolCallId);
+    if (!entry) {
+      return;
+    }
+    const data: ToolInputChunkData = {
+      baseDir: this.project.baseDir,
+      taskId: this.taskId,
+      toolCallId,
+      serverName: entry.serverName,
+      toolName: entry.toolName,
+      partialArgs,
+      isComplete,
+      promptContext: entry.promptContext,
+    };
+    this.eventManager.sendToolInputChunk(data);
   }
 
   private notifyIfEnabled(title: string, text: string) {
@@ -1442,15 +1712,20 @@ export class Task {
       determinedAnswer = normalizedAnswer === 'a' || normalizedAnswer === 'y' ? 'y' : 'n';
     }
 
-    // If user input 'd' (don't ask again) or 'a' (always), store the determined answer.
-    if ((normalizedAnswer === 'd' || normalizedAnswer === 'a') && (determinedAnswer == 'y' || determinedAnswer == 'n')) {
-      logger.debug('Storing answer for question due to "d" or "a" input:', {
+    if (normalizedAnswer === 'a') {
+      logger.debug('Storing answer for question due to "a" (Always) input:', {
         baseDir: this.project.baseDir,
         questionKey: this.getQuestionKey(this.currentQuestion),
         rawInput: answer,
-        determinedAndStoredAnswer: determinedAnswer,
       });
-      this.storedQuestionAnswers.set(this.getQuestionKey(this.currentQuestion), determinedAnswer as 'y' | 'n');
+      this.storedQuestionAnswers.set(this.getQuestionKey(this.currentQuestion), 'y');
+    } else if (normalizedAnswer === 'd') {
+      logger.debug('Storing answer for question due to "d" (Don\'t ask again) input:', {
+        baseDir: this.project.baseDir,
+        questionKey: this.getQuestionKey(this.currentQuestion),
+        rawInput: answer,
+      });
+      this.storedQuestionAnswers.set(this.getQuestionKey(this.currentQuestion), 'n');
     }
 
     const questionToAnswer = this.currentQuestion;
@@ -1573,6 +1848,10 @@ export class Task {
     this.eventManager.sendContextFilesUpdated(this.project.baseDir, this.taskId, allFiles);
   }
 
+  public async refreshContextFiles(): Promise<void> {
+    await this.sendContextFilesUpdated();
+  }
+
   public async runCommand(command: string, addToHistory = true) {
     const extensionResult = await this.extensionManager.dispatchEvent('onCommandExecuted', { command }, this.project, this);
     if (extensionResult.blocked) {
@@ -1648,6 +1927,11 @@ export class Task {
       }
     }
 
+    if (command.trim().startsWith('subagent ')) {
+      sendToConnectors = false;
+      await this.handleSubagentCommand(command.trim().slice('subagent '.length));
+    }
+
     if (sendToConnectors) {
       if (AIDER_COMMANDS.includes(command.trim()) && !this.aiderManager.isStarted()) {
         logger.info('Starting Aider for command:', { command });
@@ -1662,6 +1946,161 @@ export class Task {
     }
   }
 
+  private async handleSubagentCommand(commandArgs: string): Promise<void> {
+    const spaceIndex = commandArgs.indexOf(' ');
+    if (spaceIndex === -1) {
+      this.addLogMessage('error', 'Usage: /subagent <subagent-id> <prompt>');
+      return;
+    }
+
+    const subagentId = commandArgs.substring(0, spaceIndex).trim();
+    const prompt = commandArgs.substring(spaceIndex + 1).trim();
+
+    if (!prompt) {
+      this.addLogMessage('error', 'Usage: /subagent <subagent-id> <prompt>');
+      return;
+    }
+
+    const mainAgentProfile = await this.getTaskAgentProfile();
+    if (!mainAgentProfile) {
+      this.addLogMessage('error', 'No active agent profile found.');
+      return;
+    }
+
+    const allProfiles = this.agentProfileManager.getProjectProfiles(this.project);
+    const enabledSubagents = allProfiles.filter((subagent) => subagent.subagent.enabled === true && subagent.id !== mainAgentProfile.id);
+    const targetSubagent = findEnabledSubagent(enabledSubagents, subagentId, { matchByName: true });
+
+    if (!targetSubagent) {
+      this.addLogMessage('error', `Subagent '${subagentId}' not found or not enabled.`);
+      return;
+    }
+
+    const toolCallId = uuidv4();
+    const fullToolName = `${SUBAGENTS_TOOL_GROUP_NAME}${TOOL_GROUP_NAME_SEPARATOR}${SUBAGENTS_TOOL_RUN_TASK}`;
+    const toolInput = { prompt, subagentId: getSubagentId(targetSubagent) };
+
+    const previousTaskState = this.task.state;
+    await this.saveTask({ state: DefaultTaskState.InProgress });
+
+    try {
+      const result = await runSubagentTask({
+        task: this,
+        targetSubagent,
+        prompt,
+        onStarted: (promptContext) => {
+          this.addToolMessage(toolCallId, SUBAGENTS_TOOL_GROUP_NAME, SUBAGENTS_TOOL_RUN_TASK, toolInput, undefined, undefined, promptContext);
+          this.addLogMessage('loading', undefined, false, promptContext);
+        },
+      });
+
+      if (result.status === 'cancelled') {
+        const cancelledToolMessage: ContextToolMessage = {
+          id: uuidv4(),
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId,
+              toolName: fullToolName,
+              output: {
+                type: 'json',
+                value: {
+                  messages: result.messages,
+                  promptContext: result.promptContext,
+                  cancelled: true,
+                } as unknown as JSONValue,
+              },
+            },
+          ],
+          promptContext: result.promptContext,
+        };
+
+        this.addToolMessage(
+          toolCallId,
+          SUBAGENTS_TOOL_GROUP_NAME,
+          SUBAGENTS_TOOL_RUN_TASK,
+          toolInput,
+          JSON.stringify(cancelledToolMessage.content[0].output),
+          undefined,
+          result.promptContext,
+        );
+        this.addLogMessage('loading', undefined, false, result.promptContext);
+        return;
+      }
+
+      if (result.status === 'error') {
+        logger.error('Error running subagent from command:', result.error);
+
+        this.addToolMessage(
+          toolCallId,
+          SUBAGENTS_TOOL_GROUP_NAME,
+          SUBAGENTS_TOOL_RUN_TASK,
+          toolInput,
+          JSON.stringify({ type: 'error-text', value: result.error }),
+          undefined,
+          result.promptContext,
+        );
+        this.addLogMessage('loading', undefined, false, result.promptContext);
+        return;
+      }
+
+      const toolResultMessage: ContextToolMessage = {
+        id: uuidv4(),
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId,
+            toolName: fullToolName,
+            output: {
+              type: 'json',
+              value: {
+                messages: result.messages,
+                promptContext: result.promptContext,
+              } as unknown as JSONValue,
+            },
+          },
+        ],
+        promptContext: result.promptContext,
+      };
+
+      const assistantMessage: ContextAssistantMessage = {
+        id: uuidv4(),
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId,
+            toolName: fullToolName,
+            input: toolInput,
+          },
+        ],
+        promptContext: result.promptContext,
+      };
+
+      await this.addContextMessage(assistantMessage);
+      await this.addContextMessage(toolResultMessage);
+
+      this.addToolMessage(
+        toolCallId,
+        SUBAGENTS_TOOL_GROUP_NAME,
+        SUBAGENTS_TOOL_RUN_TASK,
+        toolInput,
+        JSON.stringify(toolResultMessage.content[0].output),
+        undefined,
+        result.promptContext,
+      );
+      this.addLogMessage('loading', undefined, false, result.promptContext);
+
+      await this.updateContextInfo();
+    } finally {
+      if (previousTaskState !== DefaultTaskState.InProgress) {
+        await this.saveTask({ state: previousTaskState });
+      }
+    }
+  }
+
   public updateContextFiles(contextFiles: ContextFile[]) {
     this.contextManager.setContextFiles(contextFiles, false);
     void this.sendContextFilesUpdated();
@@ -1669,11 +2108,21 @@ export class Task {
   }
 
   public async askQuestion(questionData: QuestionData, awaitAnswer = true): Promise<[string, string | undefined]> {
-    const extensionResult = await this.extensionManager.dispatchEvent('onQuestionAsked', { question: questionData }, this.project, this);
+    let storedAnswer = this.storedQuestionAnswers.get(this.getQuestionKey(questionData));
+    const extensionResult = await this.extensionManager.dispatchEvent(
+      'onQuestionAsked',
+      {
+        question: questionData,
+        storedAnswer,
+      },
+      this.project,
+      this,
+    );
     if (extensionResult.answer) {
       logger.info('Question answered by extension', {
         question: questionData.text,
         answer: extensionResult.answer,
+        storedAnswer,
       });
       return [extensionResult.answer, undefined];
     }
@@ -1686,7 +2135,7 @@ export class Task {
       });
     }
 
-    const storedAnswer = this.storedQuestionAnswers.get(this.getQuestionKey(questionData));
+    storedAnswer = this.storedQuestionAnswers.get(this.getQuestionKey(questionData));
 
     if (questionData.isGroupQuestion && !questionData.answers) {
       // group questions have a default set of answers
@@ -2121,6 +2570,7 @@ export class Task {
       finished,
       promptContext,
       actionIds,
+      timestamp: Date.now(),
     };
 
     this.eventManager.sendLog(data);
@@ -2139,50 +2589,73 @@ export class Task {
     return this.skillManager.getSkills(contextMessages);
   }
 
-  public async activateSkill(skillName: string): Promise<void> {
+  public async createSkillMessages(...skillNames: string[]): Promise<ContextMessage[] | null> {
+    if (skillNames.length === 0) {
+      return null;
+    }
+
     const contextMessages = await this.contextManager.getContextMessages();
     const activatedNames = this.skillManager.getActivatedSkillNames(contextMessages);
 
-    if (activatedNames.has(skillName)) {
-      logger.debug('Skill already activated, skipping', { skillName });
-      return;
+    const allMessages: ContextMessage[] = [];
+
+    for (const skillName of skillNames) {
+      if (activatedNames.has(skillName)) {
+        logger.debug('Skill already activated, skipping', { skillName });
+        continue;
+      }
+
+      const content = await this.skillManager.getSkillContent(skillName);
+      if (!content) {
+        throw new Error(`Skill '${skillName}' not found`);
+      }
+
+      const [assistantMessage, toolMessage] = this.skillManager.buildActivateSkillMessages(skillName, content);
+
+      await this.processResponseMessage(
+        {
+          id: assistantMessage.id,
+          action: 'response',
+          content: 'User requested the skill activation.',
+          finished: true,
+        },
+        false,
+      );
+
+      const toolCallId = (toolMessage.content as Array<{ toolCallId: string }>)[0].toolCallId;
+
+      this.addToolMessage(
+        toolCallId,
+        SKILLS_TOOL_GROUP_NAME,
+        SKILLS_TOOL_ACTIVATE_SKILL,
+        { skill: skillName },
+        JSON.stringify(content),
+        undefined,
+        undefined,
+        false,
+        true,
+      );
+
+      allMessages.push(assistantMessage, toolMessage);
+      activatedNames.add(skillName);
     }
 
-    const content = await this.skillManager.getSkillContent(skillName);
-    if (!content) {
-      throw new Error(`Skill '${skillName}' not found`);
+    return allMessages.length > 0 ? allMessages : null;
+  }
+
+  public async activateSkill(skillName: string): Promise<[ContextAssistantMessage, ContextToolMessage] | null> {
+    const messages = await this.createSkillMessages(skillName);
+    if (!messages) {
+      return null;
     }
 
-    const [assistantMessage, toolMessage] = this.skillManager.buildActivateSkillMessages(skillName, content);
-
-    this.contextManager.addContextMessage(assistantMessage);
-    this.contextManager.addContextMessage(toolMessage);
-
-    await this.processResponseMessage(
-      {
-        id: assistantMessage.id,
-        action: 'response',
-        content: 'User requested the skill activation.',
-        finished: true,
-      },
-      false,
-    );
-
-    const toolCallId = (toolMessage.content as Array<{ toolCallId: string }>)[0].toolCallId;
-
-    this.addToolMessage(
-      toolCallId,
-      SKILLS_TOOL_GROUP_NAME,
-      SKILLS_TOOL_ACTIVATE_SKILL,
-      { skill: skillName },
-      JSON.stringify(content),
-      undefined,
-      undefined,
-      false,
-      true,
-    );
+    for (const message of messages) {
+      this.contextManager.addContextMessage(message);
+    }
 
     await this.updateContextInfo();
+
+    return [messages[0] as ContextAssistantMessage, messages[1] as ContextToolMessage];
   }
 
   public async deactivateSkill(skillName: string): Promise<string[]> {
@@ -2539,6 +3012,14 @@ export class Task {
       return;
     }
 
+    const toolInputEntry = this.toolInputChunkMap.get(id);
+    if (toolInputEntry) {
+      if (toolInputEntry.interval) {
+        clearInterval(toolInputEntry.interval);
+      }
+      this.toolInputChunkMap.delete(id);
+    }
+
     logger.debug('Sending tool message:', {
       id,
       baseDir: this.project.baseDir,
@@ -2562,6 +3043,7 @@ export class Task {
       usageReport,
       promptContext,
       finished,
+      timestamp: Date.now(),
     };
 
     if (response && usageReport && saveToDb) {
@@ -2611,6 +3093,7 @@ export class Task {
       content,
       images,
       promptContext,
+      timestamp: Date.now(),
     };
 
     this.eventManager.sendUserMessage(data);
@@ -2651,6 +3134,19 @@ export class Task {
     }
   }
 
+  public reloadGroupMessages(messages: ContextMessage[]) {
+    const messagesData = this.contextManager.getContextMessagesData(messages);
+    for (const messageData of messagesData) {
+      if (messageData.type === 'user') {
+        this.sendUserMessage(messageData);
+      } else if (messageData.type === 'response-completed') {
+        this.sendResponseCompleted(messageData);
+      } else if (messageData.type === 'tool') {
+        this.sendToolMessage(messageData);
+      }
+    }
+  }
+
   public async redoUserPrompt(messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]) {
     logger.info('Redoing user prompt:', {
       baseDir: this.project.baseDir,
@@ -2663,13 +3159,20 @@ export class Task {
     const removedMessages = this.contextManager.removeMessagesUpToUserMessage(messageId);
     const originalUserMessage = removedMessages[0];
     if (!originalUserMessage || originalUserMessage.role !== MessageRole.User) {
-      logger.warn('Could not find the specified user message to redo.', { messageId });
+      logger.warn('Could not find the specified user message to redo.', {
+        messageId,
+      });
       return;
     }
 
     const originalText = extractTextContent(originalUserMessage.content);
     const promptToRun = updatedPrompt ?? originalText;
     const imagesToRun = updatedImages ?? (updatedPrompt !== undefined ? undefined : extractImagesFromContent(originalUserMessage.content));
+    if (this.tryCustomCommand(promptToRun, mode)) {
+      this.sendTaskMessageRemoved(removedMessages.map((msg) => msg.id));
+      await this.updateContextInfo();
+      return;
+    }
 
     if (promptToRun) {
       logger.info('Found message content to run, reloading and re-running prompt.', {
@@ -2694,6 +3197,14 @@ export class Task {
     });
 
     const mode = this.getCurrentMode();
+    const contextMessages = await this.contextManager.getContextMessages();
+    const lastMessage = contextMessages[contextMessages.length - 1];
+
+    if (lastMessage?.role === MessageRole.User && this.tryCustomCommand(extractTextContent(lastMessage.content), mode)) {
+      const removedMessageIds = this.contextManager.removeMessageById(lastMessage.id);
+      this.sendTaskMessageRemoved(removedMessageIds);
+      return;
+    }
 
     if (!AIDER_MODES.includes(mode)) {
       const profile = await this.getTaskAgentProfile();
@@ -2703,15 +3214,16 @@ export class Task {
         return;
       }
 
+      if (!this.task.agentProfileId) {
+        await this.saveTask({ agentProfileId: profile.id });
+      }
+
       logger.info('Resuming agent task...');
       this.addLogMessage('loading', 'Resuming task...');
 
       void this.runPromptInAgent(profile, mode, null);
     } else {
       // In other modes, check if last message is user
-      const contextMessages = await this.contextManager.getContextMessages();
-      const lastMessage = contextMessages[contextMessages.length - 1];
-
       if (lastMessage && lastMessage.role === MessageRole.User) {
         // Last message is from user, redo it
         logger.info('Last message is from user, redoing prompt');
@@ -2723,6 +3235,27 @@ export class Task {
         void this.runPrompt('Continue', mode, false);
       }
     }
+  }
+
+  private tryCustomCommand(prompt: string, mode: Mode): boolean {
+    if (!prompt.startsWith('/')) {
+      return false;
+    }
+
+    const [name, ...args] = parseCommandArgs(prompt.slice(1));
+    if (!name) {
+      return false;
+    }
+
+    const isExtensionCommand = this.extensionManager.getCommands(this.project).some(({ command }) => command.name === name);
+    const isCustomCommand = !!this.customCommandManager.getCommand(name);
+    if (!isExtensionCommand && !isCustomCommand) {
+      return false;
+    }
+
+    logger.info('Executing custom command from user prompt', { name, args });
+    void this.runCustomCommand(name, args, mode);
+    return true;
   }
 
   private getCurrentMode() {
@@ -2744,8 +3277,15 @@ export class Task {
   private findSkillActivationMessages(contextMessages: ContextMessage[]): ContextMessage[] {
     // Collect all skill activations with their skill names
     // We'll deduplicate by keeping only the most recent activation per skill
-    const skillActivations: Map<string, { toolCall: ToolCallPart; assistantMsg: ContextMessage; toolMsg: ContextMessage; toolResultPart: ToolResultPart }> =
-      new Map();
+    const skillActivations: Map<
+      string,
+      {
+        toolCall: ToolCallPart;
+        assistantMsg: ContextMessage;
+        toolMsg: ContextMessage;
+        toolResultPart: ToolResultPart;
+      }
+    > = new Map();
 
     for (const message of contextMessages) {
       if (message.role === 'assistant' && Array.isArray(message.content)) {
@@ -2807,7 +3347,7 @@ export class Task {
     return skillMessages;
   }
 
-  public async smartCompactConversation(contextMessages?: ContextMessage[], infoMessage = 'Conversation smart-compacted.') {
+  public async smartCompactConversation(contextMessages?: ContextMessage[], infoMessage = 'Conversation smart-compacted.'): Promise<ContextMessage[]> {
     if (!contextMessages) {
       contextMessages = await this.contextManager.getContextMessages();
     }
@@ -2820,7 +3360,28 @@ export class Task {
     // backing up the current context before compacting for debugging purposes
     await this.contextManager.backupContext();
 
-    const compactedMessages = smartCompactMessages(contextMessages);
+    // Determine compaction level based on messages since last compaction
+    const messagesSinceLastCompaction = contextMessages.length - this.lastSmartCompactionMessageCount;
+    if (messagesSinceLastCompaction <= 3) {
+      logger.info('Increasing compaction level to aggressive due to low message count since last compaction.', {
+        messagesSinceLastCompaction,
+        smartCompactionLevel: this.smartCompactionLevel,
+      });
+      this.smartCompactionLevel = Math.min(this.smartCompactionLevel + 1, CompactionLevel.Max) as CompactionLevel;
+    } else if (messagesSinceLastCompaction > 5 && this.smartCompactionLevel > CompactionLevel.One) {
+      logger.info('Decreasing compaction level to mild due to high message count since last compaction.', {
+        messagesSinceLastCompaction,
+      });
+      this.smartCompactionLevel = Math.max(this.smartCompactionLevel - 1, CompactionLevel.One) as CompactionLevel;
+    }
+    // else: 4-5 messages since last compaction → keep current level
+
+    logger.debug('Current compaction level:', {
+      smartCompactionLevel: this.smartCompactionLevel,
+    });
+    const compactedMessages = await smartCompactMessages(contextMessages, 10, this.smartCompactionLevel);
+
+    this.lastSmartCompactionMessageCount = compactedMessages.length;
 
     this.contextManager.setContextMessages(compactedMessages);
     await this.contextManager.loadMessages(compactedMessages, false);
@@ -2839,7 +3400,7 @@ export class Task {
     abortSignal?: AbortSignal,
     waitForAgentCompletion = true,
     loadingMessage = 'Compacting conversation...',
-  ) {
+  ): Promise<void> {
     // Get profile if not provided
     if (!profile) {
       profile = await this.getTaskAgentProfile();
@@ -2848,10 +3409,10 @@ export class Task {
       contextMessages = await this.contextManager.getContextMessages();
     }
 
-    const userMessage = contextMessages[0];
+    const userMessage = contextMessages.find((msg) => msg.role === MessageRole.User);
 
     if (!userMessage) {
-      this.addLogMessage('warning', 'No conversation to compact.');
+      this.addLogMessage('warning', 'No conversation to compact.', false, promptContext);
       return;
     }
 
@@ -2865,16 +3426,6 @@ export class Task {
 
     this.addLogMessage('loading', loadingMessage);
     this.isCompacting = true;
-
-    const extractSummary = (content: string): string => {
-      const lines = content.split('\n');
-      const summaryMarker = '### **Conversation Summary**';
-      const markerIndex = lines.findIndex((line) => line.trim() === summaryMarker);
-      if (markerIndex !== -1) {
-        return lines.slice(markerIndex).join('\n');
-      }
-      return content;
-    };
 
     try {
       if (!AIDER_MODES.includes(mode)) {
@@ -3000,41 +3551,48 @@ export class Task {
     // Get context files to transfer
     const contextFiles = await this.getContextFiles();
 
-    // Generate the handoff prompt using agent.generateText
-    const handoffPrompt = await this.promptsManager.getHandoffPrompt(this, focus.trim().length ? focus.trim() : undefined);
     let generatedPrompt: string | undefined;
 
-    if (!AIDER_MODES.includes(mode)) {
-      // Agent mode logic
-      const profile = await this.getTaskAgentProfile();
-      if (!profile) {
-        throw new Error('No active Agent profile found');
-      }
+    try {
+      const handoffPrompt = await this.promptsManager.getHandoffPrompt(this, focus.trim().length ? focus.trim() : undefined);
 
-      const handoffAgentProfile: AgentProfile = {
-        ...HANDOFF_AGENT_PROFILE,
-        provider: profile.provider,
-        model: profile.model,
-      };
+      if (!AIDER_MODES.includes(mode)) {
+        // Agent mode logic
+        const profile = await this.getTaskAgentProfile();
+        if (!profile) {
+          throw new Error('No active Agent profile found');
+        }
 
-      if (waitForAgentCompletion) {
-        await this.waitForCurrentAgentToFinish();
-      }
-      generatedPrompt = await this.agent.generateText(
-        `${handoffAgentProfile.provider}/${handoffAgentProfile.model}`,
-        '',
-        handoffPrompt,
-        this.getProjectDir(),
-        await this.contextManager.getContextMessages(),
-        true,
-      );
-    } else {
-      // Other modes (ask, edit)
-      const responses = await this.sendPromptToAider(handoffPrompt, undefined, 'ask');
+        const handoffAgentProfile: AgentProfile = {
+          ...HANDOFF_AGENT_PROFILE,
+          provider: profile.provider,
+          model: profile.model,
+        };
 
-      if (responses.length > 0 && responses[0].content) {
-        generatedPrompt = extractTextContent(responses[0].content);
+        if (waitForAgentCompletion) {
+          await this.waitForCurrentAgentToFinish();
+        }
+        generatedPrompt = await this.agent.generateText(
+          `${handoffAgentProfile.provider}/${handoffAgentProfile.model}`,
+          '',
+          handoffPrompt,
+          this.getProjectDir(),
+          await this.contextManager.getContextMessages(),
+          true,
+        );
+      } else {
+        const responses = await this.sendPromptToAider(handoffPrompt, undefined, 'ask');
+
+        if (responses.length > 0 && responses[0].content) {
+          generatedPrompt = extractTextContent(responses[0].content);
+        }
       }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.addLogMessage('loading', '', true);
+      this.addLogMessage('error', `Handoff failed: ${errorMsg}`);
+      logger.error('Handoff prompt generation failed:', errorMsg);
+      return;
     }
 
     this.addLogMessage('loading', '', true);
@@ -3048,7 +3606,7 @@ export class Task {
     const newTaskData = await this.project.createNewTask({
       parentId: this.task.parentId || this.taskId,
       sendEvent: false,
-      autoApprove: execute ? this.task.autoApprove : undefined,
+      autonomyMode: execute ? this.task.autonomyMode : undefined,
       activate: true,
     });
 
@@ -3442,7 +4000,7 @@ export class Task {
 
     if (!prompt) {
       try {
-        prompt = await this.customCommandManager.processCommandTemplate(command, args);
+        prompt = await this.customCommandManager.processCommandTemplate(command, args, this.getTaskDir());
       } catch (error) {
         // Handle shell command execution errors
         if (error instanceof ShellCommandError) {
@@ -3476,23 +4034,17 @@ ${error.stderr}`,
           return;
         }
 
-        // Activate command skills before running the prompt
-        if (command.skills?.length) {
-          for (const skillName of command.skills) {
-            try {
-              await this.activateSkill(skillName);
-            } catch (error) {
-              logger.warn(`Failed to activate skill '${skillName}' for command '${commandName}': ${error instanceof Error ? error.message : String(error)}`);
-            }
-          }
-        }
-
-        const systemPrompt = await this.promptsManager.getSystemPrompt(this.store.getSettings(), this, profile, command.autoApprove ?? this.task.autoApprove);
+        const systemPrompt = await this.promptsManager.getSystemPrompt(
+          this.store.getSettings(),
+          this,
+          profile,
+          command.autonomyMode ?? this.task.autonomyMode ?? DEFAULT_AUTONOMY_MODE,
+        );
 
         const messages = command.includeContext === false ? [] : undefined;
         const contextFiles = command.includeContext === false ? [] : undefined;
         this.addLogMessage('loading', 'Executing custom command...');
-        await this.runPromptInAgent(profile, mode, prompt, promptContext, messages, contextFiles, systemPrompt);
+        await this.runPromptInAgent(profile, mode, prompt, promptContext, messages, contextFiles, systemPrompt, true, true, undefined, command.skills);
       } else {
         // All other modes (code, ask, architect)
         this.addLogMessage('loading', 'Executing custom command...');
@@ -3520,6 +4072,10 @@ ${error.stderr}`,
       });
     }
     await this.updateContextInfo();
+  }
+
+  async restartAiderConnector() {
+    await this.aiderManager.start(true);
   }
 
   public async updateTask(updates: Partial<TaskData>): Promise<TaskData> {
@@ -3639,6 +4195,7 @@ ${error.stderr}`,
 
     void this.sendUpdatedFilesUpdated();
     void this.sendWorktreeIntegrationStatusUpdated();
+    await this.updateAutocompletionData(undefined, true);
 
     return true;
   }
@@ -3726,11 +4283,7 @@ ${error.stderr}`,
     } catch (error) {
       logger.error('Failed to merge worktree:', { error });
 
-      const isConflict =
-        error instanceof GitError &&
-        (error.gitOutput?.toLowerCase().includes('resolve all conflicts') ||
-          error.message?.toLowerCase().includes('conflicts must be resolved first') ||
-          error.gitOutput?.toLowerCase().includes('conflicts must be resolved first'));
+      const isConflict = this.isConflictError(error);
 
       this.addLogMessage(
         'error',
@@ -3749,70 +4302,177 @@ ${error.stderr}`,
     await this.sendWorktreeIntegrationStatusUpdated();
   }
 
-  public async mergeAndSwitchToLocal(targetBranch?: string): Promise<void> {
-    if (!this.task.worktree) {
+  public async switchToLocalWorkingMode(options?: SwitchToLocalOptions): Promise<void> {
+    if (options?.mergeBeforeSwitch && !this.task.worktree) {
       throw new Error('No worktree exists for this task');
     }
 
-    logger.info('Merging worktree and switching to local mode', {
+    logger.info('Switching to local working mode', {
       baseDir: this.project.baseDir,
       taskId: this.taskId,
+      mergeBeforeSwitch: options?.mergeBeforeSwitch ?? false,
     });
 
     await this.waitForCurrentPromptToFinish();
 
-    try {
-      const effectiveTargetBranch = targetBranch || (await this.worktreeManager.getProjectMainBranch(this.project.baseDir));
+    if (options?.mergeBeforeSwitch && this.task.worktree) {
+      try {
+        const effectiveTargetBranch = options.targetBranch || (await this.worktreeManager.getProjectMainBranch(this.project.baseDir));
 
-      this.addLogMessage('loading', `Merging worktree to ${effectiveTargetBranch} branch and switching to local mode...`);
+        this.addLogMessage('loading', `Merging worktree to ${effectiveTargetBranch} branch and switching to local mode...`);
 
-      const settings = this.store.getSettings();
-      const symlinkFolders = settings.taskSettings.worktreeSymlinkFolders || [];
+        const settings = this.store.getSettings();
+        const symlinkFolders = settings.taskSettings.worktreeSymlinkFolders || [];
 
-      // Perform the merge (will throw on failure, preventing the switch)
-      const mergeState = await this.worktreeManager.mergeWorktreeToMainWithUncommitted(
-        this.project.baseDir,
-        this.task.id,
-        this.task.worktree.path,
-        false,
-        this.task.name || `Task ${this.taskId} changes`,
-        targetBranch,
-        symlinkFolders,
-      );
+        const mergeState = await this.worktreeManager.mergeWorktreeToMainWithUncommitted(
+          this.project.baseDir,
+          this.task.id,
+          this.task.worktree.path,
+          false,
+          this.task.name || `Task ${this.taskId} changes`,
+          options.targetBranch,
+          symlinkFolders,
+        );
 
-      // Store merge state for potential revert
-      await this.saveTask({ lastMergeState: mergeState });
+        await this.saveTask({ lastMergeState: mergeState });
 
-      this.addLogMessage('info', `Successfully merged worktree to ${effectiveTargetBranch} branch`, true);
+        this.addLogMessage('info', `Successfully merged worktree to ${effectiveTargetBranch} branch`, true);
+      } catch (error) {
+        logger.error('Failed to merge worktree and switch to local:', { error });
 
-      // Now switch to local mode (same path as UI, handles save + events)
-      await this.updateTask({ workingMode: 'local' });
-    } catch (error) {
-      logger.error('Failed to merge worktree and switch to local:', { error });
+        const isConflict = this.isConflictError(error);
 
-      const isConflict =
-        error instanceof GitError &&
-        (error.gitOutput?.toLowerCase().includes('resolve all conflicts') ||
-          error.message?.toLowerCase().includes('conflicts must be resolved first') ||
-          error.gitOutput?.toLowerCase().includes('conflicts must be resolved first'));
+        this.addLogMessage(
+          'error',
+          isConflict
+            ? 'worktree.mergeConflicts'
+            : error instanceof GitError
+              ? error.getErrorDetails()
+              : `Failed to merge worktree: ${error instanceof Error ? error.message : String(error)}`,
+          true,
+          undefined,
+          isConflict ? ['rebase-worktree'] : undefined,
+        );
 
-      this.addLogMessage(
-        'error',
-        isConflict
-          ? 'worktree.mergeConflicts'
-          : error instanceof GitError
-            ? error.getErrorDetails()
-            : `Failed to merge worktree: ${error instanceof Error ? error.message : String(error)}`,
-        true,
-        undefined,
-        isConflict ? ['rebase-worktree'] : undefined,
-      );
+        await this.sendUpdatedFilesUpdated();
+        await this.sendWorktreeIntegrationStatusUpdated();
 
-      await this.sendUpdatedFilesUpdated();
-      await this.sendWorktreeIntegrationStatusUpdated();
-
-      throw error;
+        throw error;
+      }
     }
+
+    if (options?.switchAllInWorktree && this.task.worktree) {
+      const allTasks = await this.project.getTasks();
+      const sharedTasks = allTasks.filter((t) => t.workingMode === 'worktree' && t.worktree?.path === this.task.worktree!.path && t.id !== this.taskId);
+      for (const sharedTaskData of sharedTasks) {
+        const sharedTask = this.project.getTask(sharedTaskData.id);
+        if (sharedTask) {
+          await sharedTask.updateTask({ workingMode: 'local' });
+        }
+      }
+    }
+
+    await this.updateTask({ workingMode: 'local' });
+
+    await this.updateAutocompletionData(undefined, true);
+  }
+
+  public async switchToWorktreeWorkingMode(options?: SwitchToWorktreeOptions): Promise<void> {
+    logger.info('Switching to worktree working mode', {
+      baseDir: this.project.baseDir,
+      taskId: this.taskId,
+      carryOverUncommittedChanges: options?.carryOverUncommittedChanges ?? false,
+      dropSourceChanges: options?.dropSourceChanges ?? true,
+    });
+
+    await this.waitForCurrentPromptToFinish();
+
+    let stashId: string | null = null;
+    const settings = this.store.getSettings();
+    const symlinkFolders = settings.taskSettings.worktreeSymlinkFolders || [];
+
+    if (options?.carryOverUncommittedChanges) {
+      const timestamp = Date.now();
+      const shortId = this.taskId.length > 24 ? this.taskId.substring(24) : this.taskId;
+      stashId = `local-${shortId}-to-worktree-${timestamp}`;
+
+      try {
+        const stashResult = await this.worktreeManager.stashUncommittedChanges(
+          stashId,
+          this.project.baseDir,
+          'Uncommitted changes to carry over to worktree',
+          symlinkFolders,
+        );
+        if (!stashResult) {
+          stashId = null;
+        }
+      } catch (error) {
+        logger.error('Failed to stash uncommitted changes before worktree switch:', { error });
+        throw new Error(`Failed to stash uncommitted changes: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    const existingWorktree = await this.worktreeManager.getTaskWorktree(this.project.baseDir, this.taskId);
+    if (!existingWorktree && !this.task.worktree) {
+      try {
+        await this.initWorktree();
+      } catch (error) {
+        if (stashId) {
+          try {
+            await this.worktreeManager.applyStash(this.project.baseDir, stashId);
+            await this.worktreeManager.dropStash(this.project.baseDir, stashId);
+          } catch (restoreError) {
+            logger.error('Failed to restore stash after worktree creation failure:', { error: restoreError, stashId });
+            throw new Error(
+              `Failed to create worktree and could not restore stashed changes. Stash ID "${stashId}" still exists. Manual recovery required. Error: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        throw error;
+      }
+    } else if (existingWorktree && !this.task.worktree) {
+      this.task.worktree = existingWorktree;
+    }
+
+    if (stashId && this.task.worktree) {
+      try {
+        await this.worktreeManager.applyStash(this.task.worktree.path, stashId);
+
+        if (!options?.dropSourceChanges) {
+          await this.worktreeManager.applyStash(this.project.baseDir, stashId);
+        }
+
+        await this.worktreeManager.dropStash(this.project.baseDir, stashId);
+      } catch (error) {
+        logger.error('Failed to apply stashed changes to worktree:', { error });
+
+        const originalMessage = error instanceof Error ? error.message : String(error);
+
+        try {
+          await this.worktreeManager.applyStash(this.project.baseDir, stashId);
+          await this.worktreeManager.dropStash(this.project.baseDir, stashId);
+          logger.info('Stashed changes restored to project root after failed apply to worktree');
+          throw new Error(`Failed to apply stashed changes to worktree. Changes have been restored to project root. Error: ${originalMessage}`);
+        } catch (restoreError) {
+          if (restoreError instanceof Error && restoreError.message.includes('restored to project root')) {
+            throw restoreError;
+          }
+          logger.error('Failed to restore stash to project root:', { error: restoreError, stashId });
+          throw new Error(
+            `Failed to apply stashed changes to worktree and could not restore them. Stash ID "${stashId}" still exists. Manual recovery required. Original error: ${originalMessage}`,
+          );
+        }
+      }
+    }
+
+    await this.updateTask({ workingMode: 'worktree' });
+
+    void this.sendUpdatedFilesUpdated();
+    await this.updateAutocompletionData(undefined, true);
+  }
+
+  public async getLocalUncommittedFiles(): Promise<WorktreeUncommittedFiles> {
+    return await this.worktreeManager.getUncommittedFiles(this.project.baseDir);
   }
 
   public async applyUncommittedChanges(targetBranch?: string): Promise<void> {
@@ -3847,12 +4507,7 @@ ${error.stderr}`,
     } catch (error) {
       logger.error('Failed to apply uncommitted changes:', error);
 
-      const isConflict =
-        error instanceof GitError &&
-        (error.gitOutput?.toLowerCase().includes('conflict') ||
-          error.message?.toLowerCase().includes('conflict') ||
-          error.gitOutput?.toLowerCase().includes('conflicts must be resolved first') ||
-          error.message?.toLowerCase().includes('conflicts must be resolved first'));
+      const isConflict = this.isConflictError(error);
 
       this.addLogMessage(
         'error',
@@ -3869,6 +4524,25 @@ ${error.stderr}`,
 
     await this.sendUpdatedFilesUpdated();
     await this.sendWorktreeIntegrationStatusUpdated();
+  }
+
+  public async mergeWorktreeToWorktree(targetWorktreeDir: string, includeUncommitted = false): Promise<void> {
+    if (!this.task.worktree) {
+      throw new Error('No worktree exists for this task');
+    }
+
+    logger.info('Merging worktree to worktree', {
+      baseDir: this.project.baseDir,
+      taskId: this.taskId,
+      targetWorktreeDir,
+      includeUncommitted,
+    });
+
+    await this.waitForCurrentPromptToFinish();
+
+    await this.worktreeManager.mergeWorktreeToWorktree(this.task.worktree.path, targetWorktreeDir, includeUncommitted);
+
+    await this.sendUpdatedFilesUpdated();
   }
 
   public async revertLastMerge(): Promise<void> {
@@ -3990,11 +4664,20 @@ ${error.stderr}`,
     amend = beforeResult.amend;
 
     const taskDir = this.getTaskDir();
-    await this.worktreeManager.commitChanges(taskDir, message, amend);
+    const committed = await this.worktreeManager.commitChanges(taskDir, message, amend);
     await this.sendUpdatedFilesUpdated();
     await this.sendWorktreeIntegrationStatusUpdated();
 
-    await this.extensionManager.dispatchEvent('onAfterCommit', { message, amend }, this.project, this);
+    if (committed) {
+      await this.extensionManager.dispatchEvent('onAfterCommit', { message, amend }, this.project, this);
+    } else {
+      logger.info('Commit cancelled by user', { baseDir: this.project.baseDir, taskId: this.taskId });
+    }
+  }
+
+  public cancelCommitChanges(): void {
+    const taskDir = this.getTaskDir();
+    this.worktreeManager.cancelCommitChanges(taskDir);
   }
 
   public async getWorktreeIntegrationStatus(targetBranch?: string) {
@@ -4047,14 +4730,27 @@ ${error.stderr}`,
 
     try {
       this.addLogMessage('loading', `Rebasing worktree from ${effectiveFromBranch}...`);
-      const { success, error } = await this.worktreeManager.rebaseMainIntoWorktree(this.task.worktree.path, effectiveFromBranch, this.task.worktree.baseCommit);
+      const settings = this.store.getSettings();
+      const symlinkFolders = settings.taskSettings.worktreeSymlinkFolders || [];
+      const { success, error } = await this.worktreeManager.rebaseMainIntoWorktree(
+        this.task.worktree.path,
+        effectiveFromBranch,
+        this.task.worktree.baseCommit,
+        symlinkFolders,
+      );
 
       if (success) {
         // Update baseCommit to the new HEAD after successful rebase
         // This ensures subsequent rebases only replay commits made after this point
         const newHead = await this.worktreeManager.getHeadCommit(this.task.worktree.path);
         if (newHead) {
-          await this.saveTask({ worktree: { ...this.task.worktree, baseCommit: newHead, baseBranch: effectiveFromBranch } });
+          await this.saveTask({
+            worktree: {
+              ...this.task.worktree,
+              baseCommit: newHead,
+              baseBranch: effectiveFromBranch,
+            },
+          });
         }
 
         this.addLogMessage('info', 'Worktree rebased successfully', true);
@@ -4251,6 +4947,15 @@ ${error.stderr}`,
     await this.sendWorktreeIntegrationStatusUpdated();
   }
 
+  private isConflictError(error: unknown): boolean {
+    if (error instanceof GitError) {
+      const output = (error.gitOutput || '').toLowerCase();
+      const message = (error.message || '').toLowerCase();
+      return output.includes('conflict') || message.includes('conflict');
+    }
+    return false;
+  }
+
   public async resolveConflictsWithAgent(): Promise<void> {
     await this.waitForCurrentPromptToFinish();
 
@@ -4293,10 +4998,25 @@ ${error.stderr}`,
 
     try {
       this.addLogMessage('loading', 'Continuing rebase...');
-      await this.worktreeManager.continueRebase(this.task.worktree.path);
+      const { ontoBranch } = await this.worktreeManager.continueRebase(this.task.worktree.path);
 
-      // Clear any remaining merge state after successful rebase continuation
-      await this.saveTask({ lastMergeState: undefined });
+      // Update baseCommit to the new HEAD after successful rebase continuation
+      // This ensures subsequent rebases only replay commits made after this point
+      const newHead = await this.worktreeManager.getHeadCommit(this.task.worktree.path);
+      if (newHead) {
+        await this.saveTask({
+          lastMergeState: undefined,
+          worktree: {
+            ...this.task.worktree,
+            baseCommit: newHead,
+            // Update baseBranch if we could determine it from the rebase state, otherwise keep existing
+            baseBranch: ontoBranch || this.task.worktree.baseBranch,
+          },
+        });
+      } else {
+        // Clear any remaining merge state after successful rebase continuation
+        await this.saveTask({ lastMergeState: undefined });
+      }
 
       this.addLogMessage('info', 'Rebase completed', true);
     } catch (error) {
@@ -4404,6 +5124,10 @@ ${error.stderr}`,
     return this.agent.generateText(modelId, systemPrompt, prompt, this.getProjectDir());
   }
 
+  public async generateObject<T>(modelId: string, systemPrompt: string, prompt: string, schema: z.ZodType<T>): Promise<T | undefined> {
+    return this.agent.generateObject(modelId, systemPrompt, prompt, schema, this.getProjectDir());
+  }
+
   async runCodeChangeRequests(requests: ChangeRequestItem[], contextSize: number = 5, createNewTask?: boolean): Promise<void> {
     const mode = this.getCurrentMode();
 
@@ -4461,7 +5185,7 @@ ${error.stderr}`,
     const newTaskData = await this.project.createNewTask({
       name: taskName,
       sendEvent: false,
-      autoApprove: true,
+      autonomyMode: AutonomyMode.Autonomous,
       activate: true,
       mode,
       parentId: this.task.parentId || this.taskId,

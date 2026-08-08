@@ -1,16 +1,15 @@
 import { createAzure } from '@ai-sdk/azure';
-import { Model, ProviderProfile, ReasoningEffort, SettingsData, UsageReportData } from '@common/types';
+import { Model, ProviderProfile, ReasoningEffort, SettingsData, Reasoning } from '@common/types';
 import { AzureProvider, isAzureProvider, LlmProvider } from '@common/agent';
 import { type OpenAIResponsesProviderOptions } from '@ai-sdk/openai';
 
-import type { LanguageModelUsage } from 'ai';
-import type { LanguageModelV2, SharedV2ProviderOptions } from '@ai-sdk/provider';
+import type { LanguageModel } from 'ai';
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 
 import logger from '@/logger';
 import { AiderModelMapping, LlmProviderStrategy } from '@/models';
 import { getEffectiveEnvironmentVariable } from '@/utils';
-import { Task } from '@/task/task';
-import { calculateCost, getDefaultModelInfo } from '@/models/providers/default';
+import { getDefaultModelInfo, getDefaultUsageReport } from '@/models/providers/default';
 
 const extractResourceNameFromEndpoint = (endpoint: string): string => {
   try {
@@ -54,7 +53,7 @@ export const getAzureAiderMapping = (provider: ProviderProfile, modelId: string)
 };
 
 // === LLM Creation Functions ===
-export const createAzureLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModelV2 => {
+export const createAzureLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel => {
   const provider = profile.provider as AzureProvider;
   let apiKey = provider.apiKey;
   let resourceName = provider.resourceName;
@@ -91,45 +90,19 @@ export const createAzureLlm = (profile: ProviderProfile, model: Model, settings:
   return azureProvider.responses(model.id);
 };
 
-type AzureMetadata = {
-  openai: {
-    cachedPromptTokens?: number;
-  };
-};
-
-// === Cost and Usage Functions ===
-export const getAzureUsageReport = (
-  task: Task,
-  provider: ProviderProfile,
-  model: Model,
-  usage: LanguageModelUsage,
-  providerMetadata?: unknown,
-): UsageReportData => {
-  const totalSentTokens = usage.inputTokens || 0;
-  const receivedTokens = usage.outputTokens || 0;
-
-  // Extract cache read tokens from provider metadata
-  const { openai } = (providerMetadata as AzureMetadata) || {};
-  const cacheReadTokens = openai?.cachedPromptTokens ?? usage.cachedInputTokens ?? 0;
-
-  // Calculate sentTokens after deducting cached tokens
-  const sentTokens = totalSentTokens - cacheReadTokens;
-
-  // Calculate cost internally with already deducted sentTokens
-  const messageCost = calculateCost(model, sentTokens, receivedTokens, cacheReadTokens);
-
-  return {
-    model: `${provider.id}/${model.id}`,
-    sentTokens,
-    receivedTokens,
-    cacheReadTokens,
-    messageCost,
-    agentTotalCost: task.task.agentTotalCost + messageCost,
-  };
-};
-
-export const getAzureProviderOptions = (llmProvider: LlmProvider, model: Model): SharedV2ProviderOptions | undefined => {
+export const getAzureProviderOptions = (llmProvider: LlmProvider, model: Model, reasoning?: Reasoning): SharedV4ProviderOptions | undefined => {
   if (isAzureProvider(llmProvider)) {
+    // When the top-level reasoning parameter is set (not undefined or 'provider-default'),
+    // omit reasoningEffort from providerOptions so the AI SDK's portable reasoning takes effect.
+    // Keep reasoningSummary so reasoning output is still returned.
+    if (reasoning && reasoning !== 'provider-default') {
+      return {
+        openai: {
+          reasoningSummary: 'auto',
+        } satisfies OpenAIResponsesProviderOptions,
+      };
+    }
+
     // Extract reasoningEffort from model overrides or provider config
     const providerOverrides = model.providerOverrides as Partial<AzureProvider> | undefined;
     const reasoningEffort = providerOverrides?.reasoningEffort ?? llmProvider.reasoningEffort;
@@ -160,14 +133,15 @@ export const getAzureProviderOptions = (llmProvider: LlmProvider, model: Model):
   return undefined;
 };
 
-export const getAzureProviderParameters = (llmProvider: LlmProvider, model: Model): Record<string, unknown> => {
+export const getAzureProviderParameters = (llmProvider: LlmProvider, model: Model, reasoning?: Reasoning): Record<string, unknown> => {
   if (isAzureProvider(llmProvider)) {
-    // Extract reasoningEffort from model overrides or provider config
     const providerOverrides = model.providerOverrides as Partial<AzureProvider> | undefined;
     const reasoningEffort = providerOverrides?.reasoningEffort ?? llmProvider.reasoningEffort;
+    const reasoningEnabled =
+      reasoning && reasoning !== 'provider-default' ? reasoning !== 'none' : !!reasoningEffort && reasoningEffort !== ReasoningEffort.None;
 
-    if (reasoningEffort && reasoningEffort !== ReasoningEffort.None) {
-      logger.debug('Clearing temperature and maxOutputTokens for Azure with reasoning effort:', { reasoningEffort });
+    if (reasoningEnabled) {
+      logger.debug('Clearing temperature and maxOutputTokens for Azure with reasoning:', { reasoning: reasoning ?? reasoningEffort });
       return {
         // not supported by Azure with reasoning models
         maxOutputTokens: undefined,
@@ -183,7 +157,7 @@ export const getAzureProviderParameters = (llmProvider: LlmProvider, model: Mode
 export const azureProviderStrategy: LlmProviderStrategy = {
   // Core LLM functions
   createLlm: createAzureLlm,
-  getUsageReport: getAzureUsageReport,
+  getUsageReport: getDefaultUsageReport,
 
   // Model discovery functions
   loadModels: async () => ({

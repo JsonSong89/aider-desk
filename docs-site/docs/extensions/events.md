@@ -259,8 +259,13 @@ interface AgentStartedEvent {
   contextMessages: ContextMessage[];
   contextFiles: ContextFile[];
   blocked?: boolean;
+  images?: string[];
+  skillsToActivate?: string[];
+  modelCallSettings?: ModelCallSettings;
 }
 ```
+
+`modelCallSettings` contains the computed model-call defaults when the event is dispatched. Return a partial value to override AI SDK call parameters; it is merged with the defaults. See [Model Call Settings](./api-reference#model-call-settings) for the available fields.
 
 ### AgentStepStartedEvent
 Called before each agent step starts (before the LLM call). Use to modify messages that will be sent.
@@ -556,7 +561,7 @@ interface AiderPromptStartedEvent {
   messages: ConnectorMessage[];
   files: ContextFile[];
   blocked?: boolean;
-  autoApprove?: boolean;
+  autonomyMode?: 'manual' | 'guided' | 'autonomous';
   denyCommands?: boolean;
 }
 ```

@@ -1,6 +1,6 @@
 import { ProjectData } from '@common/types';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, startTransition, useCallback, useEffect, useOptimistic, useRef, useState, useTransition } from 'react';
+import { Activity, Suspense, lazy, startTransition, useCallback, useEffect, useOptimistic, useRef, useState, useTransition } from 'react';
 import { MdBarChart, MdSettings, MdUpload } from 'react-icons/md';
 import { PiNotebookFill } from 'react-icons/pi';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +10,6 @@ import { compareBaseDirs } from '@common/utils';
 
 import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
 import { useOS } from '@/hooks/useOS';
-import { UsageDashboard } from '@/components/usage/UsageDashboard';
 import { LogsPage } from '@/components/logs/LogsPage';
 import { IconButton } from '@/components/common/IconButton';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
@@ -18,17 +17,20 @@ import { NoProjectsOpen } from '@/components/project/NoProjectsOpen';
 import { OpenProjectDialog } from '@/components/project/OpenProjectDialog';
 import { ProjectTabs } from '@/components/project/ProjectTabs';
 import { ProjectView } from '@/components/project/ProjectView';
-import { SettingsPage } from '@/components/settings/SettingsPage';
 import { useVersions } from '@/hooks/useVersions';
 import { ExtensionComponentWrapper } from '@/components/extensions/ExtensionComponentWrapper';
+import { FloatingExtensionPanels } from '@/components/extensions/FloatingExtensionPanels';
 import { HtmlInfoDialog } from '@/components/common/HtmlInfoDialog';
 import { ProjectSettingsProvider } from '@/contexts/ProjectSettingsContext';
 import { TelemetryInfoDialog } from '@/components/TelemetryInfoDialog';
 import { showInfoNotification } from '@/utils/notifications';
 import { useApi } from '@/contexts/ApiContext';
-import { ModelLibrary } from '@/components/ModelLibrary';
 import { URL_PARAMS, encodeBaseDir, decodeBaseDir, ROUTES } from '@/utils/routes';
 import { useBooleanState } from '@/hooks/useBooleanState';
+
+const UsageDashboard = lazy(() => import('@/components/usage/UsageDashboard').then((module) => ({ default: module.UsageDashboard })));
+const SettingsPage = lazy(() => import('@/components/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })));
+const ModelLibrary = lazy(() => import('@/components/ModelLibrary').then((module) => ({ default: module.ModelLibrary })));
 
 let hasShownUpdateNotification = false;
 
@@ -100,10 +102,11 @@ export const Home = () => {
       try {
         const openProjects = await api.getOpenProjects();
         setOpenProjects(openProjects);
-        setProjectsLoaded(true);
       } catch (error) {
         // eslint-disable-next-line no-console
         console.error('Error loading projects:', error);
+      } finally {
+        setProjectsLoaded(true);
       }
     };
 
@@ -591,19 +594,25 @@ export const Home = () => {
           <OpenProjectDialog onClose={() => setIsOpenProjectDialogVisible(false)} onAddProject={handleAddProject} openProjects={optimisticOpenProjects} />
         )}
         <Activity mode={showSettingsInfo !== null ? 'visible' : 'hidden'} key={showSettingsInfo?.pageId || 'general'}>
-          <SettingsPage
-            onClose={() => setShowSettingsInfo(null)}
-            initialPageId={showSettingsInfo?.pageId || 'general'}
-            initialOptions={showSettingsInfo?.options}
-            openProjects={optimisticOpenProjects}
-            onShowLogs={handleShowLogs}
-          />
+          <Suspense fallback={null}>
+            <SettingsPage
+              onClose={() => setShowSettingsInfo(null)}
+              initialPageId={showSettingsInfo?.pageId || 'general'}
+              initialOptions={showSettingsInfo?.options}
+              openProjects={optimisticOpenProjects}
+              onShowLogs={handleShowLogs}
+            />
+          </Suspense>
         </Activity>
         <Activity mode={isUsageDashboardVisible ? 'visible' : 'hidden'}>
-          <UsageDashboard onClose={hideUsageDashboard} />
+          <Suspense fallback={null}>
+            <UsageDashboard onClose={hideUsageDashboard} />
+          </Suspense>
         </Activity>
         <Activity mode={isModelLibraryVisible ? 'visible' : 'hidden'}>
-          <ModelLibrary onClose={hideModelLibrary} />
+          <Suspense fallback={null}>
+            <ModelLibrary onClose={hideModelLibrary} />
+          </Suspense>
         </Activity>
         <Activity mode={isLogsVisible ? 'visible' : 'hidden'}>
           <LogsPage onClose={hideLogs} openInWindowUrl={`#${ROUTES.Logs}`} />
@@ -617,7 +626,9 @@ export const Home = () => {
         )}
         {!releaseNotesContent && <TelemetryInfoDialog />}
         <div className="flex-1 overflow-hidden relative z-10">
-          {optimisticOpenProjects.length > 0 ? (
+          {!projectsLoaded ? (
+            <LoadingOverlay message={t('home.loadingProjects')} />
+          ) : optimisticOpenProjects.length > 0 ? (
             <div className="relative w-full h-full">
               <AnimatePresence>
                 {isProjectSwitching && activeProject && (
@@ -633,11 +644,14 @@ export const Home = () => {
                 )}
               </AnimatePresence>
               {renderProjectPanels()}
+              <div id="floating-panels-root" className="absolute inset-0 pointer-events-none z-40 overflow-visible" />
             </div>
           ) : (
             <NoProjectsOpen onOpenProject={handleOpenAddProjectDialog} />
           )}
         </div>
+        <div id="app-floating-panels-root" className="absolute inset-0 pointer-events-none z-50 overflow-visible" />
+        <FloatingExtensionPanels placement="app-floating" portalRootId="app-floating-panels-root" />
       </div>
     </div>
   );

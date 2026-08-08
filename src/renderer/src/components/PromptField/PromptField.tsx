@@ -1,3 +1,4 @@
+/* eslint-disable react-compiler/react-compiler */
 import {
   acceptCompletion,
   autocompletion,
@@ -8,10 +9,9 @@ import {
   startCompletion,
 } from '@codemirror/autocomplete';
 import { EditorView, keymap } from '@codemirror/view';
-import { vim } from '@replit/codemirror-vim';
 import { AIDER_MODES, Mode, PromptBehavior, QueuedPromptData, QuestionData, SuggestionMode } from '@common/types';
 import { githubDarkInit } from '@uiw/codemirror-theme-github';
-import CodeMirror, { Annotation, Prec, type ReactCodeMirrorRef } from '@uiw/react-codemirror';
+import CodeMirror, { Annotation, Prec, type Extension, type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { useDebounce } from '@reactuses/core';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -20,14 +20,18 @@ import { BiSend } from 'react-icons/bi';
 import { MdSave, MdStop, MdMic, MdMicOff, MdOutlineScheduleSend } from 'react-icons/md';
 import { AiOutlineClose } from 'react-icons/ai';
 import { clsx } from 'clsx';
+import { parseCommandArgs } from '@common/utils';
+import { getSubagentId } from '@common/agent';
 
 import { QueuedPromptsList } from './QueuedPromptsList';
 import { usePromptFieldText } from './usePromptFieldText';
 
+import { useTaskQueuedPrompts } from '@/stores/taskStore';
 import { InputHistoryMenu } from '@/components/PromptField/InputHistoryMenu';
 import { showErrorNotification } from '@/utils/notifications';
 import { useCommands } from '@/hooks/useCommands';
 import { useApi } from '@/contexts/ApiContext';
+import { useAgents } from '@/contexts/AgentsContext';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { AudioAnalyzer } from '@/components/PromptField/AudioAnalyzer';
@@ -67,6 +71,8 @@ const COMMANDS = [
   '/init',
   '/clear-logs',
   '/resolve-conflicts',
+  '/subtask',
+  '/subagent',
 ];
 
 const ANSWERS = ['y', 'n', 'a', 'd', 'maybe']; // Added 'maybe' (Branch B)
@@ -140,7 +146,6 @@ type Props = {
   scrapeWeb: (url: string, filePath?: string) => void;
   question?: QuestionData | null;
   answerQuestion: (answer: string) => void;
-  queuedPrompts?: QueuedPromptData[];
   removeQueuedPrompt?: (id: string) => void;
   sendQueuedPromptNow?: (id: string) => void;
   reorderQueuedPrompts?: (prompts: QueuedPromptData[]) => void;
@@ -149,14 +154,16 @@ type Props = {
   runCommand: (command: string) => void;
   runTests: (testCmd?: string) => void;
   redoLastUserPrompt: () => void;
-  editLastUserMessage: () => void;
+  editUserMessage: () => void;
   isEditingLastMessage?: boolean;
+  canSaveEditedPrompt?: boolean;
   disabled?: boolean;
   promptBehavior: PromptBehavior;
   clearLogMessages: () => void;
   scrollToBottom?: () => void;
   onToggleTaskInfoPanel?: () => void;
   handoffConversation?: (focus?: string) => Promise<void>;
+  createSubtask?: (args?: string) => void;
 };
 
 export const PromptField = forwardRef<PromptFieldRef, Props>(
@@ -179,7 +186,6 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
       scrapeWeb,
       question,
       answerQuestion,
-      queuedPrompts = [],
       removeQueuedPrompt,
       sendQueuedPromptNow,
       reorderQueuedPrompts,
@@ -188,8 +194,9 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
       runCommand,
       runTests,
       redoLastUserPrompt,
-      editLastUserMessage,
+      editUserMessage,
       isEditingLastMessage = false,
+      canSaveEditedPrompt = false,
       openModelSelector,
       openAgentModelSelector,
       disabled = false,
@@ -198,11 +205,13 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
       scrollToBottom,
       onToggleTaskInfoPanel,
       handoffConversation,
+      createSubtask,
     }: Props,
     ref,
   ) => {
     const { t } = useTranslation();
     const { isMobile } = useResponsive();
+    const queuedPrompts = useTaskQueuedPrompts(taskId);
     const [text, setText] = useState('');
     const [pastedImages, setPastedImages] = useState<string[]>([]);
     const debouncedText = useDebounce(text, 100);
@@ -227,6 +236,11 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
     const editorRef = useRef<ReactCodeMirrorRef>(null);
     const [customCommands, extensionCommands] = useCommands(baseDir);
     const api = useApi();
+    const { getProfiles } = useAgents();
+
+    const subagentProfiles = useMemo(() => {
+      return getProfiles(baseDir).filter((p) => p.subagent.enabled);
+    }, [getProfiles, baseDir]);
 
     const {
       isRecording,
@@ -308,18 +322,28 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
 
         // Check if we're at a command argument position with options (before early return)
         if (text.startsWith('/') && text.includes(' ')) {
-          const [command, ...args] = text.split(' ');
+          const [command, ...args] = parseCommandArgs(text);
           const allCommands = [...customCommands, ...extensionCommands];
           const cmd = allCommands.find((c) => `/${c.name}` === command);
-          const argIndex = args.length - 1;
+          const argIndex = text.endsWith(' ') ? args.length : args.length - 1;
           if (cmd?.arguments?.[argIndex]?.options) {
-            const currentArg = args[argIndex];
+            const currentArg = args[argIndex] ?? '';
             return {
               from: state.doc.length - currentArg.length,
               options: cmd.arguments[argIndex].options.map((opt) => ({
                 label: opt,
                 type: 'constant',
               })),
+              validFor: /^\S*$/,
+            };
+          }
+
+          if (command === '/subagent' && argIndex === 0) {
+            const currentArg = args[0] ?? '';
+            const subagentIds = subagentProfiles.map((p) => getSubagentId(p));
+            return {
+              from: state.doc.length - currentArg.length,
+              options: subagentIds.map((id) => ({ label: id, type: 'variable' })),
               validFor: /^\S*$/,
             };
           }
@@ -348,8 +372,8 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
         // Handle command suggestions
         if (text.startsWith('/')) {
           if (text.includes(' ')) {
-            const [command, ...args] = text.split(' ');
-            const currentArg = args[args.length - 1];
+            const [command, ...args] = parseCommandArgs(text);
+            const currentArg = args[args.length - 1] ?? '';
             if (command === '/add' || command === '/read-only') {
               const files = await api.getAddableFiles(baseDir, taskId);
               return {
@@ -378,15 +402,18 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
           options: [...words, ...allFiles].map((w) => ({ label: w, type: 'text' })),
         };
       },
-      [customCommands, extensionCommands, promptBehavior.suggestionMode, allFiles, api, baseDir, taskId, words],
+      [customCommands, extensionCommands, promptBehavior.suggestionMode, allFiles, api, baseDir, taskId, words, subagentProfiles],
     );
 
-    const allHistoryItems =
-      historyMenuVisible && debouncedText.trim().length > 0
-        ? inputHistory.filter((item) => item.toLowerCase().includes(debouncedText.trim().toLowerCase()))
-        : inputHistory;
+    const allHistoryItems = useMemo(
+      () =>
+        historyMenuVisible && debouncedText.trim().length > 0
+          ? inputHistory.filter((item) => item.toLowerCase().includes(debouncedText.trim().toLowerCase()))
+          : inputHistory,
+      [historyMenuVisible, debouncedText, inputHistory],
+    );
 
-    const historyItems = allHistoryItems.slice(0, historyLimit);
+    const historyItems = useMemo(() => allHistoryItems.slice(0, historyLimit), [allHistoryItems, historyLimit]);
 
     const loadMoreHistory = useCallback(() => {
       if (historyLimit < allHistoryItems.length) {
@@ -513,7 +540,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
             break;
           case '/edit-last':
             prepareForNextPrompt();
-            editLastUserMessage();
+            editUserMessage();
             break;
           case '/compact':
             prepareForNextPrompt();
@@ -526,7 +553,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
           case '/handoff': {
             const focus = args || '';
             if (handoffConversation) {
-              handoffConversation(focus);
+              void handoffConversation(focus);
             }
             prepareForNextPrompt();
             break;
@@ -554,6 +581,11 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
             void api.resolveWorktreeConflictsWithAgent(baseDir, taskId);
             break;
           }
+          case '/subtask': {
+            prepareForNextPrompt();
+            createSubtask?.(args);
+            break;
+          }
           default: {
             setTextWithDispatch('');
             runCommand(`${command.slice(1)} ${args || ''}`);
@@ -567,7 +599,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
         mode,
         clearMessages,
         redoLastUserPrompt,
-        editLastUserMessage,
+        editUserMessage,
         api,
         baseDir,
         taskId,
@@ -584,6 +616,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
         onToggleTaskInfoPanel,
         setTextWithDispatch,
         handoffConversation,
+        createSubtask,
       ],
     );
 
@@ -642,6 +675,11 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
 
     useEffect(() => {
       const commandMatch = COMMANDS.find((cmd) => {
+        // Skip auto-invoke for commands that need additional arguments
+        if (cmd === '/subagent') {
+          return false;
+        }
+
         if (text === cmd) {
           return true;
         }
@@ -698,7 +736,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
       if (text) {
         if (text.startsWith('/') && !isPathLike(text)) {
           // Check if it's a custom or extension command
-          const [cmd, ...args] = text.slice(1).split(' ');
+          const [cmd, ...args] = parseCommandArgs(text.slice(1));
           const allCommands = [...customCommands, ...extensionCommands];
           const command = allCommands.find((command) => command.name === cmd);
 
@@ -711,6 +749,23 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
 
           if (!COMMANDS.includes(`/${cmd}`)) {
             showErrorNotification(t('promptField.invalidCommand'));
+            return;
+          }
+
+          if (cmd === 'subagent') {
+            const subagentId = args[0];
+            if (!subagentId) {
+              showErrorNotification(t('promptField.invalidCommand'));
+              return;
+            }
+            const matchedProfile = subagentProfiles.find((p) => getSubagentId(p) === subagentId || p.name === subagentId);
+            if (!matchedProfile) {
+              showErrorNotification(`Subagent '${subagentId}' not found`);
+              return;
+            }
+            const subagentPrompt = args.slice(1).join(' ').trim();
+            prepareForNextPrompt();
+            runCommand(`subagent ${getSubagentId(matchedProfile)} ${subagentPrompt}`);
             return;
           }
         }
@@ -741,6 +796,8 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
       pendingCommand,
       handleConfirmCommand,
       runPrompt,
+      runCommand,
+      subagentProfiles,
       t,
     ]);
 
@@ -844,7 +901,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
                 }
               } else if (historyMenuVisible) {
                 setHistoryMenuVisible(false);
-                const newText = historyItems[historyItems.length - 1 - highlightedHistoryItemIndex];
+                const newText = historyItems[highlightedHistoryItemIndex];
                 view.dispatch({
                   changes: {
                     from: 0,
@@ -1044,10 +1101,20 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
       [api, baseDir, taskId, mode],
     );
 
+    const [vimExtension, setVimExtension] = useState<Extension | null>(null);
+
+    useEffect(() => {
+      if (promptBehavior.useVimBindings && !vimExtension) {
+        void import('@replit/codemirror-vim').then((module) => {
+          setVimExtension(module.vim());
+        });
+      }
+    }, [promptBehavior.useVimBindings, vimExtension]);
+
     const extensions = useMemo(
       () => [
         EDITOR_THEME_EXTENSION,
-        promptBehavior.useVimBindings ? vim() : keymap.of([]),
+        promptBehavior.useVimBindings && vimExtension ? vimExtension : keymap.of([]),
         EditorView.lineWrapping,
         EditorView.domEventHandlers({
           paste: handlePaste,
@@ -1085,6 +1152,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
         promptBehavior.useVimBindings,
         promptBehavior.suggestionMode,
         promptBehavior.suggestionDelay,
+        vimExtension,
         question,
         historyMenuVisible,
         completionSource,
@@ -1242,7 +1310,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
             )}
             {text.trim() && !isRecording && (
               <>
-                {!processing && !isEditingLastMessage && (
+                {!processing && (!isEditingLastMessage || canSaveEditedPrompt) && (
                   <Tooltip content={t('promptField.savePrompt')}>
                     <button
                       onClick={handleSavePrompt}

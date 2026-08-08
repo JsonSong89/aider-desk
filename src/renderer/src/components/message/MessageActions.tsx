@@ -4,7 +4,7 @@ import { MdUndo } from 'react-icons/md';
 
 import { Button } from '../common/Button';
 
-import { useApi } from '@/contexts/ApiContext';
+import { useApi, useIsReadonlyView } from '@/contexts/ApiContext';
 import { useTaskStore } from '@/stores/taskStore';
 
 type Props = {
@@ -18,9 +18,10 @@ export const MessageActions = ({ actionIds, baseDir, taskId, onInterrupt }: Prop
   const { t } = useTranslation();
   const [isExecuted, setIsExecuted] = useState(false);
   const api = useApi();
+  const isReadonlyView = useIsReadonlyView();
   const canUndoContextChange = useTaskStore((state) => state.taskStateMap.get(taskId)?.canUndoContextChange ?? false);
 
-  if (!actionIds || actionIds.length === 0 || isExecuted) {
+  if (isReadonlyView || !actionIds || actionIds.length === 0 || isExecuted) {
     return null;
   }
 
@@ -53,7 +54,7 @@ export const MessageActions = ({ actionIds, baseDir, taskId, onInterrupt }: Prop
     switch (id) {
       case 'interrupt':
         return (
-          <Button key={id} size="xs" variant="outline" color="danger" onClick={onInterrupt}>
+          <Button key={id} size="xs" variant="outline" color="danger" onClick={() => onInterrupt?.()}>
             {t('common.cancel')}
           </Button>
         );

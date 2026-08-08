@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   ContextCompactionType,
   DiffViewMode,
+  FileWatchMode,
   MemoryEmbeddingProvider,
   MessageViewMode,
   ProjectData,
@@ -38,6 +39,7 @@ import { migrateSettingsV16toV17 } from '@/store/migrations/v16-to-v17';
 import { migrateSettingsV17toV18 } from '@/store/migrations/v17-to-v18';
 import { migrateSettingsV18toV19 } from '@/store/migrations/v18-to-v19';
 import { migrateSettingsV19toV20 } from '@/store/migrations/v19-to-v20';
+import { migrateProvidersV20toV21 } from '@/store/migrations/v20-to-v21';
 
 export const DEFAULT_SETTINGS: SettingsData = {
   language: 'en',
@@ -47,7 +49,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   theme: 'dark',
   font: 'Sono',
   renderMarkdown: true,
-  virtualizedRendering: false,
+  fullMessageRendering: false,
   aiderDeskAutoUpdate: true,
   messageViewMode: MessageViewMode.Compact,
   diffViewMode: DiffViewMode.SideBySide,
@@ -78,6 +80,8 @@ export const DEFAULT_SETTINGS: SettingsData = {
   },
   server: {
     enabled: false,
+    readonly: false,
+    readonlyExtensionUi: true,
     basicAuth: {
       enabled: false,
       username: '',
@@ -112,7 +116,9 @@ export const DEFAULT_SETTINGS: SettingsData = {
   proxy: {
     enabled: false,
     url: '',
+    noProxy: '',
   },
+  fileWatchMode: FileWatchMode.Auto,
 };
 
 const compareBaseDirs = (baseDir1: string, baseDir2: string): boolean => {
@@ -130,7 +136,7 @@ interface StoreSchema {
   userId?: string;
 }
 
-const CURRENT_SETTINGS_VERSION = 20;
+const CURRENT_SETTINGS_VERSION = 21;
 
 export class Store {
   // @ts-expect-error expected to be initialized
@@ -315,6 +321,11 @@ export class Store {
       if (settingsVersion === 19) {
         settings = migrateSettingsV19toV20(settings);
         settingsVersion = 20;
+      }
+
+      if (settingsVersion === 20) {
+        providers = migrateProvidersV20toV21(providers || []);
+        settingsVersion = 21;
       }
 
       this.store.set('settings', settings as SettingsData);

@@ -35,24 +35,10 @@ Prerequisite: Before using, check the current context with 'get_context_files'. 
 Use relative file path(s) for files intended for editing within the project. Use absolute file path(s) for read-only files (e.g., outside the project).`,
   [AIDER_TOOL_DROP_CONTEXT_FILES]: `Removes file(s) from the Aider context.
 Note: Unless explicitly requested by the user to remove specific file(s), this tool should primarily be used to remove files that were previously added using 'add_context_files' (e.g., after a related 'run_prompt' task is completed).`,
-  [AIDER_TOOL_RUN_PROMPT]: `Delegates a natural language coding task to the Aider assistant for execution within the current project context.
-Use this tool for:
-- Writing new code.
-- Modifying or refactoring existing code.
-- Explaining code segments.
-- Debugging code.
-- Implementing new features.
-- This tools must be preferred (if not specified by user otherwise) over other tools creating or modifying files, as it is more efficient and effective.
+  [AIDER_TOOL_RUN_PROMPT]: `Delegates a context-aware coding task to the Aider assistant for execution within the current project context.
+Use this tool when implementing, modifying, refactoring, debugging, or otherwise making non-trivial code changes.
 
-Prerequisites
-- All relevant existing project files for the task MUST be added to the Aider context using 'add_context_files' BEFORE calling this tool.
-
-Input:
-- A clear, complete, and standalone natural language prompt describing the coding task.
-
-Restrictions:
-- Prompts MUST be language-agnostic. Do NOT mention specific programming languages (e.g., Python, JavaScript), libraries, or syntax elements.
-- Treat Aider as a capable programmer; provide sufficient detail but avoid excessive handholding.
+Before calling it, add the relevant files that are not already in Aider's context. Provide a clear, standalone prompt with the task goal, constraints, and context Aider needs; let Aider use its judgment on implementation details.
 `,
 } as const;
 
@@ -64,7 +50,8 @@ export const MEMORY_TOOL_LIST = 'list_memories';
 export const MEMORY_TOOL_UPDATE = 'update_memory';
 
 export const MEMORY_TOOL_DESCRIPTIONS = {
-  [MEMORY_TOOL_STORE]: 'Stores important information, patterns, or preferences into memory for future tasks',
+  [MEMORY_TOOL_STORE]:
+    'Stores durable, reusable, actionable user preferences, architectural decisions, or repeated codebase patterns for future tasks. Do not store secrets, personal data, task status, transient details, logs, or facts directly readable from a single file.',
   [MEMORY_TOOL_RETRIEVE]: `Searches and retrieves relevant memories using semantic vector search.
 
 RETRIEVAL STRATEGY:
@@ -103,7 +90,7 @@ const myFunction = () => {
   [POWER_TOOL_GREP]:
     'Searches for content matching a regular expression pattern within files specified by a glob pattern. Returns matching lines and their context.',
   [POWER_TOOL_SEMANTIC_SEARCH]:
-    'Search code in repository using semantic search. Use natural language queries with 2-5 descriptive words including key concepts and context. Can filter results with hints like ext:ts, dir:src, or lang:typescript. Use this tool first for any code-related questions to find relationships between files and identify files to change.',
+    'Search code in the repository using natural-language queries with 2-5 descriptive words including key concepts and context. Use it to locate related implementations, explore unfamiliar areas, or identify potentially affected files. It can filter results with hints such as ext:ts, dir:src, or lang:typescript.',
   [POWER_TOOL_BASH]: 'Executes a shell command. For safety, commands may be sandboxed or require user approval (approval handled by Agent).',
   [POWER_TOOL_FETCH]:
     'Fetches and returns the content of a web page from a specified URL. Useful for retrieving web content, documentation, or external resources. Supports three formats: "markdown" (default, converts HTML to markdown), "html" (returns raw HTML), "raw" (fetches raw content via HTTP, ideal for API responses or raw files like GitHub raw files).',
@@ -135,11 +122,12 @@ export const TASKS_TOOL_GET_TASK_MESSAGE = 'get_task_message';
 export const TASKS_TOOL_CREATE_TASK = 'create_task';
 export const TASKS_TOOL_DELETE_TASK = 'delete_task';
 export const TASKS_TOOL_SEARCH_TASK = 'search_task';
+export const TASKS_TOOL_RUN_PROMPT = 'run_prompt';
 export const TASKS_TOOL_SEARCH_PARENT_TASK = 'search_parent_task';
 
 export const TASKS_TOOL_DESCRIPTIONS = {
   [TASKS_TOOL_LIST_TASKS]:
-    'List all tasks in the current project. Returns basic information for each task including id, name, and creation/update timestamps. Use this to get an overview of all available tasks before performing specific task operations.',
+    'List tasks in the current project. Supports pagination and filtering by state, created/updated date ranges, working mode (local or worktree), archived/pinned status, parent task, name, agent profile, provider, and model. Returns basic information for each matching task including id, name, dates, state, and working mode.',
   [TASKS_TOOL_GET_TASK]:
     "Get comprehensive details about a specific task by its ID. Returns task metadata, current state, list of context files with their read-only status, and the total count of context messages. Use this to understand a task's configuration and context before working with it or its messages.",
   [TASKS_TOOL_GET_TASK_MESSAGE]:
@@ -150,6 +138,8 @@ export const TASKS_TOOL_DESCRIPTIONS = {
     'Permanently delete a task and all its associated data including messages, context files, and metadata. This action cannot be undone. Note that you cannot delete the currently active task. Use this to clean up completed or abandoned tasks, but be cautious as this removes all task history permanently.',
   [TASKS_TOOL_SEARCH_TASK]:
     'Search content within a specific task using semantic search. Use natural language queries with 2-5 descriptive words including key concepts and context. Searches through task conversation history and context files. Use this to find relevant information, discussions, or code snippets within a task.',
+  [TASKS_TOOL_RUN_PROMPT]:
+    'Run a prompt on an existing task. The task must already exist (use create_task first if needed). Use this to send additional instructions to a task, continue work on an existing task, or delegate follow-up work. By default, waits for the prompt to complete before returning. Use executeInBackground to run without waiting.',
   [TASKS_TOOL_SEARCH_PARENT_TASK]:
     'Search content within parent task using semantic search. Use natural language queries with 2-5 descriptive words including key concepts and context. Automatically searches parent task conversation history and context files.',
 } as const;

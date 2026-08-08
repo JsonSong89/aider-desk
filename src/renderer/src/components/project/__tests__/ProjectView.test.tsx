@@ -5,7 +5,7 @@ import { TaskData, TaskStateData } from '@common/types';
 import { ProjectView } from '../ProjectView';
 
 import { useApi } from '@/contexts/ApiContext';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
 import { createMockApi } from '@/__tests__/mocks/api';
 
@@ -21,8 +21,8 @@ vi.mock('@/contexts/ApiContext', () => ({
   useApi: vi.fn(),
 }));
 
-vi.mock('@/contexts/SettingsContext', () => ({
-  useSettings: vi.fn(),
+vi.mock('@/stores/settingsStore', () => ({
+  useSettingsStore: vi.fn(),
 }));
 
 vi.mock('@/contexts/ProjectSettingsContext', () => ({
@@ -64,6 +64,10 @@ vi.mock('../TaskView', () => ({
   TaskView: ({ task }: { task: TaskData }) => <div data-testid="task-view">{task.name}</div>,
 }));
 
+vi.mock('@/components/extensions/FloatingExtensionPanels', () => ({
+  FloatingExtensionPanels: () => null,
+}));
+
 describe('ProjectView', () => {
   const projectDir = '/mock/project';
   const mockApi = createMockApi({
@@ -84,9 +88,17 @@ describe('ProjectView', () => {
 
   beforeEach(() => {
     vi.mocked(useApi).mockReturnValue(mockApi);
-    vi.mocked(useSettings).mockReturnValue({
-      settings: { startupMode: 'empty' },
-    } as ReturnType<typeof useSettings>);
+    vi.mocked(useSettingsStore).mockImplementation(((selector: (state: unknown) => unknown) =>
+      selector({
+        settings: { startupMode: 'empty' },
+        theme: 'dark',
+        font: 'Sono',
+        fontSize: 14,
+        setSettingsState: vi.fn(),
+        setThemeValue: vi.fn(),
+        setFontValue: vi.fn(),
+        setFontSizeValue: vi.fn(),
+      })) as never);
     vi.mocked(useProjectSettings).mockReturnValue({
       projectSettings: {},
     } as ReturnType<typeof useProjectSettings>);

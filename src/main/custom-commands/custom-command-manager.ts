@@ -1,6 +1,5 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { homedir } from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -8,13 +7,15 @@ import { watch, FSWatcher } from 'chokidar';
 import { loadFront } from 'yaml-front-matter';
 import debounce from 'lodash/debounce';
 
-import type { Command, CommandArgument, CommandsData, CustomCommand } from '@common/types';
+import type { AutonomyMode, Command, CommandArgument, CommandsData, CustomCommand, SettingsData } from '@common/types';
 import type { EventManager } from '@/events';
 import type { ExtensionManager, ExtensionsChangeListener } from '@/extensions';
+import type { Store } from '@/store';
 
-import { AIDER_DESK_COMMANDS_DIR } from '@/constants';
+import { AIDER_DESK_COMMANDS_DIR, AIDER_DESK_HOME_DIR } from '@/constants';
 import logger from '@/logger';
 import { Project } from '@/project';
+import { shouldUsePolling } from '@/utils/file-watch';
 
 // Constants for shell command formatting
 const SHELL_COMMAND_TAGS = {
@@ -58,6 +59,7 @@ export class CustomCommandManager {
     private readonly project: Project,
     private readonly eventManager: EventManager,
     private readonly extensionManager: ExtensionManager,
+    private readonly store: Store,
   ) {}
 
   public async start(): Promise<void> {
@@ -69,7 +71,7 @@ export class CustomCommandManager {
   private async initializeCommands(): Promise<void> {
     this.commands.clear();
 
-    const globalCommandsDir = path.join(homedir(), AIDER_DESK_COMMANDS_DIR);
+    const globalCommandsDir = path.join(AIDER_DESK_HOME_DIR, 'commands');
     await this.loadCommandsFromDir(globalCommandsDir, this.commands);
 
     // Load project-specific commands (these will overwrite global ones with same name)
@@ -85,7 +87,7 @@ export class CustomCommandManager {
     this.watchers = [];
 
     // Watch global commands directory
-    const globalCommandsDir = path.join(homedir(), AIDER_DESK_COMMANDS_DIR);
+    const globalCommandsDir = path.join(AIDER_DESK_HOME_DIR, 'commands');
     await this.setupWatcherForDirectory(globalCommandsDir);
 
     // Watch project-specific commands directory
@@ -110,7 +112,7 @@ export class CustomCommandManager {
 
     const watcher = watch(commandsDir, {
       persistent: true,
-      usePolling: true,
+      usePolling: shouldUsePolling(commandsDir, this.store.getSettings().fileWatchMode),
       ignoreInitial: true,
     });
 
@@ -184,7 +186,10 @@ export class CustomCommandManager {
       const args = Array.isArray(parsed.arguments) ? parsed.arguments : [];
       const template = parsed.__content?.trim() || '';
       const includeContext = typeof parsed.includeContext === 'boolean' ? parsed.includeContext : true;
-      const autoApprove = typeof parsed.autoApprove === 'boolean' ? parsed.autoApprove : undefined;
+      const autonomyMode =
+        typeof parsed.autonomyMode === 'string' && ['manual', 'guided', 'autonomous'].includes(parsed.autonomyMode)
+          ? (parsed.autonomyMode as AutonomyMode)
+          : undefined;
       const skills =
         typeof parsed.skills === 'string' && parsed.skills.trim()
           ? parsed.skills
@@ -198,7 +203,7 @@ export class CustomCommandManager {
         arguments: args,
         template,
         includeContext,
-        autoApprove,
+        autonomyMode,
         skills,
       });
     } catch (err) {
@@ -229,9 +234,9 @@ export class CustomCommandManager {
     };
   }
 
-  async processCommandTemplate(command: CustomCommand, args: string[]): Promise<string> {
+  async processCommandTemplate(command: CustomCommand, args: string[], cwd?: string): Promise<string> {
     let prompt = this.substituteArguments(command.template, args, command.arguments);
-    prompt = await this.executeShellCommands(prompt);
+    prompt = await this.executeShellCommands(prompt, cwd);
     return prompt;
   }
 
@@ -279,13 +284,13 @@ export class CustomCommandManager {
     return unreplacedPlaceholders;
   }
 
-  private async executeShellCommands(prompt: string): Promise<string> {
+  private async executeShellCommands(prompt: string, cwd?: string): Promise<string> {
     const lines = prompt.split('\n');
     const finalPrompt: string[] = [];
 
     for (const line of lines) {
       if (line.startsWith(SHELL_COMMAND_PREFIX)) {
-        const processedLine = await this.processShellCommandLine(line);
+        const processedLine = await this.processShellCommandLine(line, cwd);
         if (Array.isArray(processedLine)) {
           finalPrompt.push(...processedLine);
         } else {
@@ -299,7 +304,7 @@ export class CustomCommandManager {
     return finalPrompt.join('\n');
   }
 
-  private async processShellCommandLine(line: string): Promise<string | string[]> {
+  private async processShellCommandLine(line: string, cwd?: string): Promise<string | string[]> {
     const commandPortion = line.substring(SHELL_COMMAND_PREFIX.length).trim();
 
     if (!commandPortion) {
@@ -312,7 +317,7 @@ export class CustomCommandManager {
       logger.info('Executing shell command from custom command:', { command: commandPortion });
 
       const { stdout } = await execAsync(commandPortion, {
-        cwd: this.project.baseDir,
+        cwd: cwd || this.project.baseDir,
         timeout: SHELL_COMMAND_TIMEOUT,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
       });
@@ -366,5 +371,15 @@ export class CustomCommandManager {
     this.extensionManager.removeListener(this.extensionChangeListener);
     this.watchers.forEach((watcher) => watcher.close());
     this.watchers = [];
+  }
+
+  async settingsChanged(oldSettings: SettingsData, newSettings: SettingsData): Promise<void> {
+    if (oldSettings.fileWatchMode === newSettings.fileWatchMode) {
+      return;
+    }
+
+    this.watchers.forEach((watcher) => watcher.close());
+    this.watchers = [];
+    await this.setupFileWatchers();
   }
 }

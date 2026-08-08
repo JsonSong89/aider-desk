@@ -1,4 +1,4 @@
-import React, { createContext, ReactNode, useCallback, useContext, useEffect, useState, useOptimistic, startTransition } from 'react';
+import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState, useOptimistic, startTransition } from 'react';
 import { Model, ProviderProfile } from '@common/types';
 
 import { useApi } from '@/contexts/ApiContext';
@@ -29,14 +29,18 @@ export const ModelProviderProvider: React.FC<{ children: ReactNode }> = ({ child
   const [optimisticProviders, setOptimisticProviders] = useOptimistic(providers);
   const [optimisticModels, setOptimisticModels] = useOptimistic(models);
 
-  const sortedProviders = [...optimisticProviders].sort((a, b) => a.id.localeCompare(b.id));
+  const sortedProviders = useMemo(() => [...optimisticProviders].sort((a, b) => a.id.localeCompare(b.id)), [optimisticProviders]);
 
-  const sortedModels = [...optimisticModels].sort((a, b) => {
-    if (a.providerId !== b.providerId) {
-      return a.providerId.localeCompare(b.providerId);
-    }
-    return a.id.localeCompare(b.id);
-  });
+  const sortedModels = useMemo(
+    () =>
+      [...optimisticModels].sort((a, b) => {
+        if (a.providerId !== b.providerId) {
+          return a.providerId.localeCompare(b.providerId);
+        }
+        return a.id.localeCompare(b.id);
+      }),
+    [optimisticModels],
+  );
 
   const loadModels = useCallback(
     async (reload = false) => {
@@ -198,29 +202,57 @@ export const ModelProviderProvider: React.FC<{ children: ReactNode }> = ({ child
     });
   }, [api]);
 
-  return (
-    <ModelProviderContext.Provider
-      value={{
-        modelsLoading,
-        providersLoading,
-        errors,
-        refresh,
-        models: sortedModels,
-        providers: sortedProviders,
-        saveProvider,
-        deleteProvider,
-        upsertModel,
-        deleteModel,
-        updateModels,
-      }}
-    >
-      {children}
-    </ModelProviderContext.Provider>
+  const value = useMemo(
+    () => ({
+      modelsLoading,
+      providersLoading,
+      errors,
+      refresh,
+      models: sortedModels,
+      providers: sortedProviders,
+      saveProvider,
+      deleteProvider,
+      upsertModel,
+      deleteModel,
+      updateModels,
+    }),
+    [modelsLoading, providersLoading, errors, refresh, sortedModels, sortedProviders, saveProvider, deleteProvider, upsertModel, deleteModel, updateModels],
   );
+
+  return <ModelProviderContext.Provider value={value}>{children}</ModelProviderContext.Provider>;
+};
+
+const unsupportedReadonlyOperation = async (): Promise<void> => {
+  throw new Error('READ_ONLY_MODE');
+};
+
+export const ReadonlyModelProvider = ({ children }: { children: ReactNode }) => {
+  const value = useMemo<ModelProviderContextType>(
+    () => ({
+      refresh: () => {},
+      models: [],
+      providers: [],
+      saveProvider: unsupportedReadonlyOperation,
+      deleteProvider: unsupportedReadonlyOperation,
+      upsertModel: unsupportedReadonlyOperation,
+      deleteModel: unsupportedReadonlyOperation,
+      updateModels: unsupportedReadonlyOperation,
+      modelsLoading: false,
+      providersLoading: false,
+      errors: {},
+    }),
+    [],
+  );
+
+  return <ModelProviderContext.Provider value={value}>{children}</ModelProviderContext.Provider>;
+};
+
+export const useOptionalModelProviders = (): ModelProviderContextType | null => {
+  return useContext(ModelProviderContext);
 };
 
 export const useModelProviders = (): ModelProviderContextType => {
-  const context = useContext(ModelProviderContext);
+  const context = useOptionalModelProviders();
   if (!context) {
     throw new Error('useModelProviders must be used within a ModelProviderProvider');
   }

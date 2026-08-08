@@ -1,13 +1,11 @@
 import { useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
-import { useStoreWithEqualityFn } from 'zustand/traditional';
-import { shallow } from 'zustand/vanilla/shallow';
 
 import type { LogData, LogMessage, LoadingMessage, Message } from '@common/types';
 
 import { useApi } from '@/contexts/ApiContext';
-import { useTaskStore } from '@/stores/taskStore';
+import { setMessages, touchTaskActivity } from '@/stores/taskStore';
 
 const isLoadingMessage = (message: Message): message is LoadingMessage => {
   return message.type === 'loading';
@@ -16,10 +14,10 @@ const isLoadingMessage = (message: Message): message is LoadingMessage => {
 export const useTaskLogHandlers = (baseDir: string, taskId: string) => {
   const api = useApi();
   const { t } = useTranslation();
-  const setMessages = useStoreWithEqualityFn(useTaskStore, (storeState) => storeState.setMessages, shallow);
 
   const handleLog = useCallback(
-    ({ level, message, finished, promptContext, actionIds }: LogData) => {
+    ({ level, message, finished, promptContext, actionIds, timestamp }: LogData) => {
+      touchTaskActivity(taskId);
       if (level === 'loading') {
         if (finished) {
           const currentGroupId = promptContext?.group?.id;
@@ -51,6 +49,7 @@ export const useTaskLogHandlers = (baseDir: string, taskId: string) => {
             content: message || t('messages.thinking'),
             promptContext,
             actionIds,
+            timestamp,
           };
 
           setMessages(taskId, (prevMessages) => {
@@ -77,11 +76,12 @@ export const useTaskLogHandlers = (baseDir: string, taskId: string) => {
           content: message || '',
           promptContext,
           actionIds,
+          timestamp,
         };
         setMessages(taskId, (prevMessages) => [...prevMessages.filter((message) => message.type !== 'loading'), logMessage]);
       }
     },
-    [taskId, setMessages, t],
+    [taskId, t],
   );
 
   useEffect(() => {

@@ -39,14 +39,19 @@ export const extractImagesFromContent = (content: unknown): string[] | undefined
   }
 
   const images = content
-    .filter((part): part is { type: 'image'; image: string; mediaType?: string } => part.type === 'image')
     .map((part) => {
-      const data = part.image;
-      if (typeof data !== 'string') {
-        return undefined;
+      const p = part as { type: string; image?: string; data?: string; mediaType?: string };
+      if (p.type === 'image' && typeof p.image === 'string') {
+        const data = p.image;
+        const mediaType = p.mediaType || 'image/png';
+        return data.startsWith('data:') ? data : `data:${mediaType};base64,${data}`;
       }
-      const mediaType = part.mediaType || 'image/png';
-      return data.startsWith('data:') ? data : `data:${mediaType};base64,${data}`;
+      if (p.type === 'file' && typeof p.data === 'string' && (p.mediaType || '').startsWith('image/')) {
+        const data = p.data;
+        const mediaType = p.mediaType || 'image/png';
+        return data.startsWith('data:') ? data : `data:${mediaType};base64,${data}`;
+      }
+      return undefined;
     })
     .filter((v): v is string => v !== undefined);
 
@@ -325,3 +330,33 @@ export const extractProviderModel = (modelId: string): [string, string] => {
 };
 
 export const isUuid = (id: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+export const parseCommandArgs = (input: string): string[] => {
+  const args: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let wasQuoted = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+
+    if (char === '"') {
+      wasQuoted = true;
+      inQuotes = !inQuotes;
+    } else if (char === ' ' && !inQuotes) {
+      if (current || wasQuoted) {
+        args.push(current);
+        current = '';
+        wasQuoted = false;
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (current || wasQuoted) {
+    args.push(current);
+  }
+
+  return args;
+};

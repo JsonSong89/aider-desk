@@ -36,8 +36,9 @@ const hasDeniedProperty = (obj: unknown): obj is { denied: string } => {
 export const BashToolMessage = ({ message, onRemove, compact = false, onFork, onRemoveUpTo, hideMessageBar }: Props) => {
   const { t } = useTranslation();
 
-  const command = message.args.command as string;
+  const command = (message.args.command as string) || '';
   const timeout = message.args.timeout as number | undefined;
+  const cwd = message.args.cwd as string | undefined;
   const content = message.content && JSON.parse(message.content);
   const isStandardOutput = isStandardBashOutput(content);
   const hasError = hasErrorProperty(content);
@@ -180,6 +181,12 @@ export const BashToolMessage = ({ message, onRemove, compact = false, onFork, on
                       />
                     </div>
                   )}
+                </div>
+              )}
+              {cwd && (
+                <div className="flex items-center gap-2">
+                  <div className="font-semibold text-text-secondary">{t('toolMessage.power.bash.workingDir')}:</div>
+                  <div className="break-all">{cwd}</div>
                 </div>
               )}
               {timeout !== undefined && timeout !== null && (

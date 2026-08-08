@@ -6,16 +6,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { FaPlus, FaTrash } from 'react-icons/fa';
 
 import { DisableStreaming } from './DisableStreaming';
+import { DisableToolCallStreaming } from './DisableToolCallStreaming';
 
 import {
   AnthropicParameters,
   AnthropicCompatibleParameters,
-  AuggieParameters,
   AzureParameters,
   BedrockParameters,
-  ClaudeAgentSdkParameters,
+  ClinePassParameters,
   DeepseekParameters,
-  GeminiCliParameters,
   GeminiParameters,
   GpustackParameters,
   GroqParameters,
@@ -25,6 +24,7 @@ import {
   LmStudioParameters,
   MinimaxParameters,
   MistralParameters,
+  NeuralwattParameters,
   OllamaParameters,
   OpenAiCompatibleParameters,
   OpenAiParameters,
@@ -49,13 +49,11 @@ type ProviderParametersProps<T extends LlmProvider> = {
 const PROVIDER_PARAMETERS_MAP: Record<LlmProviderName, ComponentType<ProviderParametersProps>> = {
   anthropic: AnthropicParameters,
   'anthropic-compatible': AnthropicCompatibleParameters,
-  auggie: AuggieParameters,
   azure: AzureParameters,
   bedrock: BedrockParameters,
-  'claude-agent-sdk': ClaudeAgentSdkParameters,
+  clinepass: ClinePassParameters,
   deepseek: DeepseekParameters,
   gemini: GeminiParameters,
-  'gemini-cli': GeminiCliParameters,
   gpustack: GpustackParameters,
   groq: GroqParameters,
   'alibaba-plan': AlibabaPlanParameters,
@@ -64,6 +62,7 @@ const PROVIDER_PARAMETERS_MAP: Record<LlmProviderName, ComponentType<ProviderPar
   lmstudio: LmStudioParameters,
   minimax: MinimaxParameters,
   mistral: MistralParameters,
+  neuralwatt: NeuralwattParameters,
   ollama: OllamaParameters,
   openai: OpenAiParameters,
   'openai-compatible': OpenAiCompatibleParameters,
@@ -134,6 +133,12 @@ export const ProviderProfileForm = forwardRef<ProviderProfileFormRef, Props>(
     const handleDisableStreamingChange = (disableStreaming: boolean) => {
       if (parameters) {
         setParameters({ ...parameters, disableStreaming });
+      }
+    };
+
+    const handleDisableToolCallStreamingChange = (disableToolCallStreaming: boolean) => {
+      if (parameters) {
+        setParameters({ ...parameters, disableToolCallStreaming });
       }
     };
 
@@ -257,8 +262,9 @@ export const ProviderProfileForm = forwardRef<ProviderProfileFormRef, Props>(
 
           {/* Disable streaming checkbox */}
           {parameters && (
-            <div className="mt-4 mx-2">
+            <div className="mt-4 mx-2 space-y-2">
               <DisableStreaming checked={parameters.disableStreaming ?? false} onChange={handleDisableStreamingChange} />
+              <DisableToolCallStreaming checked={parameters.disableToolCallStreaming ?? false} onChange={handleDisableToolCallStreamingChange} />
             </div>
           )}
 

@@ -12,8 +12,6 @@ This file provides guidance to AiderDesk when working with code in this reposito
 - `npm run typecheck` - Run all TypeScript type checks
 - `npm run typecheck:node` - Type check main process files (tsconfig.node.json)
 - `npm run typecheck:web` - Type check renderer process files (tsconfig.web.json)
-- `npm run typecheck:mcp` - Type check MCP server files (tsconfig.mcp-server.json)
-
 ### Linting and Formatting
 - `eslint --fix` - Run ESLint with auto-fix and auto-format on specified file(s)
 
@@ -21,7 +19,6 @@ This file provides guidance to AiderDesk when working with code in this reposito
 - `npm run test` - Run all tests (main + renderer)
 - `npm run test:node` - Run main, preload, and common process tests
 - `npm run test:web` - Run renderer process tests (React components)
-- `npm run test:mcp` - Run MCP server tests
 - `npm run test:watch` - Run tests in watch mode for development
 - `npm run test:coverage` - Generate coverage reports
 - `npm run test:ui` - Open interactive test UI
@@ -29,8 +26,7 @@ This file provides guidance to AiderDesk when working with code in this reposito
 **Note for Agents**: When running 'npm run test' script via `power---bash`, always append `-- --no-color` to the command (e.g., `npm run test:node -- --no-color`) to ensure clean, parseable output without ANSI escape codes. Other scripts can be run without this.
 
 ### Building
-- `npm run build` - Full build (includes type checking and MCP server build)
-- `npm run build:mcp` - Build MCP server only
+- `npm run build` - Full build (includes type checking)
 - `npm run build:win` - Build Windows executable
 - `npm run build:mac` - Build macOS executable
 - `npm run build:linux` - Build Linux executable
@@ -39,7 +35,6 @@ This file provides guidance to AiderDesk when working with code in this reposito
 ### Manual Type Checking (for verification)
 - `tsc --noEmit -p tsconfig.node.json` - Check main process files
 - `tsc --noEmit -p tsconfig.web.json` - Check renderer process files
-- `tsc --noEmit -p tsconfig.mcp-server.json` - Check MCP server files
 
 ## High-Level Architecture
 
@@ -78,11 +73,11 @@ AiderDesk is an Electron-based desktop application that provides a GUI wrapper f
 **packages/common/src/** - Shared code between processes (published as `@aiderdesk/common`)
 - TypeScript type definitions
 - Utility functions and constants
-- Localization files (en.json, zh.json)
+- Localization files (en.json, zh.json, ru.json)
 
-**src/mcp-server/** - Model Context Protocol server
-- Standalone MCP server for external tool integration
-- Exposes AiderDesk functionality to MCP-compatible clients
+**packages/mcp-server/** - MCP server package (`@aiderdesk/mcp-server`)
+- Standalone npm package for external MCP client integration
+- Exposes AiderDesk functionality to MCP-compatible clients via REST API
 
 **resources/connector/** - Python integration layer
 - Python script (connector.py) that interfaces with Aider
@@ -97,9 +92,9 @@ AiderDesk is an Electron-based desktop application that provides a GUI wrapper f
 
 **Project Management**: Each project runs as a separate Python process with its own Aider instance, allowing multiple concurrent projects.
 
-**TypeScript Configuration**: Uses project references with separate tsconfig files for different environments (node, web, mcp-server) to ensure proper type checking and compilation.
+**TypeScript Configuration**: Uses project references with separate tsconfig files for different environments (node, web) to ensure proper type checking and compilation.
 
-**Build System**: Powered by electron-vite for development and building, with esbuild for the MCP server component.
+**Build System**: Powered by electron-vite for development and building, with esbuild for the MCP server package.
 
 ### Technology Stack
 - **Frontend**: React 19 with TypeScript, Tailwind CSS, Framer Motion
@@ -119,6 +114,8 @@ AiderDesk uses **Vitest** with a multi-configuration approach. For all testing g
 - `npm run test:web` - Renderer process tests
 - `npm run test:coverage` - Generate reports
 - `npm run test:ui` - Open Vitest UI
+
+**Note**: `packages/extensions/extensions.d.ts` is auto-generated from `packages/common/src/extensions.ts`. Never edit it manually, no need to mention it or worry about it, just update the source in `packages/common/src/extensions.ts` instead.
 
 Refer to the **Writing Tests** skill for:
 - Detailed test patterns and examples
