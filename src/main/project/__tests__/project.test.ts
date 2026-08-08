@@ -76,7 +76,7 @@ describe('Project - createNewTask', () => {
           ({
             language: 'en',
             renderMarkdown: true,
-            virtualizedRendering: true,
+            fullMessageRendering: true,
             aiderDeskAutoUpdate: true,
             promptBehavior: {
               suggestionMode: 'automatically',
@@ -91,6 +91,7 @@ describe('Project - createNewTask', () => {
             },
             server: {
               enabled: false,
+              readonly: false,
               basicAuth: {
                 enabled: false,
                 username: '',
@@ -134,6 +135,7 @@ describe('Project - createNewTask', () => {
             proxy: {
               enabled: false,
               url: '',
+              noProxy: '',
             },
           }) as SettingsData,
       ),
@@ -145,7 +147,7 @@ describe('Project - createNewTask', () => {
             agentProfileId: 'default-profile',
             modelEditFormats: {},
             currentMode: 'agent' as Mode,
-            autoApproveLocked: false,
+            autonomyModeLocked: false,
           }) as ProjectSettings,
       ),
     };
@@ -253,17 +255,16 @@ describe('Project - createNewTask', () => {
       expect(mockEventManager.sendTaskCreated).toHaveBeenCalledWith(newTask, undefined);
     });
 
-    it('should allow creating subtasks from a parent that itself has a parent (nested subtasks)', async () => {
-      // Setup: Create a three-level hierarchy
+    it('should flatten subtask-of-subtask to use top-level parent', async () => {
+      // Setup: Create a two-level hierarchy
       const grandparentTask = await project.createNewTask();
       const parentTask = await project.createNewTask({ parentId: grandparentTask.id });
 
-      // Act: Create a subtask of the parent task
+      // Act: Create a subtask of the parent task (which is itself a subtask)
       const subtask = await project.createNewTask({ parentId: parentTask.id });
 
-      // Assert: The subtask should have the correct parentId (parent task's id, not grandparent's)
-      expect(subtask.parentId).toBe(parentTask.id);
-      expect(grandparentTask.id).not.toBe(subtask.parentId);
+      // Assert: The subtask should be flattened to the grandparent (top-level parent)
+      expect(subtask.parentId).toBe(grandparentTask.id);
     });
   });
 
@@ -450,7 +451,7 @@ describe('Project - deleteTask', () => {
           ({
             language: 'en',
             renderMarkdown: true,
-            virtualizedRendering: true,
+            fullMessageRendering: true,
             aiderDeskAutoUpdate: true,
             promptBehavior: {
               suggestionMode: 'automatically',
@@ -465,6 +466,7 @@ describe('Project - deleteTask', () => {
             },
             server: {
               enabled: false,
+              readonly: false,
               basicAuth: {
                 enabled: false,
                 username: '',
@@ -508,6 +510,7 @@ describe('Project - deleteTask', () => {
             proxy: {
               enabled: false,
               url: '',
+              noProxy: '',
             },
           }) as SettingsData,
       ),
@@ -518,7 +521,7 @@ describe('Project - deleteTask', () => {
             agentProfileId: 'default-profile',
             modelEditFormats: {},
             currentMode: 'agent' as Mode,
-            autoApproveLocked: false,
+            autonomyModeLocked: false,
           }) as ProjectSettings,
       ),
     } as unknown as Store;

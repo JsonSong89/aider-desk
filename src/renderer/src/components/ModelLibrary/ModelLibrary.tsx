@@ -142,8 +142,10 @@ export const ModelLibrary = ({ onClose }: Props) => {
     return (
       <div ref={containerRef} tabIndex={-1} className="h-full outline-none">
         <ModalOverlayLayout title={t('modelLibrary.title')} onClose={onClose}>
-          <div className="p-10">
-            <ProviderSelection onSelectProvider={handleSelectProvider} onCancel={handleCancelConfigure} />
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin scrollbar-track-bg-primary-light scrollbar-thumb-bg-tertiary">
+            <div className="p-10">
+              <ProviderSelection onSelectProvider={handleSelectProvider} onCancel={handleCancelConfigure} />
+            </div>
           </div>
         </ModalOverlayLayout>
       </div>
@@ -192,15 +194,17 @@ export const ModelLibrary = ({ onClose }: Props) => {
           />
         )}
         <div className="flex flex-col h-full overflow-hidden">
-          <ProviderHeader
-            providers={providers}
-            providerErrors={providerErrors}
-            selectedProfileIds={selectedProviderIds}
-            onToggleSelect={handleToggleProviderSelect}
-            onAddProvider={handleAddProvider}
-            onEditProfile={handleEditProfile}
-            onDeleteProfile={handleDeleteProfile}
-          />
+          <div className="overflow-y-auto scrollbar-thin scrollbar-track-bg-primary-light scrollbar-thumb-bg-tertiary max-h-[50%] shrink-0">
+            <ProviderHeader
+              providers={providers}
+              providerErrors={providerErrors}
+              selectedProfileIds={selectedProviderIds}
+              onToggleSelect={handleToggleProviderSelect}
+              onAddProvider={handleAddProvider}
+              onEditProfile={handleEditProfile}
+              onDeleteProfile={handleDeleteProfile}
+            />
+          </div>
           <ModelTableSection
             models={models}
             selectedProviderIds={selectedProviderIds}

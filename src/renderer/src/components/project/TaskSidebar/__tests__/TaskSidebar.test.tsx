@@ -7,7 +7,7 @@ import { TaskSidebar } from '../TaskSidebar';
 
 import { render } from '@/__tests__/render';
 import { useTask } from '@/contexts/TasksContext';
-import { useTaskState, EMPTY_TASK_STATE } from '@/stores/taskStore';
+import { useOptimizedTaskState, EMPTY_TASK_STATE } from '@/stores/taskStore';
 import { createMockTaskContext } from '@/__tests__/mocks/contexts';
 
 // Mock @tanstack/react-virtual
@@ -58,15 +58,15 @@ vi.mock('@/components/extensions/ExtensionComponentWrapper', () => ({
 
 // Mock useTaskState from taskStore
 vi.mock('@/stores/taskStore', () => ({
+  useOptimizedTaskState: vi.fn(() => EMPTY_TASK_STATE),
   useTaskState: vi.fn(),
+  useTaskQuestion: vi.fn(() => null),
   EMPTY_TASK_STATE: {
     loading: false,
     loaded: false,
     tokensInfo: null,
     question: null,
     todoItems: [],
-    allFiles: [],
-    autocompletionWords: [],
     aiderTotalCost: 0,
     contextFiles: [],
     aiderModelsData: null,
@@ -96,7 +96,7 @@ describe('TaskSidebar', () => {
 
   beforeEach(() => {
     vi.mocked(useTask).mockReturnValue(createMockTaskContext());
-    vi.mocked(useTaskState).mockReturnValue(EMPTY_TASK_STATE);
+    vi.mocked(useOptimizedTaskState).mockReturnValue(EMPTY_TASK_STATE);
   });
 
   it('renders a list of tasks', () => {
@@ -130,6 +130,26 @@ describe('TaskSidebar', () => {
 
     fireEvent.click(screen.getByTestId('create-task-button'));
     expect(createNewTask).toHaveBeenCalled();
+  });
+
+  it('uses read-only single selection and hides task creation controls', () => {
+    const onTaskSelect = vi.fn();
+    render(
+      <TaskSidebar
+        loading={false}
+        tasks={mockTasks}
+        readonly={true}
+        activeTaskId="task-1"
+        onTaskSelect={onTaskSelect}
+        createNewTask={vi.fn()}
+        isCollapsed={false}
+        onToggleCollapse={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('create-task-button')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Task 2'), { ctrlKey: true });
+    expect(onTaskSelect).toHaveBeenCalledWith('task-2');
   });
 
   it('filters tasks based on search query', async () => {

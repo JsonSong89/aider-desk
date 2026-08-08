@@ -5,22 +5,35 @@ import { useLocalStorage } from '@reactuses/core';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { clsx } from 'clsx';
 
-import { COLLAPSED_WIDTH, EXPANDED_WIDTH, TaskSidebar } from './TaskSidebar/TaskSidebar';
+import { COLLAPSED_WIDTH, EXPANDED_WIDTH, MIN_WIDTH, MAX_WIDTH, TaskSidebar } from './TaskSidebar/TaskSidebar';
 
-import { useProjectTasks, useProjectStore } from '@/stores/projectStore';
-import { useSettings } from '@/contexts/SettingsContext';
+import {
+  useProjectTasks,
+  setProjectTasks,
+  updateProjectTask,
+  addProjectTask,
+  removeProjectTask,
+  clearProjectTasks,
+  useProjectStore,
+} from '@/stores/projectStore';
+import { unloadTasks } from '@/stores/taskStore';
+import { releaseTaskFiles } from '@/stores/taskFilesStore';
+import { getTaskDir, getSortedVisibleTasks } from '@/utils/task-utils';
+import { cleanupProjectCache } from '@/stores/extensionUIStore';
+import { cleanupProcessingResponseMessage } from '@/hooks/useTaskResponseHandlers';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
 import { TaskView, TaskViewRef } from '@/components/project/TaskView';
 import { useApi } from '@/contexts/ApiContext';
 import { TasksProvider } from '@/contexts/TasksContext';
 import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
-import { getSortedVisibleTasks } from '@/utils/task-utils';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useBooleanState } from '@/hooks/useBooleanState';
 import { showNotification } from '@/utils/browser-notifications';
 import { showInfoNotification } from '@/utils/notifications';
 import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
+import { FloatingExtensionPanels } from '@/components/extensions/FloatingExtensionPanels';
 import { useActiveAgentProfile } from '@/utils/agents';
 
 type Props = {
@@ -32,13 +45,14 @@ type Props = {
 
 export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsPage, initialTaskId }: Props) => {
   const { t } = useTranslation();
-  const { settings } = useSettings();
+  const startupMode = useSettingsStore((state) => state.settings?.startupMode);
+  const windowTitleTemplate = useSettingsStore((state) => state.settings?.windowTitleTemplate);
+  const settingsLoaded = useSettingsStore((state) => !!state.settings);
   const { projectSettings } = useProjectSettings();
   const api = useApi();
   const { TASK_HOTKEYS } = useConfiguredHotkeys();
   const { isMobile } = useResponsive();
 
-  const { setProjectTasks, updateProjectTask, addProjectTask, removeProjectTask, clearProjectTasks } = useProjectStore();
   const tasks = useProjectTasks(projectDir);
   const [optimisticTasks, setOptimisticTasks] = useOptimistic(tasks);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
@@ -46,9 +60,11 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [isTaskBarCollapsed, setIsTaskBarCollapsed] = useLocalStorage(`task-sidebar-collapsed-${projectDir}`, false);
+  const [taskSidebarWidth, setTaskSidebarWidth] = useLocalStorage(`task-sidebar-width-${projectDir}`, EXPANDED_WIDTH);
   const [isTaskSidebarOpen, , hideTaskSidebar, toggleTaskSidebar] = useBooleanState();
   const [shouldFocusNewTask, setShouldFocusNewTask] = useState(false);
   const taskViewRef = useRef<TaskViewRef>(null);
+  const taskContentRef = useRef<HTMLDivElement>(null);
   const creatingTaskRef = useRef(false);
   const activeTask = activeTaskId ? optimisticTasks.find((task) => task.id === activeTaskId) : null;
   const agentProfile = useActiveAgentProfile(activeTask, projectDir) || undefined;
@@ -128,7 +144,7 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
         }
       }
 
-      const mode = settings?.startupMode ?? ProjectStartMode.Empty;
+      const mode = startupMode ?? ProjectStartMode.Empty;
       const existingNewTask = tasks.find((task) => !task.createdAt);
       let startupTask: TaskData | null = null;
 
@@ -187,6 +203,13 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
     };
 
     const handleTaskUpdated = (taskData: TaskData) => {
+      const existingTask = useProjectStore
+        .getState()
+        .projectTasksMap.get(projectDir)
+        ?.find((t) => t.id === taskData.id);
+      if (existingTask && getTaskDir(existingTask) !== getTaskDir(taskData)) {
+        releaseTaskFiles(taskData.id);
+      }
       updateProjectTask(projectDir, taskData);
     };
 
@@ -204,6 +227,7 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
 
     const handleTaskDeleted = (taskData: TaskData) => {
       removeProjectTask(projectDir, taskData.id);
+      releaseTaskFiles(taskData.id);
     };
 
     const handleInputHistoryUpdate = (data: InputHistoryData) => {
@@ -233,6 +257,10 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
         await api.startProject(projectDir);
         setStarting(false);
 
+        // Load input history (may have been emitted before listener was registered)
+        const history = await api.loadInputHistory(projectDir);
+        setInputHistory(history);
+
         // Load tasks
         setTasksLoading(true);
         const tasks = await api.getTasks(projectDir);
@@ -260,20 +288,19 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
       removeTaskDeletedListener();
       removeNotificationListener();
       removeInputHistoryListener();
+
+      const taskIds =
+        useProjectStore
+          .getState()
+          .projectTasksMap.get(projectDir)
+          ?.map((t) => t.id) || [];
       clearProjectTasks(projectDir);
+      unloadTasks(taskIds);
+      taskIds.forEach(releaseTaskFiles);
+      taskIds.forEach(cleanupProcessingResponseMessage);
+      cleanupProjectCache(projectDir);
     };
-  }, [
-    activateTask,
-    api,
-    projectDir,
-    settings?.startupMode,
-    clearProjectTasks,
-    setProjectTasks,
-    updateProjectTask,
-    addProjectTask,
-    removeProjectTask,
-    initialTaskId,
-  ]);
+  }, [activateTask, api, projectDir, startupMode, initialTaskId]);
 
   const handleTaskSelect = useCallback(
     (taskId: string) => {
@@ -336,6 +363,13 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
     setIsTaskBarCollapsed(!isTaskBarCollapsed);
   }, [isTaskBarCollapsed, setIsTaskBarCollapsed]);
 
+  const handleTaskSidebarResize = useCallback(
+    (newWidth: number) => {
+      setTaskSidebarWidth(Math.min(Math.max(newWidth, MIN_WIDTH), MAX_WIDTH));
+    },
+    [setTaskSidebarWidth],
+  );
+
   const handleUpdateTask = useCallback(
     async (taskId: string, updates: Partial<TaskData>, useOptimistic = true) => {
       startTransition(async () => {
@@ -390,8 +424,9 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
   const handleArchiveActiveTask = useCallback(async () => {
     if (activeTaskId) {
       await handleUpdateTask(activeTaskId, { archived: true });
+      await createNewTask();
     }
-  }, [activeTaskId, handleUpdateTask]);
+  }, [activeTaskId, handleUpdateTask, createNewTask]);
 
   const handleUnarchiveActiveTask = useCallback(async () => {
     if (activeTaskId) {
@@ -479,20 +514,20 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
     [setOptimisticTasks],
   );
 
-  if (!projectSettings || !settings) {
+  if (!projectSettings || !settingsLoaded) {
     return <LoadingOverlay message={t('common.loadingProjectSettings')} />;
   }
 
   return (
-    <TasksProvider baseDir={projectDir} tasks={tasks}>
-      <ExtensionsProvider projectDir={projectDir} agentProfile={agentProfile}>
+    <TasksProvider baseDir={projectDir} tasks={tasks} activeTaskId={activeTaskId}>
+      <ExtensionsProvider projectDir={projectDir} agentProfile={agentProfile} activateTask={activateTask}>
         <div className="h-full w-full bg-gradient-to-b from-bg-primary to-bg-primary-light relative">
           {isProjectActive && (
             <title>
               {(() => {
                 const projectName = projectDir.split(/[\\/]/).pop() || '';
                 const taskName = activeTask?.name || '';
-                const template = settings?.windowTitleTemplate ?? 'AiderDesk - {project}';
+                const template = windowTitleTemplate ?? 'AiderDesk - {project}';
                 return template.replace('{project}', projectName).replace('{task}', taskName);
               })()}
             </title>
@@ -517,20 +552,26 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
               onDuplicateTask={handleDuplicateTask}
               isMobile={isMobile}
               onClose={hideTaskSidebar}
+              width={taskSidebarWidth ?? EXPANDED_WIDTH}
+              onResize={handleTaskSidebarResize}
+              contentRef={taskContentRef}
             />
           )}
 
           <div
+            ref={taskContentRef}
             className={clsx('absolute top-0 h-full transition-all duration-300 ease-in-out', isMobile ? 'left-0 right-0' : 'right-0')}
             style={{
-              left: isMobile ? 0 : isTaskBarCollapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH,
+              left: isMobile ? 0 : isTaskBarCollapsed ? COLLAPSED_WIDTH : (taskSidebarWidth ?? EXPANDED_WIDTH),
             }}
           >
             {isActiveTaskSwitching && <LoadingOverlay message={t('common.loadingTask')} animateOpacity />}
+            {isProjectActive && <FloatingExtensionPanels placement="project-floating" />}
             {activeTask && (
               <Activity mode={isProjectActive ? 'visible' : 'hidden'}>
                 <ExtensionsProvider projectDir={projectDir} task={activeTask} agentProfile={agentProfile}>
                   <TaskView
+                    key={activeTask.id}
                     ref={taskViewRef}
                     projectDir={projectDir}
                     task={activeTask}
@@ -545,6 +586,7 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
                     onDeleteTask={handleDeleteActiveTask}
                     onToggleTaskSidebar={isMobile ? toggleTaskSidebar : undefined}
                   />
+                  <FloatingExtensionPanels placement="task-floating" />
                 </ExtensionsProvider>
               </Activity>
             )}

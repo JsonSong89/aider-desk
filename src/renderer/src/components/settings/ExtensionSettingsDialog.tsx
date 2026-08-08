@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import StringToReactComponent from 'string-to-react-component';
 import { useTranslation } from 'react-i18next';
 
 import type { ExtensionConfigComponent } from '@common/types';
 
+import StringToReactComponent from '@/components/extensions/StringToReactComponent';
 import { useApi } from '@/contexts/ApiContext';
 import { useExtensions } from '@/contexts/ExtensionsContext';
+import { useReactIcons } from '@/utils/extension-icons';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
 import { showErrorNotification, showSuccessNotification } from '@/utils/notifications';
@@ -21,6 +22,7 @@ export const ExtensionSettingsDialog = ({ extensionId, extensionName, projectDir
   const { t } = useTranslation();
   const api = useApi();
   const { componentProps: extensionProps } = useExtensions();
+  const icons = useReactIcons();
 
   const [componentDef, setComponentDef] = useState<ExtensionConfigComponent | null>(null);
   const [config, setConfig] = useState<unknown>(undefined);
@@ -96,7 +98,7 @@ export const ExtensionSettingsDialog = ({ extensionId, extensionName, projectDir
     }
   }, [api, extensionId, componentDef, config, projectDir, extensionName, onClose, t]);
 
-  if (isLoading) {
+  if (isLoading || !icons) {
     return (
       <ConfirmDialog
         title={t('settings.extensions.settingsDialog.title', { name: extensionName })}
@@ -136,6 +138,7 @@ export const ExtensionSettingsDialog = ({ extensionId, extensionName, projectDir
       disabled={isSaving}
       width={600}
       contentClass="p-0"
+      enableFocusTrap={false}
     >
       <div className="min-h-[240px] max-h-[70vh] overflow-y-auto p-6">
         <StringToReactComponent data={componentProps}>{componentDef.jsx}</StringToReactComponent>

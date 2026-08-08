@@ -5,6 +5,7 @@ import {
   CloudflareTunnelStatus,
   CommandOutputData,
   ContextFilesUpdatedData,
+  ContextInfoData,
   ContextMenuParams,
   CommandsData,
   EditFormat,
@@ -47,6 +48,7 @@ import {
   TodoItem,
   TokensInfoData,
   ToolData,
+  ToolInputChunkData,
   UsageDataRow,
   UserMessageData,
   VersionsInfo,
@@ -54,23 +56,28 @@ import {
   AgentProfile,
   MemoryEntry,
   MemoryEmbeddingProgress,
+  SwitchToLocalOptions,
+  SwitchToWorktreeOptions,
   WorktreeIntegrationStatus,
   WorktreeIntegrationStatusUpdatedData,
+  WorktreeUncommittedFiles,
   TaskCreatedData,
   UpdatedFilesUpdatedData,
   QueuedPromptsUpdatedData,
   InstalledExtension,
   AvailableExtension,
   ExtensionConfigComponent,
+  ExtensionToolInfo,
   ExtensionUIComponent,
   ModalOverlayUrlData,
   AiderConnectorStatus,
   ChangeRequestItem,
   SkillDefinition,
   SkillsUpdatedData,
+  ExtensionOperationResult,
 } from '@common/types';
 import { ApplicationAPI } from '@common/api';
-import axios, { type AxiosInstance } from 'axios';
+import { type AxiosInstance, create } from 'axios';
 import { io, Socket } from 'socket.io-client';
 import { compareBaseDirs } from '@common/utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -82,6 +89,7 @@ type EventDataMap = {
   log: LogData;
   'system-log': SystemLogData;
   'context-files-updated': ContextFilesUpdatedData;
+  'context-info-updated': ContextInfoData;
   'commands-updated': CommandsData;
   'update-autocompletion': AutocompletionData;
   'ask-question': QuestionData;
@@ -91,6 +99,7 @@ type EventDataMap = {
   'command-output': CommandOutputData;
   'update-tokens-info': TokensInfoData;
   tool: ToolData;
+  'tool-input-chunk': ToolInputChunkData;
   'user-message': UserMessageData;
   'input-history-updated': InputHistoryData;
   'clear-task': ClearTaskData;
@@ -161,6 +170,7 @@ export class BrowserApi implements ApplicationAPI {
       log: new Map(),
       'system-log': new Map(),
       'context-files-updated': new Map(),
+      'context-info-updated': new Map(),
       'commands-updated': new Map(),
       'update-autocompletion': new Map(),
       'ask-question': new Map(),
@@ -169,6 +179,7 @@ export class BrowserApi implements ApplicationAPI {
       'command-output': new Map(),
       'update-tokens-info': new Map(),
       tool: new Map(),
+      'tool-input-chunk': new Map(),
       'user-message': new Map(),
       'input-history-updated': new Map(),
       'clear-task': new Map(),
@@ -196,7 +207,7 @@ export class BrowserApi implements ApplicationAPI {
       'modal-overlay-url': new Map(),
       'aider-connector-status': new Map(),
     };
-    this.apiClient = axios.create({
+    this.apiClient = create({
       baseURL: `${baseUrl}/api`,
       headers: {
         'Content-Type': 'application/json',
@@ -261,7 +272,17 @@ export class BrowserApi implements ApplicationAPI {
     }
 
     return new Promise((resolve) => {
+      const cleanup = () => {
+        this.socket.off('connect', onConnect);
+        this.socket.off('disconnect', onDisconnect);
+      };
+
       const onConnect = () => {
+        cleanup();
+        resolve();
+      };
+
+      const onDisconnect = () => {
         cleanup();
         resolve();
       };
@@ -271,10 +292,7 @@ export class BrowserApi implements ApplicationAPI {
       }
 
       this.socket.once('connect', onConnect);
-
-      const cleanup = () => {
-        this.socket.off('connect', onConnect);
-      };
+      this.socket.once('disconnect', onDisconnect);
     });
   }
 
@@ -350,19 +368,26 @@ export class BrowserApi implements ApplicationAPI {
   resetTask(baseDir: string, taskId: string): void {
     this.post('/project/tasks/reset', { projectDir: baseDir, taskId });
   }
-  runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode): void {
-    this.post('/run-prompt', { projectDir: baseDir, taskId, prompt, mode });
+  restartAiderConnector(baseDir: string, taskId: string): void {
+    this.post('/project/tasks/restart-aider-connector', { projectDir: baseDir, taskId });
+  }
+  runPrompt(baseDir: string, taskId: string, prompt: string, mode?: Mode, images?: string[]): void {
+    this.post('/run-prompt', { projectDir: baseDir, taskId, prompt, mode, images });
   }
   savePrompt(baseDir: string, taskId: string, prompt: string): Promise<void> {
     return this.post('/save-prompt', { projectDir: baseDir, taskId, prompt });
   }
-  redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string): void {
+  saveEditedPrompt(baseDir: string, taskId: string, messageId: string, prompt: string): Promise<void> {
+    return this.post('/save-edited-prompt', { projectDir: baseDir, taskId, messageId, prompt });
+  }
+  redoUserPrompt(baseDir: string, taskId: string, messageId: string, mode: Mode, updatedPrompt?: string, updatedImages?: string[]): void {
     this.post('/project/redo-prompt', {
       projectDir: baseDir,
       taskId,
       messageId,
       mode,
       updatedPrompt,
+      updatedImages,
     });
   }
   resumeTask(baseDir: string, taskId: string): void {
@@ -497,6 +522,9 @@ export class BrowserApi implements ApplicationAPI {
   getAllFiles(baseDir: string, taskId: string, useGit?: boolean): Promise<string[]> {
     return this.post('/get-all-files', { projectDir: baseDir, taskId, useGit });
   }
+  refreshContextFiles(baseDir: string, taskId: string): Promise<void> {
+    return this.post('/refresh-context-files', { projectDir: baseDir, taskId });
+  }
   getUpdatedFiles(baseDir: string, taskId: string): Promise<{ path: string; additions: number; deletions: number }[]> {
     return this.post('/get-updated-files', { projectDir: baseDir, taskId });
   }
@@ -513,6 +541,12 @@ export class BrowserApi implements ApplicationAPI {
       taskId,
       message,
       amend,
+    });
+  }
+  async cancelCommitChanges(baseDir: string, taskId: string): Promise<void> {
+    await this.post('/project/worktree/cancel-commit-changes', {
+      projectDir: baseDir,
+      taskId,
     });
   }
   addFile(baseDir: string, taskId: string, filePath: string, readOnly?: boolean): void {
@@ -713,6 +747,14 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
+  async undoContextChange(baseDir: string, taskId: string): Promise<boolean> {
+    const result = await this.post<{ projectDir: string; taskId: string }, { undone: boolean }>('/project/undo-context-change', {
+      projectDir: baseDir,
+      taskId,
+    });
+    return result?.undone ?? false;
+  }
+
   async handoffConversation(baseDir: string, taskId: string, focus?: string): Promise<void> {
     await this.post('/project/handoff-conversation', {
       projectDir: baseDir,
@@ -798,6 +840,9 @@ export class BrowserApi implements ApplicationAPI {
   addContextFilesUpdatedListener(baseDir: string, taskId: string, callback: (data: ContextFilesUpdatedData) => void): () => void {
     return this.addListener('context-files-updated', callback, baseDir, taskId);
   }
+  addContextInfoUpdatedListener(baseDir: string, taskId: string, callback: (data: ContextInfoData) => void): () => void {
+    return this.addListener('context-info-updated', callback, baseDir, taskId);
+  }
   addUpdatedFilesUpdatedListener(baseDir: string, taskId: string, callback: (data: UpdatedFilesUpdatedData) => void): () => void {
     return this.addListener('updated-files-updated', callback, baseDir, taskId);
   }
@@ -831,6 +876,9 @@ export class BrowserApi implements ApplicationAPI {
   }
   addToolListener(baseDir: string, taskId: string, callback: (data: ToolData) => void): () => void {
     return this.addListener('tool', callback, baseDir, taskId);
+  }
+  addToolInputChunkListener(baseDir: string, taskId: string, callback: (data: ToolInputChunkData) => void): () => void {
+    return this.addListener('tool-input-chunk', callback, baseDir, taskId);
   }
   addUserMessageListener(baseDir: string, taskId: string, callback: (data: UserMessageData) => void): () => void {
     return this.addListener('user-message', callback, baseDir, taskId);
@@ -1015,11 +1063,29 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
-  mergeAndSwitchToLocal(baseDir: string, taskId: string, targetBranch?: string): Promise<void> {
-    return this.post('/project/worktree/merge-and-switch-to-local', {
+  switchToLocalWorkingMode(baseDir: string, taskId: string, options?: SwitchToLocalOptions): Promise<void> {
+    return this.post('/project/switch-to-local-working-mode', {
       projectDir: baseDir,
       taskId,
-      targetBranch,
+      mergeBeforeSwitch: options?.mergeBeforeSwitch,
+      targetBranch: options?.targetBranch,
+      switchAllInWorktree: options?.switchAllInWorktree,
+    });
+  }
+
+  switchToWorktreeWorkingMode(baseDir: string, taskId: string, options?: SwitchToWorktreeOptions): Promise<void> {
+    return this.post('/project/switch-to-worktree-working-mode', {
+      projectDir: baseDir,
+      taskId,
+      carryOverUncommittedChanges: options?.carryOverUncommittedChanges,
+      dropSourceChanges: options?.dropSourceChanges,
+    });
+  }
+
+  getLocalUncommittedFiles(baseDir: string, taskId: string): Promise<WorktreeUncommittedFiles> {
+    return this.get('/project/local-uncommitted-files', {
+      projectDir: baseDir,
+      taskId,
     });
   }
 
@@ -1217,6 +1283,10 @@ export class BrowserApi implements ApplicationAPI {
     return this.get('/extensions', { projectDir });
   }
 
+  getExtensionToolsInfo(projectDir?: string): Promise<ExtensionToolInfo[]> {
+    return this.get('/extensions/tools-info', { projectDir });
+  }
+
   getAvailableExtensions(repositories: string[], forceRefresh?: boolean, fetchOnly?: boolean): Promise<AvailableExtension[]> {
     return this.get('/extensions/available', {
       repositories: repositories.join(','),
@@ -1225,7 +1295,7 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
-  installExtension(extensionId: string, repositoryUrl: string, projectDir?: string): Promise<boolean> {
+  installExtension(extensionId: string, repositoryUrl: string, projectDir?: string): Promise<ExtensionOperationResult> {
     return this.post('/extensions/install', {
       extensionId,
       repositoryUrl,
@@ -1240,10 +1310,17 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
-  updateExtension(extensionId: string, repositoryUrl: string, projectDir?: string): Promise<boolean> {
+  updateExtension(extensionId: string, repositoryUrl: string, projectDir?: string): Promise<ExtensionOperationResult> {
     return this.post('/extensions/update', {
       extensionId,
       repositoryUrl,
+      projectDir,
+    });
+  }
+
+  reloadExtension(filePath: string, projectDir?: string): Promise<boolean> {
+    return this.post('/extensions/reload', {
+      filePath,
       projectDir,
     });
   }
@@ -1297,6 +1374,10 @@ export class BrowserApi implements ApplicationAPI {
     return this.addListener('modal-overlay-url', callback);
   }
 
+  loadExtensionLibrary(librarySpec: string): Promise<string> {
+    return this.post('/extensions/load-library', { librarySpec });
+  }
+
   isWebViewSupported(): boolean {
     return false;
   }
@@ -1311,5 +1392,10 @@ export class BrowserApi implements ApplicationAPI {
 
   async getAiderConnectorStatus(): Promise<AiderConnectorStatus> {
     return this.get('/system/aider-connector-status');
+  }
+
+  destroy(): void {
+    this.socket.removeAllListeners();
+    this.socket.disconnect();
   }
 }

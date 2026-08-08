@@ -4,6 +4,7 @@ import { CgSpinner } from 'react-icons/cg';
 import { ToolMessage } from '@common/types';
 
 import { ExpandableMessageBlock } from '@/components/message/ExpandableMessageBlock';
+import { StreamingToolMessage } from '@/components/message/StreamingToolMessage';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 type Props = {
@@ -18,10 +19,25 @@ type Props = {
 export const DeleteMemoryToolMessage = ({ message, onRemove, compact = false, onFork, onRemoveUpTo, hideMessageBar }: Props) => {
   const { t } = useTranslation();
 
-  const id = message.args.id as string;
+  if (message.isStreaming) {
+    return (
+      <StreamingToolMessage
+        message={message}
+        icon={<FaBrain className="w-4 h-4" />}
+        label={t('toolMessage.memory.deletingMemory')}
+        compact={compact}
+        onRemove={onRemove}
+        onFork={onFork}
+        onRemoveUpTo={onRemoveUpTo}
+        hideMessageBar={hideMessageBar}
+      />
+    );
+  }
+
+  const id = (message.args.id as string) || '';
   const content = message.content && JSON.parse(message.content);
   const isError = content && typeof content === 'string' && content.startsWith('Failed to delete memory');
-  const isDenied = (content && typeof content === 'string' && content.includes('cancelled')) || content.includes('denied');
+  const isDenied = typeof content === 'string' && (content.includes('cancelled') || content.includes('denied'));
 
   const title = (
     <div className="flex items-center gap-2 w-full text-left">

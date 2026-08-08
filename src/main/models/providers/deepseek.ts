@@ -1,8 +1,9 @@
-import { Model, ProviderProfile, SettingsData } from '@common/types';
+import { Model, ProviderProfile, Reasoning, SettingsData } from '@common/types';
 import { DeepseekProvider, isDeepseekProvider, LlmProvider } from '@common/agent';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 
-import type { LanguageModelV2, SharedV2ProviderOptions } from '@ai-sdk/provider';
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
+import type { LanguageModel } from 'ai';
 
 import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
 import logger from '@/logger';
@@ -69,7 +70,7 @@ export const getDeepseekAiderMapping = (provider: ProviderProfile, modelId: stri
 };
 
 // === LLM Creation Functions ===
-export const createDeepseekLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModelV2 => {
+export const createDeepseekLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel => {
   const provider = profile.provider as DeepseekProvider;
   let apiKey = provider.apiKey;
 
@@ -92,8 +93,21 @@ export const createDeepseekLlm = (profile: ProviderProfile, model: Model, settin
   return deepseekProvider(model.id);
 };
 
-const getDeepseekProviderOptions = (llmProvider: LlmProvider, model: Model): SharedV2ProviderOptions | undefined => {
+const getDeepseekProviderOptions = (llmProvider: LlmProvider, model: Model, reasoning?: Reasoning): SharedV4ProviderOptions | undefined => {
   if (!isDeepseekProvider(llmProvider)) {
+    return undefined;
+  }
+
+  // When the top-level reasoning parameter is set (not undefined or 'provider-default'),
+  // let the AI SDK handle it. For 'none', explicitly disable thinking.
+  if (reasoning && reasoning !== 'provider-default') {
+    if (reasoning === 'none') {
+      return {
+        deepseek: {
+          thinking: { type: 'disabled' },
+        },
+      };
+    }
     return undefined;
   }
 
@@ -109,13 +123,14 @@ const getDeepseekProviderOptions = (llmProvider: LlmProvider, model: Model): Sha
   };
 };
 
-const getDeepseekProviderParameters = (llmProvider: LlmProvider, model: Model): Record<string, unknown> => {
+const getDeepseekProviderParameters = (llmProvider: LlmProvider, model: Model, reasoning?: Reasoning): Record<string, unknown> => {
   if (!isDeepseekProvider(llmProvider)) {
     return {};
   }
 
   const providerOverrides = model.providerOverrides as Partial<DeepseekProvider> | undefined;
-  const thinkingEnabled = providerOverrides?.thinkingEnabled ?? llmProvider.thinkingEnabled ?? true;
+  const configuredThinkingEnabled = providerOverrides?.thinkingEnabled ?? llmProvider.thinkingEnabled ?? true;
+  const thinkingEnabled = reasoning && reasoning !== 'provider-default' ? reasoning !== 'none' : configuredThinkingEnabled;
 
   if (thinkingEnabled) {
     return {

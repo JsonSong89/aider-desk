@@ -7,6 +7,7 @@ import { DiffViewMode } from '@common/types';
 
 import { createTokens } from './utils';
 
+import { useRefractorLanguage } from '@/hooks/useRefractorLanguage';
 import { useResponsive } from '@/hooks/useResponsive';
 
 import 'react-diff-view/style/index.css';
@@ -25,6 +26,7 @@ type Props = {
 export const DiffViewer = ({ oldValue, newValue, language, isComplete = false, viewMode = DiffViewMode.SideBySide }: Props) => {
   const { t } = useTranslation();
   const { isMobile } = useResponsive();
+  const isLanguageRegistered = useRefractorLanguage(language);
 
   const debouncedOldValue = useDebounce(oldValue, DEBOUNCE_TIME, { leading: true, maxWait: DEBOUNCE_TIME });
   const debouncedNewValue = useDebounce(newValue, DEBOUNCE_TIME, { leading: true, maxWait: DEBOUNCE_TIME });
@@ -48,11 +50,11 @@ export const DiffViewer = ({ oldValue, newValue, language, isComplete = false, v
   const { file: diffFile, error: diffError } = diffComputationResult;
 
   const tokens = useMemo(() => {
-    if (diffError || !diffFile || !diffFile.hunks) {
+    if (diffError || !diffFile || !diffFile.hunks || !isLanguageRegistered) {
       return undefined;
     }
     return createTokens(diffFile.hunks, language);
-  }, [diffFile, language, diffError]);
+  }, [diffFile, language, diffError, isLanguageRegistered]);
 
   if (diffError) {
     return (

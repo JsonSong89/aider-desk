@@ -16,6 +16,12 @@ interface CacheEntry {
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+const FRAMEWORK_ENUM_VALUES: Record<string, unknown> = {
+  'OS.Windows': 'windows',
+  'OS.Linux': 'linux',
+  'OS.MacOS': 'macos',
+};
+
 export class ExtensionFetcher {
   private cache = new Map<string, CacheEntry>();
   private getAvailableExtensionsPromise: Promise<AvailableExtension[]> | null = null;
@@ -172,6 +178,51 @@ export class ExtensionFetcher {
     try {
       const entries = await fs.readdir(extensionsPath, { withFileTypes: true });
 
+      // Check if the repo root itself is a folder-based extension
+      const rootIndexTs = path.join(extensionsPath, 'index.ts');
+      const rootIndexJs = path.join(extensionsPath, 'index.js');
+      const rootPackageJson = path.join(extensionsPath, 'package.json');
+
+      let rootIndexFile: string | null = null;
+      if (await this.fileExists(rootIndexTs)) {
+        rootIndexFile = rootIndexTs;
+      } else if (await this.fileExists(rootIndexJs)) {
+        rootIndexFile = rootIndexJs;
+      }
+
+      const hasRootPackageJson = await this.fileExists(rootPackageJson);
+
+      if (rootIndexFile && hasRootPackageJson) {
+        const metadata = await this.extractMetadataFromLocalFile(rootIndexFile);
+
+        if (metadata) {
+          const repoName = this.getRepoName(repoUrl);
+
+          let readmeContent: string | undefined;
+          const readmePath = path.join(extensionsPath, 'README.md');
+          try {
+            const content = await fs.readFile(readmePath, 'utf-8');
+            if (content.trim()) {
+              readmeContent = content;
+            }
+          } catch {
+            // README.md doesn't exist or can't be read, that's fine
+          }
+
+          extensions.push({
+            ...metadata,
+            id: repoName,
+            type: 'folder',
+            folder: repoName,
+            repositoryUrl: repoUrl,
+            hasDependencies: true,
+            readmeContent,
+          });
+
+          return extensions;
+        }
+      }
+
       for (const entry of entries) {
         if (entry.isDirectory()) {
           const indexPathTs = path.join(extensionsPath, entry.name, 'index.ts');
@@ -234,6 +285,19 @@ export class ExtensionFetcher {
     return extensions;
   }
 
+  private getRepoName(repoUrl: string): string {
+    try {
+      const url = new URL(repoUrl);
+      const pathParts = url.pathname.split('/').filter(Boolean);
+      if (pathParts.length >= 2) {
+        return pathParts[1].replace(/\.git$/, '');
+      }
+    } catch {
+      // fall through
+    }
+    return repoUrl.replace(/[^a-zA-Z0-9]/g, '-');
+  }
+
   private async fileExists(filePath: string): Promise<boolean> {
     try {
       await fs.access(filePath);
@@ -272,6 +336,7 @@ export class ExtensionFetcher {
     }
 
     let metadata: ExtensionMetadata | null = null;
+    const enumValues = this.collectEnumValues(sourceFile);
 
     const visitor = (node: ts.Node) => {
       if (
@@ -291,7 +356,7 @@ export class ExtensionFetcher {
           }
 
           if (objectLiteral) {
-            const parsed = this.parseObjectLiteral(objectLiteral);
+            const parsed = this.parseObjectLiteral(objectLiteral, enumValues);
             if (parsed && typeof parsed.name === 'string' && typeof parsed.version === 'string') {
               metadata = parsed as unknown as ExtensionMetadata;
             }
@@ -325,7 +390,36 @@ export class ExtensionFetcher {
     return objectLiteral;
   }
 
-  private parseObjectLiteral(node: ts.ObjectLiteralExpression): Record<string, unknown> {
+  private collectEnumValues(sourceFile: ts.SourceFile): Record<string, unknown> {
+    const values: Record<string, unknown> = { ...FRAMEWORK_ENUM_VALUES };
+
+    const visitor = (node: ts.Node) => {
+      if (ts.isEnumDeclaration(node) && node.name) {
+        const enumName = node.name.text;
+        let autoValue = 0;
+        for (const member of node.members) {
+          const memberName = ts.isIdentifier(member.name) || ts.isStringLiteral(member.name) ? member.name.text : member.name.getText();
+          const key = `${enumName}.${memberName}`;
+          if (member.initializer) {
+            const parsed = this.parsePropertyValue(member.initializer, values);
+            values[key] = parsed;
+            if (typeof parsed === 'number') {
+              autoValue = parsed + 1;
+            }
+          } else {
+            values[key] = autoValue;
+            autoValue++;
+          }
+        }
+      }
+      ts.forEachChild(node, visitor);
+    };
+
+    visitor(sourceFile);
+    return values;
+  }
+
+  private parseObjectLiteral(node: ts.ObjectLiteralExpression, enumValues: Record<string, unknown>): Record<string, unknown> {
     const result: Record<string, unknown> = {};
 
     for (const property of node.properties) {
@@ -333,7 +427,7 @@ export class ExtensionFetcher {
         const name = ts.isIdentifier(property.name) ? property.name.text : ts.isStringLiteral(property.name) ? property.name.text : null;
 
         if (name) {
-          result[name] = this.parsePropertyValue(property.initializer);
+          result[name] = this.parsePropertyValue(property.initializer, enumValues);
         }
       }
     }
@@ -341,7 +435,7 @@ export class ExtensionFetcher {
     return result;
   }
 
-  private parsePropertyValue(node: ts.Node): unknown {
+  private parsePropertyValue(node: ts.Node, enumValues: Record<string, unknown>): unknown {
     if (ts.isStringLiteral(node)) {
       return node.text;
     } else if (ts.isNumericLiteral(node)) {
@@ -352,10 +446,17 @@ export class ExtensionFetcher {
       return false;
     } else if (node.kind === ts.SyntaxKind.NullKeyword) {
       return null;
+    } else if (ts.isPropertyAccessExpression(node)) {
+      const exprText = ts.isIdentifier(node.expression) ? node.expression.text : node.expression.getText();
+      const key = `${exprText}.${node.name.text}`;
+      if (key in enumValues) {
+        return enumValues[key];
+      }
+      return undefined;
     } else if (ts.isArrayLiteralExpression(node)) {
-      return node.elements.map((elem) => this.parsePropertyValue(elem));
+      return node.elements.map((elem) => this.parsePropertyValue(elem, enumValues));
     } else if (ts.isObjectLiteralExpression(node)) {
-      return this.parseObjectLiteral(node);
+      return this.parseObjectLiteral(node, enumValues);
     }
 
     return undefined;

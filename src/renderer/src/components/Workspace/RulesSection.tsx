@@ -1,13 +1,14 @@
 import { ContextFile } from '@common/types';
-import { Activity, useCallback, useMemo } from 'react';
+import { Activity, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MdOutlinePublic } from 'react-icons/md';
+import { MdOutlinePublic, MdOutlineRefresh } from 'react-icons/md';
 import { RiRobot2Line } from 'react-icons/ri';
 import { VscFileCode } from 'react-icons/vsc';
 import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
 
 import { SectionHeader } from './SectionHeader';
+import { FileViewerModal } from './FileViewerModal';
 
 import { Tooltip } from '@/components/ui/Tooltip';
 import { TriStateCheckbox } from '@/components/common/TriStateCheckbox';
@@ -45,9 +46,12 @@ const getRuleSourceIcon = (source: string, t: (key: string) => string) => {
 
 type Props = {
   rulesFiles: ContextFile[];
+  baseDir: string;
+  taskId: string;
   isOpen: boolean;
   totalStats: { additions: number; deletions: number };
   visitedSections: Set<string>;
+  refreshContextFiles: () => Promise<void>;
   onToggle: () => void;
   editMode?: boolean;
   isHidden?: boolean;
@@ -55,9 +59,24 @@ type Props = {
   showBorderTop?: boolean;
 };
 
-export const RulesSection = ({ rulesFiles, isOpen, totalStats, visitedSections, onToggle, editMode, isHidden, onToggleHidden, showBorderTop }: Props) => {
+export const RulesSection = ({
+  rulesFiles,
+  baseDir,
+  taskId,
+  isOpen,
+  totalStats,
+  visitedSections,
+  refreshContextFiles,
+  onToggle,
+  editMode,
+  isHidden,
+  onToggleHidden,
+  showBorderTop,
+}: Props) => {
   const { t } = useTranslation();
   const { projectSettings, saveProjectSettings } = useProjectSettings();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [previewFilePath, setPreviewFilePath] = useState<string | null>(null);
 
   const disabledRuleFiles = useMemo(() => projectSettings?.disabledRuleFiles ?? [], [projectSettings?.disabledRuleFiles]);
 
@@ -80,6 +99,29 @@ export const RulesSection = ({ rulesFiles, isOpen, totalStats, visitedSections, 
 
   const enabledRuleCount = useMemo(() => rulesFiles.filter((f) => !disabledRuleFiles.includes(f.path)).length, [rulesFiles, disabledRuleFiles]);
 
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshContextFiles();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to refresh rules files:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [refreshContextFiles]);
+
+  const actions = useMemo(
+    () => (
+      <Tooltip content={t('contextFiles.refresh')}>
+        <button className="p-1.5 rounded-md hover:bg-bg-tertiary transition-colors" onClick={handleRefresh} disabled={isRefreshing}>
+          <MdOutlineRefresh className={clsx('w-4 h-4', isRefreshing && 'animate-spin')} />
+        </button>
+      </Tooltip>
+    ),
+    [t, handleRefresh, isRefreshing],
+  );
+
   const hasContent = visitedSections.has('rules') && sortedRulesFiles.length > 0;
 
   return (
@@ -100,6 +142,7 @@ export const RulesSection = ({ rulesFiles, isOpen, totalStats, visitedSections, 
         editMode={editMode}
         isHidden={isHidden}
         onToggleHidden={onToggleHidden}
+        actions={actions}
       />
       <Activity mode={isOpen ? 'visible' : 'hidden'}>
         <motion.div
@@ -116,7 +159,10 @@ export const RulesSection = ({ rulesFiles, isOpen, totalStats, visitedSections, 
                 <div key={file.path} className="flex items-center w-full px-1 h-6 group/item">
                   <div className="flex items-center flex-grow min-w-0 gap-1">
                     <Tooltip content={file.path} delayDuration={1000}>
-                      <span className="select-none text-2xs overflow-hidden whitespace-nowrap overflow-ellipsis text-text-primary cursor-default">
+                      <span
+                        className="select-none text-2xs overflow-hidden whitespace-nowrap overflow-ellipsis text-text-primary cursor-pointer hover:text-text-tertiary"
+                        onClick={() => setPreviewFilePath(file.path)}
+                      >
                         {getFileName(file.path)}
                       </span>
                     </Tooltip>
@@ -133,6 +179,8 @@ export const RulesSection = ({ rulesFiles, isOpen, totalStats, visitedSections, 
           )}
         </motion.div>
       </Activity>
+
+      {previewFilePath && <FileViewerModal filePath={previewFilePath} baseDir={baseDir} taskId={taskId} onClose={() => setPreviewFilePath(null)} />}
     </motion.div>
   );
 };

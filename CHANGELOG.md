@@ -1,6 +1,240 @@
 # Changelog
 
-## [UNRELEASED]
+## [Unreleased]
+
+- correctly loading input history for all the opened projects not just active one
+- renamed worktree rebase button label to better describe the action
+- improved conflict detection during worktree merge and rebase operations
+- preventing auto-scroll pause on touch scroll up
+- preventing duplicate project/task initialization and improve socket connection handling when connecting from browser
+- added missing context files to subagent runs
+
+## [0.77.0]
+
+- skip adding Todo tool messages when streaming the tools
+- inherit agent profile and selected model as defaults when using create task tool
+- optimized default system prompt and init prompt for latest models and to save tokens
+- added loading projects overlay instead of showing Open Project page while loading projects
+- added additional search options to List Tasks tool
+- added option to autostart AiderDesk server on run command
+- correctly calculating cached tokens for Requesty provider models
+- added readonly server mode
+- better auto scrolling control while streaming
+- added gpt-live-transcribe model to the OpenAI voice provider
+- added option to toggle extension UI components in readonly server mode
+- added reloadTasks function to Extension API for reloading tasks from disk
+- added support for saving edited prompts
+- added onTaskDeleted extension hook
+- added --clear flag to uv venv creation
+- added commit progress visibility and cancel action
+- properly using AIDER_DESK_TASKS_DIR constant when loading tasks in project
+
+## [0.76.0]
+
+- added shell initialization to bash tool for loading environment configs
+- added Copy link context menu action to links in messages
+- correctly rendering text on the same line as number in ordered lists in message markdown
+- added resumeTask method to TaskContext for extension API
+- added task-sidebar-item-badges UI component placement for extensions
+- prevent accidental task sidebar resize on click
+- added drag and drop support for tasks and subtasks
+- avoid showing password dialog on start up in some cases
+- added getOpenProjects to Extension Context API
+- correctly showing Updated Files in repos without any commits
+- added action to reload extension in case of error
+- added possibility to edit models coming from extension provider
+- prevent crash from circular references in error logging
+- added support for using custom and extension commands in saved prompts
+- added modelCallSettings property to onAgentStarted event for overriding AI SDK model call parameters
+- correctly handling multiple reasoning message parts
+- falling back to default agent profile when opening new project with agent profile that does not exist
+- clear exited aider process state
+- prevent project tab close button from overlapping scroll arrow
+- correctly resolving base branch on worktree tasks after additional commits on base branch
+
+## [0.75.0]
+
+- migrated agent to AI SDK v7
+- correcly showing full size image attached to user message when clicking on it
+- added support for tool call streaming
+- improved built-in extension creator skill to have better understanding of the capabilities
+- added missing OS and AutonomyMode enums to extension runtime to avoid undefined error
+- added cache hit rate and savings charts to usage dashboard
+- handle errors during the handoff action gracefully and provide feedback to the user
+- cancel action on some loading messages now works properly
+- showing images in the tool message that generate them
+- properly handle image content in the tool outputs
+- improved token threshold calculation to handle zero values correctly
+- added warning when context window is not set for a model
+- setting the task to Interrupted on agent error
+- making the task sidebar resizable
+- allow to collapse parent task in sideber when its subtask is selected
+- added missing working directory into to the bash tool message
+- added refresh button to rules files section in workspace
+- updated working mode switcher to use explicit buttons
+- added support for viewing files from also other Workspace sections
+
+## [0.74.0]
+
+- added diff-based extension reloads and optimized dependency installation
+- updated Gemini voice model to gemini-3.1-flash-live-preview and improved session handling
+- redesigned agent settings UI
+- added customizable system prompt for Agent profiles
+- added subagent filters for Agent profiles
+- applied timeout configuration to proxy agent to prevent premature request timeouts
+- added gpt-realtime-whisper as a new OpenAI voice transcription model and set it as default
+- using task directory as working directory for custom command shell command execution
+- updated Agent selector to support enabled subagents management
+- added agent-creator skill to built-in skills
+- added description parameter to subagents tool for dynamic status messages
+- correctly compacting subagent messages
+- storing agent profile to the task on the first run to preserve the agent profile in case default changes
+- correctly initializing open telementry in local development mode
+- added support for dynamic system prompt placeholders via editor
+- added /subagent command to manually invoke subagent from the prompt field
+- added support for removing group messages (subagent, aider) and Fork from here/Remove up to actions
+- added direct support for ClinePass provider
+- added user ID metadata for PostHog when used as OpenTelemetry tracer
+- added support for compact view mode in group message blocks
+- added Korean translations
+
+## [0.73.0]
+
+- showing correct compact threshold values from agent profile overrides
+- fixed shell PATH extraction when login messages were present in output
+- excluded worktree symlink folders from git tracking and diffs during rebase
+- fixed usage report not attached to tool-only responses, preventing context compaction from triggering
+- using message virtualization to improve rendering performance as default
+- added extra body parameters support for OpenAI-compatible providers
+- added support for ACP (Agent Client Protocol) for the aiderdesk binary app
+- ensure correct /v1 suffix in base URL for Anthropic-compatible providers
+- updated default models for providers to use latest versions
+
+## [0.72.0]
+
+- correctly selecting the input history item
+- improved task memory management in renderer process
+- correctly restoring stashed changes on failures when switching to worktree
+- added support for Solidity, Crystal and Haskel languages in semantic search
+- added some worktree related functions into the Extensions API
+- clarify missing API key warning when using local inference via Aider
+- added proxy support to when downloading dependencies
+- added additional compaction levels to smart compaction to remove verbose bash tools and reasonings
+- added timeout to provider model loading
+- compaction slider can now be properly used on touch devices
+- optimized all files loading on renderer to avoid duplicated entries
+- added specific error message when trying to install extension that requires npm while it is not available
+- correctly showing the Not supported on OS for available extensions
+
+## [0.71.0]
+
+- removed integrated MCP server and added it as separate package @aiderdesk/mcp-server
+- added special UI elements for edited files in assistant message after smart compaction
+- added non-interactive CLI run command to execute prompts on runnning server
+- added Move to top action for task in task sidebar
+- added probe binary verification and automatic download on runner startup
+- truncating long model IDs in Model Library table
+- using shell option for when installing dependencies for extensions to fix issues on Windows
+- updated power grep tool to stream output
+- added images support to onAgentStarted extension event
+- added getElectronApp for some additional app information to extension context
+- removed Gemini CLI provider due to end of support for subscription from Google
+- correctly placing skill messages after the user prompt when used from custom commands
+- added skillsToActivate to onAgentStarted extension event to allow activating skills
+- added noProxy support to network settings
+- replaced floating placement with task, project, and app-level floating placements in UI extensions
+- allowing colons in extension command names
+- added reasoning effort setting to Z.ai Coding Plan provider
+- added reasoning effort setting to NeuralWatt provider
+- added baseCommit validation and state updates on rebase continue
+
+## [0.70.0]
+
+- added generateObject function to extension task context for generating structured objects from LLM responses
+- improved auto-scrolling while the messages are being processed
+- added task-message UI extension placement for rendering custom messages
+- added Restart Aider Connector action next to the starting indicator
+- added support for quoted command arguments in custom commands
+- added option to switch all tasks in a worktree to local mode and enhanced mode switch dialogs
+- deduplicated loaded Mistral models
+- added support for editing any user message not only the last one
+- breaking words for long bash commands to avoid horizontal scrolling
+- added lazy loading for heavy dependencies and optimized rendering performance
+- added error boundary and crash fallback screen
+- added missing /settings/versions endpoint
+- added support for Playwright testing framework and initial test cases for onboarding
+- added support for configuring AIDER_DESK_DIR and AIDER_DESK_HOME_DIR via environment variables
+- updated usage report logic to avoid duplicate attachment
+
+## [0.69.0]
+
+- improved smart compaction for bash tools
+- added additional parameters to createLlm extension function for better custom LLM provider support
+- moved Claude Agent SDK provider from internal implementation to an extension
+- moved Auggie SDK provider from internal implementation to an extension
+- added read-only file indicators and instructions for agent
+- added MiniMax-M3 model to MiniMax provider
+- improved performance of extension UI component rendering
+- correctly increasing smart compaction progressive levels
+- added floating placement support for UI extensions
+- added option to carry over uncommitted changes when switching working modes
+- correctly handling compaction when the first message is skill activation message
+- added coercion for boolean and number inputs in agent tools
+- added support for enabling, disabling, and approving extension tools
+
+## [0.68.0]
+
+- added progressive levels of smart compaction for better context management
+- added toolCallId to onToolCalled and onToolFinished extension hook events
+- rendering the task-message-above and task-message-below UI extension placements in compact display mode
+- added icons to archive/unarchive and delete buttons in task actions panel
+- correctly placing unmaximized app window on startup
+- added support for defining supported OS in the extension and showing an info if the extension is not supported on the current OS
+- added support for using external libraries for extension UI components
+- added support for new UI extension placements ('tasks-sidebar-actions-left', 'tasks-sidebar-actions-right') to be used in Tasks header
+- added activateTask action to extension UI component props
+
+## [0.67.0]
+
+- correctly rendering the context around the match line in grep power tool output
+- deduplicated skills prioritizing extension then project then global skills
+- added run_prompt tasks tool for running a prompt
+- added timestamp property to context messages
+- replaced Auto Approve with Manual, Guided and Auto Autonomy modes
+- properly handling Always approval with tool calls
+- added /subtask command to create and switch to a subtask
+- added file watch mode setting to configure file change detection method
+- properly focusing search input in task sidebar
+- added direct support for Neuralwatt provider
+- added getProviders to extension context to allow fetching the configured providers
+- added truncateToolResult to extension context to allow extensions to use it to truncate the tool results
+- added truncation of non-power tool results on smart compaction
+- replaced sharp native dependency with empty stub to prevent SIGILL on older CPUs
+- added truncation of read file tool results on smart compaction
+- hide redundant task directory path in semantic search tool message
+
+## [0.66.0]
+
+- added limit truncation to fetch tool result
+- added PostHog integration for telemetry
+- add context file properly handles existing files
+- added undo functionality for clearing the messages and compacting
+- updated extension event types to include agentProfile and support blocking reasons
+- added option to manage token usage tracking for OpenAI-compatible providers
+- added sticky file path header to diff file items
+- updated onboarding feature descriptions
+- added support for sending images within user messages in Agent mode
+- improved process termination on POSIX by using process groups
+- updated Requesty provider to use costs from the API response
+- improved handling of missing git configuration and empty repositories
+- integrated ripgrep for grep tool searches
+- correctly using the parent task when subtask agent creates subtask
+- sorting the list_task tool result tasks by descending updated date
+- added missing gap between messages in virtualized message rendering
+- added support for infinite agent iterations
+- correctly installing repo-root extensions
+
+## [0.65.0]
 
 - added onInterrupted extension hook to allow blocking or customizing interrupt behavior
 - added token-based truncation to tool results
@@ -18,6 +252,7 @@
 - added worker pool for diff rendering for better Updated Files diff viewer loading performance
 - correctly getting the model parameters and triggering compaction for custom providers
 - added support for AIDER_DESK_DISABLE_MENU=true to disable Electron app menu
+- fixed scrolling and layout for provider selection in model library
 
 ## [0.64.0]
 

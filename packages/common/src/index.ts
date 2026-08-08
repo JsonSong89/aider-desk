@@ -3,10 +3,14 @@ export * from './api';
 export * from './agent';
 export * from './tools';
 export * from './utils';
+export * from './system-prompt-placeholders';
+
 
 // extensions.ts re-exports some names that collide with types/ (ResponseMessage, TaskContext).
 // Re-export explicitly to resolve ambiguity — types/ versions take precedence.
 export { ContextMemoryMode, InvocationMode, ToolApprovalState, AIDER_DESK_EXTENSIONS_REPO_URL } from './extensions';
+
+export { prependCode, postpendCode, transpileJsxString } from './jsx-transpiler';
 export type {
   AgentStartedEvent,
   AgentStepResult,
@@ -53,6 +57,7 @@ export type {
   ToolDefinition,
   ToolFinishedEvent,
   ToolResult,
+  MessageFilter,
   UIComponent,
   UIComponentDefinition,
   UIComponentPlacement,

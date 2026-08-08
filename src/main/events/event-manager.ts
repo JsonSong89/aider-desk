@@ -11,9 +11,11 @@ import {
   QuestionAnsweredData,
   ResponseChunkData,
   ResponseCompletedData,
+  CommandOutputData,
   TerminalData,
   TerminalExitData,
   ToolData,
+  ToolInputChunkData,
   TokensInfoData,
   UserMessageData,
   MessageRemovedData,
@@ -39,6 +41,7 @@ import {
   CommandsData,
   ExtensionUIRefreshData,
   ModalOverlayUrlData,
+  ContextInfoData,
 } from '@common/types';
 
 import type { WindowManager } from '@/window-manager';
@@ -48,14 +51,21 @@ import logger from '@/logger';
 export interface EventsConnectorConfig {
   eventTypes?: string[];
   baseDirs?: string[];
+  readonly?: boolean;
 }
 
 export interface EventsConnector extends EventsConnectorConfig {
   socket: Socket;
 }
 
+type EventListener = (event: { type: string; data: unknown }) => void;
+
+const EVENT_BUFFER_SIZE = 200;
+
 export class EventManager {
   private eventsConnectors: EventsConnector[] = [];
+  private sseListeners: Map<string, Set<EventListener>> = new Map();
+  private eventBuffer: { type: string; data: unknown }[] = [];
 
   constructor(private readonly windowManager?: WindowManager) {}
 
@@ -75,6 +85,11 @@ export class EventManager {
     };
     this.sendToWindows('clear-task', data);
     this.broadcastToEventConnectors('clear-task', data);
+  }
+
+  sendContextInfoUpdated(data: ContextInfoData): void {
+    this.sendToWindows('context-info-updated', data);
+    this.broadcastToEventConnectors('context-info-updated', data);
   }
 
   // File management events
@@ -179,11 +194,12 @@ export class EventManager {
 
   // Command events
   sendCommandOutput(baseDir: string, taskId: string, command: string, output: string): void {
-    const data = {
+    const data: CommandOutputData = {
       baseDir,
       taskId,
       command,
       output,
+      timestamp: Date.now(),
     };
     this.sendToWindows('command-output', data);
     this.broadcastToEventConnectors('command-output', data);
@@ -205,6 +221,11 @@ export class EventManager {
   sendTool(data: ToolData): void {
     this.sendToWindows('tool', data);
     this.broadcastToEventConnectors('tool', data);
+  }
+
+  sendToolInputChunk(data: ToolInputChunkData): void {
+    this.sendToWindows('tool-input-chunk', data);
+    this.broadcastToEventConnectors('tool-input-chunk', data);
   }
 
   // User message events
@@ -374,11 +395,13 @@ export class EventManager {
     logger.info('Subscribing to events', {
       eventTypes: config.eventTypes,
       baseDirs: config.baseDirs,
+      readonly: config.readonly,
     });
     this.eventsConnectors.push({
       socket,
       eventTypes: config.eventTypes,
       baseDirs: config.baseDirs,
+      readonly: config.readonly,
     });
   }
 
@@ -429,10 +452,13 @@ export class EventManager {
       }
 
       // Filter by base directories if specified
-      const baseDir = (data as { baseDir?: string })?.baseDir;
-      if (connector.baseDirs && baseDir && !connector.baseDirs.includes(baseDir)) {
+      const eventProjectDir =
+        data && typeof data === 'object'
+          ? ((data as { baseDir?: string; projectDir?: string }).baseDir ?? (data as { projectDir?: string }).projectDir)
+          : undefined;
+      if (connector.baseDirs && (!eventProjectDir || !connector.baseDirs.includes(eventProjectDir))) {
         if (log) {
-          logger.debug('Skipping event broadcast to connector, base dir not included:', { baseDir, connectorBaseDirs: connector.baseDirs });
+          logger.debug('Skipping event broadcast to connector, base dir not included:', { baseDir: eventProjectDir, connectorBaseDirs: connector.baseDirs });
         }
         return;
       }
@@ -441,7 +467,7 @@ export class EventManager {
         if (log) {
           logger.debug('Broadcasting event to connector:', {
             eventType,
-            baseDir,
+            baseDir: eventProjectDir,
           });
         }
         connector.socket.emit('event', { type: eventType, data });
@@ -450,6 +476,24 @@ export class EventManager {
         this.unsubscribe(connector.socket, log);
       }
     });
+
+    // Notify SSE listeners
+    const event = { type: eventType, data };
+    for (const listeners of this.sseListeners.values()) {
+      for (const listener of listeners) {
+        try {
+          listener(event);
+        } catch {
+          // ignore broken listeners
+        }
+      }
+    }
+
+    // Buffer events for late-arriving SSE subscribers
+    this.eventBuffer.push(event);
+    if (this.eventBuffer.length > EVENT_BUFFER_SIZE) {
+      this.eventBuffer.shift();
+    }
   }
 
   // Extension UI events
@@ -471,5 +515,31 @@ export class EventManager {
     const data = { baseDir, taskId, status };
     this.sendToWindows('aider-connector-status', data);
     this.broadcastToEventConnectors('aider-connector-status', data);
+  }
+
+  // SSE event subscription for CLI streaming
+  subscribeSSE(listenerId: string, listener: EventListener, replayBuffer = false): void {
+    if (!this.sseListeners.has(listenerId)) {
+      this.sseListeners.set(listenerId, new Set());
+    }
+    this.sseListeners.get(listenerId)!.add(listener);
+
+    // Replay buffered events to late-arriving subscribers
+    if (replayBuffer) {
+      for (const event of this.eventBuffer) {
+        try {
+          listener(event);
+        } catch {
+          // ignore broken listeners
+        }
+      }
+    }
+  }
+
+  unsubscribeSSE(listenerId: string, listener: EventListener): void {
+    this.sseListeners.get(listenerId)?.delete(listener);
+    if (this.sseListeners.get(listenerId)?.size === 0) {
+      this.sseListeners.delete(listenerId);
+    }
   }
 }

@@ -35,6 +35,11 @@ const ClearContextSchema = z.object({
   taskId: z.string().min(1, 'Task id is required'),
 });
 
+const UndoContextChangeSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+});
+
 const AnswerQuestionSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
   taskId: z.string().min(1, 'Task id is required'),
@@ -130,6 +135,7 @@ const RedoUserPromptSchema = z.object({
   messageId: z.string().min(1, 'Message id is required'),
   mode: z.string().min(1, 'Mode is required'),
   updatedPrompt: z.string().optional(),
+  updatedImages: z.array(z.string()).optional(),
 });
 
 const ResumeTaskSchema = z.object({
@@ -185,6 +191,7 @@ const CreateNewTaskSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
   parentId: z.string().nullable().optional(),
   name: z.string().optional(),
+  activate: z.boolean().optional(),
 });
 
 const UpdateTaskSchema = z.object({
@@ -292,10 +299,24 @@ const MergeWorktreeToMainSchema = z.object({
   commitMessage: z.string().optional(),
 });
 
-const MergeAndSwitchToLocalSchema = z.object({
+const SwitchToLocalWorkingModeSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
   taskId: z.string().min(1, 'Task id is required'),
+  mergeBeforeSwitch: z.boolean().optional(),
   targetBranch: z.string().optional(),
+  switchAllInWorktree: z.boolean().optional(),
+});
+
+const SwitchToWorktreeWorkingModeSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  carryOverUncommittedChanges: z.boolean().optional(),
+  dropSourceChanges: z.boolean().optional(),
+});
+
+const LocalUncommittedFilesSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
 });
 
 const ApplyUncommittedChangesSchema = z.object({
@@ -334,6 +355,11 @@ const CommitChangesSchema = z
     amend: z.boolean(),
   })
   .refine((data) => data.amend || data.message.trim().length > 0, { message: 'Commit message is required', path: ['message'] });
+
+const CancelCommitChangesSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+});
 
 const ListBranchesSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
@@ -411,8 +437,8 @@ export class ProjectApi extends BaseApi {
           return;
         }
 
-        const { projectDir, taskId, messageId, mode, updatedPrompt } = parsed;
-        await this.eventsHandler.redoUserPrompt(projectDir, taskId, messageId, mode, updatedPrompt);
+        const { projectDir, taskId, messageId, mode, updatedPrompt, updatedImages } = parsed;
+        await this.eventsHandler.redoUserPrompt(projectDir, taskId, messageId, mode, updatedPrompt, updatedImages);
         res.status(200).json({ message: 'Redo user prompt initiated' });
       }),
     );
@@ -553,8 +579,8 @@ export class ProjectApi extends BaseApi {
           return;
         }
 
-        const { projectDir, parentId, name } = parsed;
-        const params: CreateTaskParams = { parentId, name };
+        const { projectDir, parentId, name, activate } = parsed;
+        const params: CreateTaskParams = { parentId, name, activate };
         const task = await this.eventsHandler.createNewTask(projectDir, params);
         res.status(200).json(task);
       }),
@@ -601,6 +627,21 @@ export class ProjectApi extends BaseApi {
 
         const { projectDir } = parsed;
         const tasks = await this.eventsHandler.getTasks(projectDir);
+        res.status(200).json(tasks);
+      }),
+    );
+
+    // Reload tasks from disk
+    router.post(
+      '/project/tasks/reload',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(ListTasksSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir } = parsed;
+        const tasks = await this.eventsHandler.reloadTasks(projectDir);
         res.status(200).json(tasks);
       }),
     );
@@ -662,6 +703,20 @@ export class ProjectApi extends BaseApi {
         const { projectDir, taskId } = parsed;
         await this.eventsHandler.resetTask(projectDir, taskId);
         res.status(200).json({ message: 'Task reset' });
+      }),
+    );
+
+    router.post(
+      '/project/tasks/restart-aider-connector',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(ResetTaskSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId } = parsed;
+        await this.eventsHandler.restartAiderConnector(projectDir, taskId);
+        res.status(200).json({ message: 'Aider connector restarted' });
       }),
     );
 
@@ -783,6 +838,21 @@ export class ProjectApi extends BaseApi {
       }),
     );
 
+    // Undo context change
+    router.post(
+      '/project/undo-context-change',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(UndoContextChangeSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId } = parsed;
+        const undone = await this.eventsHandler.undoContextChange(projectDir, taskId);
+        res.status(200).json({ undone });
+      }),
+    );
+
     // Handoff conversation
     router.post(
       '/project/handoff-conversation',
@@ -843,18 +913,48 @@ export class ProjectApi extends BaseApi {
       }),
     );
 
-    // Merge and switch to local
+    // Switch to local working mode
     router.post(
-      '/project/worktree/merge-and-switch-to-local',
+      '/project/switch-to-local-working-mode',
       this.handleRequest(async (req, res) => {
-        const parsed = this.validateRequest(MergeAndSwitchToLocalSchema, req.body, res);
+        const parsed = this.validateRequest(SwitchToLocalWorkingModeSchema, req.body, res);
         if (!parsed) {
           return;
         }
 
-        const { projectDir, taskId, targetBranch } = parsed;
-        await this.eventsHandler.mergeAndSwitchToLocal(projectDir, taskId, targetBranch);
-        res.status(200).json({ message: 'Worktree merged and switched to local' });
+        const { projectDir, taskId, mergeBeforeSwitch, targetBranch, switchAllInWorktree } = parsed;
+        await this.eventsHandler.switchToLocalWorkingMode(projectDir, taskId, { mergeBeforeSwitch, targetBranch, switchAllInWorktree });
+        res.status(200).json({ message: 'Switched to local working mode' });
+      }),
+    );
+
+    // Switch to worktree working mode
+    router.post(
+      '/project/switch-to-worktree-working-mode',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(SwitchToWorktreeWorkingModeSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, carryOverUncommittedChanges, dropSourceChanges } = parsed;
+        await this.eventsHandler.switchToWorktreeWorkingMode(projectDir, taskId, { carryOverUncommittedChanges, dropSourceChanges });
+        res.status(200).json({ message: 'Switched to worktree working mode' });
+      }),
+    );
+
+    // Get local uncommitted files
+    router.get(
+      '/project/local-uncommitted-files',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(LocalUncommittedFilesSchema, req.query, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId } = parsed;
+        const result = await this.eventsHandler.getLocalUncommittedFiles(projectDir, taskId);
+        res.status(200).json(result);
       }),
     );
 
@@ -945,6 +1045,21 @@ export class ProjectApi extends BaseApi {
         const { projectDir, taskId, message, amend } = parsed;
         await this.eventsHandler.commitChanges(projectDir, taskId, message, amend);
         res.status(200).json({ message: 'Changes committed' });
+      }),
+    );
+
+    // Cancel commit changes
+    router.post(
+      '/project/worktree/cancel-commit-changes',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(CancelCommitChangesSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId } = parsed;
+        this.eventsHandler.cancelCommitChanges(projectDir, taskId);
+        res.status(200).json({ message: 'Commit cancellation requested' });
       }),
     );
 

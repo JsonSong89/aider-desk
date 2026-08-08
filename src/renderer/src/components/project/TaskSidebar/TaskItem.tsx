@@ -1,9 +1,10 @@
 import { TaskData, DefaultTaskState } from '@common/types';
 import { useTranslation } from 'react-i18next';
-import { MouseEvent, memo, useState } from 'react';
+import { MouseEvent, DragEvent, memo, useRef, useState } from 'react';
 import { HiPlus, HiCheck, HiSparkles } from 'react-icons/hi';
 import { IoGitBranch } from 'react-icons/io5';
 import { MdPushPin, MdChevronRight } from 'react-icons/md';
+import { RiFolderAddLine } from 'react-icons/ri';
 import { clsx } from 'clsx';
 import { useLongPress } from '@reactuses/core';
 import { BiArchiveIn } from 'react-icons/bi';
@@ -15,11 +16,13 @@ import { InlineEditPanel } from '@/components/common/InlineEditPanel';
 import { Button } from '@/components/common/Button';
 import { LoadingText } from '@/components/common/LoadingText';
 import { TaskStateChip } from '@/components/common/TaskStateChip';
+import { ExtensionComponentWrapper } from '@/components/extensions/ExtensionComponentWrapper';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 type Props = {
   task: TaskData;
   tasks: TaskData[];
+  readonly?: boolean;
   level: number;
   selectedTasks: Set<string>;
   deleteConfirmTaskId: string | null;
@@ -37,6 +40,7 @@ type Props = {
   onUnarchiveTask: (taskId: string) => Promise<void>;
   onTogglePin: (taskId: string) => Promise<void>;
   onChangeState: (taskId: string, newState: string) => Promise<void>;
+  onMoveToTop?: (taskId: string) => Promise<void>;
   onCopyAsMarkdown?: (taskId: string) => void;
   onExportToMarkdown?: (taskId: string) => void;
   onExportToImage?: (taskId: string) => void;
@@ -46,12 +50,108 @@ type Props = {
   isExpanded: boolean;
   onToggleExpand: (taskId: string) => void;
   hasChildren: boolean;
+  draggedTaskIds: Set<string>;
+  dragOverTaskId: string | null;
+  onDragStart: (taskId: string) => void;
+  onDragEnd: () => void;
+  onDropOnTask: (targetId: string) => void;
+  setDragOverTaskId: (taskId: string | null) => void;
+};
+
+const arePropsEqual = (prevProps: Props, nextProps: Props): boolean => {
+  const { task: prevTask } = prevProps;
+  const { task: nextTask } = nextProps;
+
+  // Compare task object - only properties used in rendering
+  if (
+    prevTask.name !== nextTask.name ||
+    prevTask.id !== nextTask.id ||
+    prevTask.parentId !== nextTask.parentId ||
+    prevTask.archived !== nextTask.archived ||
+    prevTask.state !== nextTask.state ||
+    prevTask.pinned !== nextTask.pinned ||
+    prevTask.workingMode !== nextTask.workingMode ||
+    prevTask.createdAt !== nextTask.createdAt
+  ) {
+    return false;
+  }
+
+  // Compare tasks array reference (used for subtasks computation)
+  if (prevProps.tasks !== nextProps.tasks) {
+    return false;
+  }
+
+  // Compare primitive props
+  if (
+    prevProps.readonly !== nextProps.readonly ||
+    prevProps.level !== nextProps.level ||
+    prevProps.isMultiselectMode !== nextProps.isMultiselectMode ||
+    prevProps.activeTaskId !== nextProps.activeTaskId ||
+    prevProps.isExpanded !== nextProps.isExpanded ||
+    prevProps.hasChildren !== nextProps.hasChildren
+  ) {
+    return false;
+  }
+
+  // Compare task-id-specific props - only re-render if our task is affected
+  if ((prevProps.deleteConfirmTaskId === prevTask.id) !== (nextProps.deleteConfirmTaskId === nextTask.id)) {
+    return false;
+  }
+
+  if ((prevProps.editingTaskId === prevTask.id) !== (nextProps.editingTaskId === nextTask.id)) {
+    return false;
+  }
+
+  // Compare selectedTasks - only care about our task's membership
+  if (prevProps.selectedTasks.has(prevTask.id) !== nextProps.selectedTasks.has(nextTask.id)) {
+    return false;
+  }
+
+  // Compare function props by reference
+  if (
+    prevProps.setIsMultiselectMode !== nextProps.setIsMultiselectMode ||
+    prevProps.onTaskClick !== nextProps.onTaskClick ||
+    prevProps.createNewTask !== nextProps.createNewTask ||
+    prevProps.onEditClick !== nextProps.onEditClick ||
+    prevProps.onEditConfirm !== nextProps.onEditConfirm ||
+    prevProps.onEditCancel !== nextProps.onEditCancel ||
+    prevProps.onDeleteClick !== nextProps.onDeleteClick ||
+    prevProps.onArchiveTask !== nextProps.onArchiveTask ||
+    prevProps.onUnarchiveTask !== nextProps.onUnarchiveTask ||
+    prevProps.onTogglePin !== nextProps.onTogglePin ||
+    prevProps.onChangeState !== nextProps.onChangeState ||
+    prevProps.onMoveToTop !== nextProps.onMoveToTop ||
+    prevProps.onCopyAsMarkdown !== nextProps.onCopyAsMarkdown ||
+    prevProps.onExportToMarkdown !== nextProps.onExportToMarkdown ||
+    prevProps.onExportToImage !== nextProps.onExportToImage ||
+    prevProps.onDuplicateTask !== nextProps.onDuplicateTask ||
+    prevProps.handleConfirmDelete !== nextProps.handleConfirmDelete ||
+    prevProps.handleCancelDelete !== nextProps.handleCancelDelete ||
+    prevProps.onToggleExpand !== nextProps.onToggleExpand ||
+    prevProps.onDragStart !== nextProps.onDragStart ||
+    prevProps.onDragEnd !== nextProps.onDragEnd ||
+    prevProps.onDropOnTask !== nextProps.onDropOnTask ||
+    prevProps.setDragOverTaskId !== nextProps.setDragOverTaskId
+  ) {
+    return false;
+  }
+
+  if (prevProps.dragOverTaskId !== nextProps.dragOverTaskId) {
+    return false;
+  }
+
+  if (prevProps.draggedTaskIds !== nextProps.draggedTaskIds) {
+    return false;
+  }
+
+  return true;
 };
 
 export const TaskItem = memo(
   ({
     task,
     tasks,
+    readonly = false,
     level,
     selectedTasks,
     deleteConfirmTaskId,
@@ -69,6 +169,7 @@ export const TaskItem = memo(
     onUnarchiveTask,
     onTogglePin,
     onChangeState,
+    onMoveToTop,
     onCopyAsMarkdown,
     onExportToMarkdown,
     onExportToImage,
@@ -78,6 +179,12 @@ export const TaskItem = memo(
     isExpanded,
     onToggleExpand,
     hasChildren,
+    draggedTaskIds,
+    dragOverTaskId,
+    onDragStart,
+    onDragEnd,
+    onDropOnTask,
+    setDragOverTaskId,
   }: Props) => {
     const { t } = useTranslation();
     const [editTaskName, setEditTaskName] = useState(task.name);
@@ -88,8 +195,13 @@ export const TaskItem = memo(
     const taskName = task.name || t('taskSidebar.untitled');
     const showNameTooltip = !!task.name && task.name.length > 30;
 
+    const isDraggingRef = useRef(false);
+
     const longPressProps = useLongPress(
       () => {
+        if (readonly || isDraggingRef.current) {
+          return;
+        }
         setIsMultiselectMode(true);
       },
       {
@@ -115,13 +227,62 @@ export const TaskItem = memo(
       onEditClick(task.id);
     };
 
+    const isDragged = draggedTaskIds.has(task.id);
+    const isDropTarget = dragOverTaskId === task.id && !isDragged && level === 0;
+    const isRootLevel = level === 0;
+
+    const handleDragStart = (e: DragEvent<HTMLDivElement>) => {
+      isDraggingRef.current = true;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', task.id);
+      onDragStart(task.id);
+    };
+
+    const handleDragEnd = () => {
+      isDraggingRef.current = false;
+      onDragEnd();
+    };
+
+    const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+      if (!isRootLevel || isDragged || draggedTaskIds.size === 0) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+      setDragOverTaskId(task.id);
+    };
+
+    const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      if (dragOverTaskId === task.id) {
+        setDragOverTaskId(null);
+      }
+    };
+
+    const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+      if (!isRootLevel || isDragged || draggedTaskIds.size === 0) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      onDropOnTask(task.id);
+    };
+
     return (
       <div className="relative">
         <div
           {...longPressProps}
+          draggable={!readonly && !isEditing && deleteConfirmTaskId !== task.id}
+          onDragStart={readonly ? undefined : handleDragStart}
+          onDragEnd={readonly ? undefined : handleDragEnd}
+          onDragOver={readonly ? undefined : handleDragOver}
+          onDragLeave={readonly ? undefined : handleDragLeave}
+          onDrop={readonly ? undefined : handleDrop}
           className={clsx(
             'group relative flex items-center justify-between py-1 pl-2 px-1 cursor-pointer transition-colors border select-none',
             isSubtask && 'ml-2',
+            isDragged && 'opacity-40',
             activeTaskId === task.id && !isMultiselectMode
               ? 'bg-bg-secondary border-border-dark-light'
               : selectedTasks.has(task.id) && isMultiselectMode
@@ -188,6 +349,13 @@ export const TaskItem = memo(
                   </div>
                 )}
                 <TaskStateChip state={task.state || DefaultTaskState.Todo} className={hasChildren && !isSubtask ? '' : '-ml-0.5'} />
+                <ExtensionComponentWrapper
+                  placement="task-sidebar-item-badges"
+                  renderNullOnEmpty
+                  taskId={task.id}
+                  actionTaskId={task.id}
+                  additionalProps={{ task }}
+                />
                 {task.workingMode === 'worktree' && (
                   <span className="px-1 py-0.5 rounded border border-border-dark-light bg-bg-tertiary-emphasis text-text-tertiary">
                     <IoGitBranch className="w-3 h-3" />
@@ -208,7 +376,7 @@ export const TaskItem = memo(
 
           {!isMultiselectMode && (
             <div className="flex items-center">
-              {level === 0 && (
+              {!readonly && level === 0 && (
                 <Tooltip content={t('taskSidebar.createSubtask')}>
                   <button
                     data-testid={`create-subtask-${task.id}`}
@@ -219,23 +387,33 @@ export const TaskItem = memo(
                   </button>
                 </Tooltip>
               )}
-              <TaskMenuButton
-                task={task}
-                onEdit={handleOnEdit}
-                onDelete={task.createdAt ? () => onDeleteClick(task.id) : undefined}
-                onCopyAsMarkdown={onCopyAsMarkdown && task.createdAt ? () => onCopyAsMarkdown(task.id) : undefined}
-                onExportToMarkdown={onExportToMarkdown && task.createdAt ? () => onExportToMarkdown(task.id) : undefined}
-                onExportToImage={onExportToImage && task.createdAt ? () => onExportToImage(task.id) : undefined}
-                onDuplicateTask={onDuplicateTask && task.createdAt ? () => onDuplicateTask(task.id) : undefined}
-                onArchiveTask={task.archived || !task.createdAt ? undefined : () => onArchiveTask(task.id)}
-                onUnarchiveTask={task.archived ? () => onUnarchiveTask(task.id) : undefined}
-                onTogglePin={() => onTogglePin(task.id)}
-                onChangeState={(newState) => onChangeState(task.id, newState)}
-                isPinned={task.pinned || false}
-              />
+              {!readonly && (
+                <TaskMenuButton
+                  task={task}
+                  onEdit={handleOnEdit}
+                  onDelete={task.createdAt ? () => onDeleteClick(task.id) : undefined}
+                  onCopyAsMarkdown={onCopyAsMarkdown && task.createdAt ? () => onCopyAsMarkdown(task.id) : undefined}
+                  onExportToMarkdown={onExportToMarkdown && task.createdAt ? () => onExportToMarkdown(task.id) : undefined}
+                  onExportToImage={onExportToImage && task.createdAt ? () => onExportToImage(task.id) : undefined}
+                  onDuplicateTask={onDuplicateTask && task.createdAt ? () => onDuplicateTask(task.id) : undefined}
+                  onArchiveTask={task.archived || !task.createdAt ? undefined : () => onArchiveTask(task.id)}
+                  onUnarchiveTask={task.archived ? () => onUnarchiveTask(task.id) : undefined}
+                  onTogglePin={() => onTogglePin(task.id)}
+                  onChangeState={(newState) => onChangeState(task.id, newState)}
+                  onMoveToTop={onMoveToTop && task.createdAt ? () => onMoveToTop(task.id) : undefined}
+                  isPinned={task.pinned || false}
+                />
+              )}
             </div>
           )}
         </div>
+
+        {isDropTarget && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center gap-1.5 rounded border-2 bg-black/20 text-2xs font-medium text-accent-primary pointer-events-none">
+            <RiFolderAddLine className="w-3.5 h-3.5" />
+            <span>{t('taskSidebar.dropToSubtask')}</span>
+          </div>
+        )}
 
         {isEditing && (
           <InlineEditPanel
@@ -265,6 +443,7 @@ export const TaskItem = memo(
       </div>
     );
   },
+  arePropsEqual,
 );
 
 TaskItem.displayName = 'TaskItem';

@@ -4,6 +4,7 @@ import { BsCodeSlash, BsFilter, BsLayoutSidebar } from 'react-icons/bs';
 import { CgTerminal } from 'react-icons/cg';
 import { GoProjectRoadmap } from 'react-icons/go';
 import { IoMdClose } from 'react-icons/io';
+import { MdOutlineRefresh } from 'react-icons/md';
 import { VscLock, VscUnlock } from 'react-icons/vsc';
 import { RiMenuUnfold4Line, RiRobot2Line } from 'react-icons/ri';
 import { useTranslation } from 'react-i18next';
@@ -17,7 +18,7 @@ import { showErrorNotification } from '@/utils/notifications';
 import { EditFormatSelector } from '@/components/PromptField/EditFormatSelector';
 import { TaskWorkingMode } from '@/components/PromptField/TaskWorkingMode';
 import { Tooltip } from '@/components/ui/Tooltip';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSaveSettings, useSettingsStore } from '@/stores/settingsStore';
 import { useApi } from '@/contexts/ApiContext';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useModelProviders } from '@/contexts/ModelProviderContext';
@@ -40,20 +41,38 @@ type Props = {
   onToggleSidebar: () => void;
   onToggleTaskSidebar?: () => void;
   updateTask: (taskId: string, updates: Partial<TaskData>, useOptimistic?: boolean) => void;
+  onRestartAiderConnector: () => void;
 };
 
 export const TaskBar = React.forwardRef<TaskBarRef, Props>(
-  ({ baseDir, task, modelsData, mode, activeAgentProfile, onModelsChange, runCommand, onToggleSidebar, onToggleTaskSidebar, updateTask }, ref) => {
+  (
+    {
+      baseDir,
+      task,
+      modelsData,
+      mode,
+      activeAgentProfile,
+      onModelsChange,
+      runCommand,
+      onToggleSidebar,
+      onToggleTaskSidebar,
+      updateTask,
+      onRestartAiderConnector,
+    },
+    ref,
+  ) => {
     const { t } = useTranslation();
-    const { settings, saveSettings } = useSettings();
+    const preferredModels = useSettingsStore((state) => state.settings?.preferredModels) ?? [];
     const { models, providers } = useModelProviders();
     const api = useApi();
+    const saveSettings = useSaveSettings();
     const { isMobile } = useResponsive();
     const [isMerging, setIsMerging] = useState(false);
     const aiderConnectorStatus = useAiderConnectorStatus(baseDir, task.id);
 
     const updatePreferredModels = useCallback(
       (model: string) => {
+        const settings = useSettingsStore.getState().settings;
         if (!settings) {
           return;
         }
@@ -63,7 +82,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
         };
         void saveSettings(updatedSettings);
       },
-      [saveSettings, settings],
+      [saveSettings],
     );
 
     const aiderModels = useMemo(() => {
@@ -265,16 +284,20 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
       [api, baseDir, task.id, modelsData, onModelsChange, updatePreferredModels],
     );
 
-    const handleRemovePreferredModel = (model: string) => {
-      if (!settings) {
-        return;
-      }
-      const updatedSettings = {
-        ...settings,
-        preferredModels: settings.preferredModels.filter((preferred) => preferred !== model),
-      };
-      void saveSettings(updatedSettings);
-    };
+    const handleRemovePreferredModel = useCallback(
+      (model: string) => {
+        const settings = useSettingsStore.getState().settings;
+        if (!settings) {
+          return;
+        }
+        const updatedSettings = {
+          ...settings,
+          preferredModels: settings.preferredModels.filter((preferred) => preferred !== model),
+        };
+        void saveSettings(updatedSettings);
+      },
+      [saveSettings],
+    );
 
     const handleMerge = useCallback(
       async (squash: boolean, targetBranch?: string, commitMessage?: string) => {
@@ -400,6 +423,10 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
       [api, baseDir, task.id],
     );
 
+    const handleMergeNormal = useCallback((targetBranch?: string) => handleMerge(false, targetBranch), [handleMerge]);
+
+    const handleMergeSquash = useCallback((targetBranch?: string, commitMessage?: string) => handleMerge(true, targetBranch, commitMessage), [handleMerge]);
+
     const isTwoRowLayout = !AIDER_MODES.includes(mode) && showAiderInfo;
 
     /** Format the Python installation status for display in the TaskBar. */
@@ -446,11 +473,21 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
             <div className="flex items-center space-x-2 flex-shrink-0 text-2xs text-text-secondary animate-pulse">
               <CgTerminal className="w-3.5 h-3.5" />
               <span>{aiderConnectorMessage}</span>
+              <Tooltip content={t('aiderConnector.restart')}>
+                <button onClick={onRestartAiderConnector} className="p-0.5 hover:bg-bg-tertiary rounded-md">
+                  <MdOutlineRefresh className="w-3.5 h-3.5" />
+                </button>
+              </Tooltip>
             </div>
           ) : aiderConnectorStatus.state === 'failed' ? (
             <div className="flex items-center space-x-2 flex-shrink-0 text-xs text-text-error">
               <CgTerminal className="w-3.5 h-3.5" />
               <span>{aiderConnectorMessage}</span>
+              <Tooltip content={t('aiderConnector.restart')}>
+                <button onClick={onRestartAiderConnector} className="p-0.5 hover:bg-bg-tertiary rounded-md">
+                  <MdOutlineRefresh className="w-3.5 h-3.5" />
+                </button>
+              </Tooltip>
             </div>
           ) : (
             <>
@@ -463,7 +500,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
                   models={aiderModels}
                   selectedModelId={modelsData?.mainModel}
                   onChange={updateMainModel}
-                  preferredModelIds={settings?.preferredModels || []}
+                  preferredModelIds={preferredModels}
                   removePreferredModel={handleRemovePreferredModel}
                   providers={providers}
                 />
@@ -477,7 +514,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
                   models={aiderModels}
                   selectedModelId={modelsData?.weakModel || modelsData?.mainModel}
                   onChange={updateWeakModel}
-                  preferredModelIds={settings?.preferredModels || []}
+                  preferredModelIds={preferredModels}
                   removePreferredModel={handleRemovePreferredModel}
                   providers={providers}
                 />
@@ -551,7 +588,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
                         models={taskModels}
                         selectedModelId={currentTaskModelId}
                         onChange={handleTaskModelChange}
-                        preferredModelIds={settings?.preferredModels || []}
+                        preferredModelIds={preferredModels}
                         removePreferredModel={handleRemovePreferredModel}
                         providers={providers}
                       />
@@ -561,7 +598,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
 
                 {/* Row 2: AIDER */}
                 {renderAiderInfo(true)}
-                <ExtensionComponentWrapper placement="task-top-bar-left" />
+                <ExtensionComponentWrapper placement="task-top-bar-left" className="gap-3" />
               </div>
             ) : (
               // Original horizontal layout for other modes
@@ -580,7 +617,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
                           models={taskModels}
                           selectedModelId={currentTaskModelId}
                           onChange={handleTaskModelChange}
-                          preferredModelIds={settings?.preferredModels || []}
+                          preferredModelIds={preferredModels}
                           removePreferredModel={handleRemovePreferredModel}
                           providers={providers}
                         />
@@ -601,7 +638,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
                             models={aiderModels}
                             selectedModelId={modelsData?.architectModel || modelsData?.mainModel}
                             onChange={updateArchitectModel}
-                            preferredModelIds={settings?.preferredModels || []}
+                            preferredModelIds={preferredModels}
                             removePreferredModel={handleRemovePreferredModel}
                             providers={providers}
                           />
@@ -612,7 +649,7 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
                   </>
                 )}
                 {showAiderInfo && renderAiderInfo()}
-                <ExtensionComponentWrapper placement="task-top-bar-left" />
+                <ExtensionComponentWrapper placement="task-top-bar-left" className="gap-3" />
               </div>
             )}
           </div>
@@ -620,8 +657,8 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
             <ExtensionComponentWrapper placement="task-top-bar-right" />
             <TaskWorkingMode
               task={task}
-              onMerge={(branch) => handleMerge(false, branch)}
-              onSquash={(branch, commitMessage) => handleMerge(true, branch, commitMessage)}
+              onMerge={handleMergeNormal}
+              onSquash={handleMergeSquash}
               onOnlyUncommitted={handleOnlyUncommitted}
               onRebaseFromBranch={handleRebaseFromBranch}
               onAbortRebase={handleAbortRebase}
@@ -646,4 +683,4 @@ export const TaskBar = React.forwardRef<TaskBarRef, Props>(
   },
 );
 
-TaskBar.displayName = 'ProjectTopBar';
+TaskBar.displayName = 'TaskBar';

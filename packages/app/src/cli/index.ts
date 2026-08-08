@@ -6,6 +6,8 @@ import { Command } from 'commander';
 import { pkgRoot, DEFAULT_PORT } from './constants';
 import { registerStartCommand } from './commands/start';
 import { registerTuiCommand } from './commands/tui';
+import { registerRunCommand } from './commands/run';
+import { registerAcpCommand } from './commands/acp';
 
 function getVersion(): string {
   try {
@@ -26,5 +28,7 @@ program
 
 registerStartCommand(program);
 registerTuiCommand(program);
+registerRunCommand(program);
+registerAcpCommand(program);
 
 program.parse();

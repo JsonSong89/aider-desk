@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { RiCheckboxCircleFill, RiCloseCircleFill, RiErrorWarningFill } from 'react-icons/ri';
 import { CgSpinner } from 'react-icons/cg';
 import { MdAssignmentAdd } from 'react-icons/md';
-import { ToolMessage } from '@common/types';
+import { AutonomyMode, ToolMessage } from '@common/types';
 
 import { CodeInline } from '@/components/common/CodeInline';
 import { ExpandableMessageBlock } from '@/components/message/ExpandableMessageBlock';
@@ -20,13 +20,13 @@ type Props = {
 export const CreateTaskToolMessage = ({ message, onRemove, compact = false, onFork, onRemoveUpTo, hideMessageBar }: Props) => {
   const { t } = useTranslation();
 
-  const prompt = message.args.prompt as string;
-  const agentProfileId = message.args.agentProfileId as string;
+  const prompt = (message.args.prompt as string) || '';
+  const agentProfileId = (message.args.agentProfileId as string) || '';
   const name = message.args.name as string | undefined;
   const parentTaskId = message.args.parentTaskId as string | null | undefined;
-  const modelId = message.args.modelId as string;
+  const modelId = (message.args.modelId as string) || '';
   const mode = message.args.mode as string | undefined;
-  const autoApprove = message.args.autoApprove as boolean | undefined;
+  const autonomyMode = message.args.autonomyMode as AutonomyMode | undefined;
   const worktree = message.args.worktree as boolean | undefined;
   const executeAndWait = message.args.executeAndWait as boolean | undefined;
   const executeInBackground = message.args.executeInBackground as boolean | undefined;
@@ -126,10 +126,9 @@ export const CreateTaskToolMessage = ({ message, onRemove, compact = false, onFo
                   <span className="text-text-muted">{t('toolMessage.tasks.mode')}:</span> {mode}
                 </div>
               )}
-              {autoApprove && (
+              {autonomyMode && (
                 <div className="text-3xs">
-                  <span className="text-text-muted">{t('toolMessage.tasks.autoApprove')}:</span>{' '}
-                  {autoApprove ? t('toolMessage.tasks.yes') : t('toolMessage.tasks.no')}
+                  <span className="text-text-muted">{t('toolMessage.tasks.autonomyMode')}:</span> {autonomyMode.charAt(0).toUpperCase() + autonomyMode.slice(1)}
                 </div>
               )}
               {worktree && (

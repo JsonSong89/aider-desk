@@ -11,6 +11,7 @@ import { DEFAULT_AIDER_MAIN_MODEL } from '@common/agent';
 
 import { AIDER_DESK_CONNECTOR_DIR, AIDER_DESK_PROJECT_RULES_DIR, AIDER_DESK_TASKS_DIR, PID_FILES_DIR, PYTHON_COMMAND, SERVER_PORT } from '@/constants';
 import { Connector } from '@/connector';
+import { CONNECTOR_TOKEN } from '@/connector/connector-auth';
 import logger from '@/logger';
 import { Store } from '@/store';
 import { ModelManager } from '@/models';
@@ -25,6 +26,8 @@ export class AiderManager {
   private aiderStarting: boolean = false;
   private aiderStartPromise: Promise<void> | null = null;
   private aiderStartResolve: (() => void) | null = null;
+  private aiderStartReject: ((reason?: unknown) => void) | null = null;
+  private aiderStartError: Error | null = null;
   private aiderModelsData: ModelsData | null = null;
   private currentCommand: string | null = null;
   private commandOutputs: Map<string, string> = new Map();
@@ -50,6 +53,7 @@ export class AiderManager {
     await this.checkAndCleanupPidFile();
 
     // Set aiderStarting to true when starting aider
+    this.aiderStartError = null;
     this.aiderStarting = true;
     this.eventManager.sendAiderConnectorStatus({ state: 'starting-connector' }, this.task.getProjectDir(), this.task.taskId);
 
@@ -169,6 +173,7 @@ export class AiderManager {
       TASK_ID: this.task.task.id,
       TASK_DIR: this.task.getTaskDir(),
       CONNECTOR_SERVER_URL: `http://localhost:${SERVER_PORT}`,
+      AIDER_DESK_CONNECTOR_TOKEN: CONNECTOR_TOKEN,
       CONNECTOR_CONFIRM_BEFORE_EDIT: settings.aider.confirmBeforeEdit ? '1' : '0',
     };
 
@@ -214,13 +219,8 @@ export class AiderManager {
       });
     });
 
-    this.aiderProcess.on('close', (code) => {
-      logger.info('Aider process exited:', {
-        baseDir: this.task.getTaskDir(),
-        taskId: this.task.task.id,
-        code,
-      });
-    });
+    const aiderProcess = this.aiderProcess;
+    aiderProcess.on('close', (code) => this.handleAiderProcessExit(aiderProcess, code));
 
     void this.writeAiderProcessPidFile();
   }
@@ -266,13 +266,45 @@ export class AiderManager {
     return !!this.aiderProcess;
   }
 
+  private handleAiderProcessExit(process: ChildProcessWithoutNullStreams, code: number | null): void {
+    logger.info('Aider process exited:', {
+      baseDir: this.task.getTaskDir(),
+      taskId: this.task.task.id,
+      code,
+    });
+
+    // A forced restart can spawn a replacement before the old close event is
+    // delivered. Never let that stale event clear the replacement process.
+    if (this.aiderProcess !== process) {
+      return;
+    }
+
+    this.aiderProcess = null;
+    this.aiderStarting = false;
+    this.removeAiderProcessPidFile();
+    this.currentCommand = null;
+
+    const error = new Error(`Aider process exited before the connector became ready (code ${code ?? 'unknown'})`);
+    this.aiderStartError = error;
+    this.eventManager.sendAiderConnectorStatus({ state: 'failed', error: error.message }, this.task.getProjectDir(), this.task.taskId);
+    this.aiderStartReject?.(error);
+    this.aiderStartReject = null;
+    this.aiderStartResolve = null;
+    this.aiderStartPromise = null;
+  }
+
   private createAiderStartPromise(): Promise<void> {
+    if (this.aiderStartError) {
+      return Promise.reject(this.aiderStartError);
+    }
+
     if (this.aiderStartPromise) {
       return this.aiderStartPromise;
     }
 
-    this.aiderStartPromise = new Promise((resolve) => {
+    this.aiderStartPromise = new Promise((resolve, reject) => {
       this.aiderStartResolve = resolve;
+      this.aiderStartReject = reject;
       if (!this.aiderStarting) {
         resolve();
       }
@@ -357,10 +389,12 @@ export class AiderManager {
     // Set aiderStarting to false when a connector with source==='aider' is added
     if (connector.source === 'aider') {
       this.aiderStarting = false;
+      this.aiderStartError = null;
       this.eventManager.sendAiderConnectorStatus({ state: 'ready' }, this.task.getProjectDir(), this.task.taskId);
       if (this.aiderStartResolve) {
         this.aiderStartResolve();
         this.aiderStartResolve = null;
+        this.aiderStartReject = null;
         this.aiderStartPromise = null;
       }
     }

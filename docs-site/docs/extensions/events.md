@@ -259,8 +259,13 @@ interface AgentStartedEvent {
   contextMessages: ContextMessage[];
   contextFiles: ContextFile[];
   blocked?: boolean;
+  images?: string[];
+  skillsToActivate?: string[];
+  modelCallSettings?: ModelCallSettings;
 }
 ```
+
+`modelCallSettings` contains the computed model-call defaults when the event is dispatched. Return a partial value to override AI SDK call parameters; it is merged with the defaults. See [Model Call Settings](./api-reference#model-call-settings) for the available fields.
 
 ### AgentStepStartedEvent
 Called before each agent step starts (before the LLM call). Use to modify messages that will be sent.
@@ -320,7 +325,7 @@ Called when important reminders are being generated. Use to modify the reminders
 
 ```typescript
 interface ImportantRemindersEvent {
-  readonly profile: AgentProfile;
+  readonly agentProfile: AgentProfile;
   remindersContent: string;
 }
 ```
@@ -336,7 +341,7 @@ Called when a tool requires approval.
 interface ToolApprovalEvent {
   readonly toolName: string;
   readonly input: Record<string, unknown> | undefined;
-  blocked?: boolean;
+  blocked?: boolean | string;
   allowed?: boolean;
 }
 ```
@@ -347,6 +352,7 @@ Called when a tool is about to be executed.
 ```typescript
 interface ToolCalledEvent {
   readonly toolName: string;
+  readonly agentProfile: AgentProfile;
   readonly abortSignal?: AbortSignal;
   input: Record<string, unknown> | undefined;
   output?: unknown;
@@ -359,6 +365,7 @@ Called after tool execution completes.
 ```typescript
 interface ToolFinishedEvent {
   readonly toolName: string;
+  readonly agentProfile: AgentProfile;
   readonly input: Record<string, unknown> | undefined;
   output: unknown;
 }
@@ -554,7 +561,7 @@ interface AiderPromptStartedEvent {
   messages: ConnectorMessage[];
   files: ContextFile[];
   blocked?: boolean;
-  autoApprove?: boolean;
+  autonomyMode?: 'manual' | 'guided' | 'autonomous';
   denyCommands?: boolean;
 }
 ```

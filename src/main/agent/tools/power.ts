@@ -2,7 +2,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { spawn } from 'child_process';
 import { ChildProcess } from 'node:child_process';
-import { Buffer } from 'node:buffer';
 
 import treeKill from 'tree-kill';
 import { tool, type ToolSet } from 'ai';
@@ -29,10 +28,11 @@ import { ApprovalManager } from './approval-manager';
 import { search } from '@/utils/probe';
 import { Task } from '@/task';
 import logger from '@/logger';
-import { filterIgnoredFiles, scrapeWeb } from '@/utils';
+import { ensureRipgrepBinary, filterIgnoredFiles, scrapeWeb } from '@/utils';
 import { isAbortError, isFileNotFoundError } from '@/utils/errors';
-import { getShellCommandArgs, getShellPath } from '@/utils/shell';
-import { expandTilde, readFileContent, truncateToolResult } from '@/agent/utils';
+import { getShellCommandArgs, getShellInitCommand, getShellPath } from '@/utils/shell';
+import { expandTilde, readFileContent, truncateToolResult, coerceBoolean } from '@/agent/utils';
+import { RIPGREP_BINARY_PATH } from '@/constants';
 
 /**
  * File lock map to prevent race conditions when multiple edits target the same file.
@@ -75,12 +75,11 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
       replacementText: z
         .string()
         .describe('The string to replace the searchTerm with. Do not use escape characters \\ in the string like \\n or \\" and others'),
-      isRegex: z
-        .boolean()
+      isRegex: coerceBoolean
         .optional()
         .default(false)
         .describe('Whether the searchTerm should be treated as a regular expression. Use regex only when it is really needed. Default: false.'),
-      replaceAll: z.boolean().optional().default(false).describe('Whether to replace all occurrences or just the first one. Default: false.'),
+      replaceAll: coerceBoolean.optional().default(false).describe('Whether to replace all occurrences or just the first one. Default: false.'),
     }),
     execute: async (input, { toolCallId }) => {
       const { filePath, searchTerm, replacementText, isRegex, replaceAll } = input;
@@ -197,13 +196,12 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
     description: POWER_TOOL_DESCRIPTIONS[TOOL_FILE_READ],
     inputSchema: z.object({
       filePath: z.string().describe('The path to the file to be read (relative to the <WorkingDirectory> or absolute if outside of the directory).'),
-      withLines: z
-        .boolean()
+      withLines: coerceBoolean
         .optional()
         .default(false)
         .describe('Whether to return the file content with line numbers in format "lineNumber|content". Default: false.'),
-      lineOffset: z.number().int().min(0).optional().default(0).describe('The starting line number (0-based) to begin reading from. Default: 0.'),
-      lineLimit: z.number().int().min(1).optional().default(1000).describe('The maximum number of lines to read. Default: 1000.'),
+      lineOffset: z.coerce.number().int().min(0).optional().default(0).describe('The starting line number (0-based) to begin reading from. Default: 0.'),
+      lineLimit: z.coerce.number().int().min(1).optional().default(1000).describe('The maximum number of lines to read. Default: 1000.'),
     }),
     execute: async (input, { toolCallId }) => {
       const { filePath, withLines, lineOffset, lineLimit } = input;
@@ -407,8 +405,8 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         .optional()
         .default(0)
         .describe('The number of lines of context to show before and after each matching line. Default: 0.'),
-      caseSensitive: z.boolean().optional().default(false).describe('Whether the search should be case sensitive. Default: false.'),
-      maxResults: z.number().int().min(1).optional().default(50).describe('Maximum number of results to return. Default: 50.'),
+      caseSensitive: coerceBoolean.optional().default(false).describe('Whether the search should be case sensitive. Default: false.'),
+      maxResults: z.coerce.number().int().min(1).optional().default(50).describe('Maximum number of results to return. Default: 50.'),
     }),
     execute: async (input, { toolCallId }) => {
       const { filePattern, searchTerm, contextLines, caseSensitive, maxResults } = input;
@@ -438,24 +436,31 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         return `Grep search for '${searchTerm}' in files matching '${filePattern}' denied by user. Reason: ${userInput}`;
       }
 
+      const rgAvailable = await ensureRipgrepBinary();
+      if (!rgAvailable) {
+        return 'Error: ripgrep binary is not available. Please try again or check the logs for details.';
+      }
+
       try {
-        const files = await glob(filePattern, {
-          cwd: task.getTaskDir(),
-          nodir: true,
-          absolute: true,
-          signal: abortSignal,
+        const rgArgs: string[] = ['--no-heading', '--line-number', '--color', 'never'];
+
+        if (!caseSensitive) {
+          rgArgs.push('-i');
+        }
+
+        if (contextLines > 0) {
+          rgArgs.push('-C', String(contextLines));
+        }
+
+        rgArgs.push('-g', filePattern);
+        rgArgs.push('--', searchTerm, '.');
+
+        const taskDir = task.getTaskDir();
+        logger.debug('Executing ripgrep:', {
+          binary: RIPGREP_BINARY_PATH,
+          args: rgArgs,
+          cwd: taskDir,
         });
-
-        if (files.length === 0) {
-          return `No files found matching pattern '${filePattern}'.`;
-        }
-
-        // Filter out ignored files in batch
-        const filteredFiles = await filterIgnoredFiles(task.getTaskDir(), files);
-
-        if (filteredFiles.length === 0) {
-          return `No files found matching pattern '${filePattern}' (all files were ignored).`;
-        }
 
         const results: Array<{
           filePath: string;
@@ -463,44 +468,180 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           lineContent: string;
           context?: string[];
         }> = [];
-        const searchRegex = new RegExp(searchTerm, caseSensitive ? undefined : 'i'); // Simpler for line-by-line test
 
-        for (const absoluteFilePath of filteredFiles) {
-          const fileContent = await fs.readFile(absoluteFilePath, {
-            encoding: 'utf8',
-            signal: abortSignal,
-          });
-          const lines = fileContent.split('\n');
-          const relativeFilePath = path.relative(task.getTaskDir(), absoluteFilePath);
+        // rg --no-heading -n output format:
+        //   "path:linenum:content" for match lines
+        //   "path-linenum-content" for context lines (before/after)
+        //   "--" on its own line as a context break separator
+        // Context lines before a match are "before-context", after a match are "after-context".
+        // When matches are far apart in the same file, rg inserts "--" between non-overlapping groups.
+        const outputLineRegex = /^(.+?)([:-])(\d+)\2(.*)$/;
 
-          for (let index = 0; index < lines.length; index++) {
-            const line = lines[index];
-            if (searchRegex.test(line)) {
-              if (results.length >= maxResults) {
-                break;
+        let pendingBeforeContext: string[] = [];
+        let afterContextBreak = false;
+        let stderrData = '';
+        let lineBuffer = '';
+
+        const processLine = (rawLine: string): boolean => {
+          if (rawLine.endsWith('\r')) {
+            rawLine = rawLine.slice(0, -1);
+          }
+
+          if (rawLine === '--') {
+            pendingBeforeContext = [];
+            afterContextBreak = true;
+            return false;
+          }
+
+          const match = outputLineRegex.exec(rawLine);
+          if (!match) {
+            return false;
+          }
+
+          const [, rawFilePath, separator, lineNumStr, content] = match;
+          const lineNum = parseInt(lineNumStr, 10);
+          if (isNaN(lineNum)) {
+            return false;
+          }
+
+          const filePath = rawFilePath.startsWith('./') ? rawFilePath.slice(2) : rawFilePath;
+          const isMatch = separator === ':';
+
+          if (isMatch) {
+            const context: string[] | undefined = pendingBeforeContext.length > 0 ? [...pendingBeforeContext, content] : undefined;
+            results.push({
+              filePath,
+              lineNumber: lineNum,
+              lineContent: content,
+              context,
+            });
+            pendingBeforeContext = [];
+            afterContextBreak = false;
+          } else {
+            if (afterContextBreak) {
+              pendingBeforeContext.push(content);
+            } else {
+              const lastResult = results[results.length - 1];
+              if (lastResult) {
+                if (!lastResult.context) {
+                  lastResult.context = [];
+                }
+                lastResult.context.push(content);
+              } else {
+                pendingBeforeContext.push(content);
               }
-              const matchResult: {
-                filePath: string;
-                lineNumber: number;
-                lineContent: string;
-                context?: string[];
-              } = {
-                filePath: relativeFilePath,
-                lineNumber: index + 1,
-                lineContent: line,
-              };
-
-              if (contextLines > 0) {
-                const start = Math.max(0, index - contextLines);
-                const end = Math.min(lines.length - 1, index + contextLines);
-                matchResult.context = lines.slice(start, end + 1);
-              }
-              results.push(matchResult);
             }
           }
+
+          return results.length >= maxResults;
+        };
+
+        let wasAborted = false;
+
+        await new Promise<void>((resolveStream) => {
+          let streamResolved = false;
+          let childProcess: ChildProcess | null = null;
+          let abortListener: (() => void) | null = null;
+
+          const cleanup = () => {
+            if (abortListener && abortSignal) {
+              abortSignal.removeEventListener('abort', abortListener);
+            }
+          };
+
+          const finish = () => {
+            if (streamResolved) {
+              return;
+            }
+            streamResolved = true;
+            cleanup();
+            resolveStream();
+          };
+
+          abortListener = () => {
+            if (streamResolved) {
+              return;
+            }
+            wasAborted = true;
+            if (childProcess?.pid) {
+              try {
+                childProcess.kill('SIGKILL');
+              } catch {
+                // Process may have already exited
+              }
+            }
+          };
+
+          abortSignal?.addEventListener('abort', abortListener);
+
+          try {
+            childProcess = spawn(RIPGREP_BINARY_PATH, rgArgs, {
+              cwd: taskDir,
+              env: { ...process.env, TERM: 'dumb', PATH: getShellPath() },
+              windowsHide: true,
+            });
+          } catch (spawnError) {
+            stderrData = spawnError instanceof Error ? spawnError.message : String(spawnError);
+            finish();
+            return;
+          }
+
+          childProcess.stdout?.on('data', (data: Buffer) => {
+            if (streamResolved) {
+              return;
+            }
+
+            lineBuffer += data.toString('utf-8');
+            const lines = lineBuffer.split('\n');
+            lineBuffer = lines.pop() || '';
+
+            for (const rawLine of lines) {
+              if (!rawLine) {
+                continue;
+              }
+              const reachedLimit = processLine(rawLine);
+              if (reachedLimit) {
+                try {
+                  childProcess?.kill('SIGKILL');
+                } catch {
+                  // Process may have already exited
+                }
+                finish();
+                return;
+              }
+            }
+          });
+
+          childProcess.stderr?.on('data', (data: Buffer) => {
+            stderrData += data.toString('utf-8');
+          });
+
+          childProcess.on('error', (error: Error) => {
+            if (!streamResolved) {
+              stderrData = error.message;
+              finish();
+            }
+          });
+
+          childProcess.on('close', () => {
+            if (!streamResolved && lineBuffer) {
+              processLine(lineBuffer);
+              lineBuffer = '';
+            }
+            finish();
+          });
+        });
+
+        if (wasAborted || abortSignal?.aborted) {
+          return 'Operation was cancelled by user.';
         }
 
+        logger.debug('ripgrep results count:', { count: results.length, stderr: stderrData.substring(0, 500) });
+
         if (results.length === 0) {
+          if (stderrData.trim()) {
+            return `Error during grep: ${stderrData.trim()}`;
+          }
           return `No matches found for pattern '${searchTerm}' in files matching '${filePattern}'.`;
         }
 
@@ -513,24 +654,24 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           grouped[r.filePath].push(r);
         }
 
-        const lines: string[] = [];
-        lines.push(`## Grep Results: \`${searchTerm}\` in \`${filePattern}\` (${results.length} matches)`);
-        lines.push('');
+        const markdownLines: string[] = [];
+        markdownLines.push(`## Grep Results: \`${searchTerm}\` in \`${filePattern}\` (${results.length} matches)`);
+        markdownLines.push('');
 
         for (const [filePath, matches] of Object.entries(grouped)) {
-          lines.push(`### ${filePath} (${matches.length} ${matches.length === 1 ? 'match' : 'matches'})`);
+          markdownLines.push(`### ${filePath} (${matches.length} ${matches.length === 1 ? 'match' : 'matches'})`);
           for (const match of matches) {
             const escapedContent = match.lineContent.replace(/`/g, '\\`');
-            lines.push(`- **L${match.lineNumber}:** \`${escapedContent}\``);
+            markdownLines.push(`- **L${match.lineNumber}:** \`${escapedContent}\``);
             if (match.context && match.context.length > 0) {
-              lines.push('  ```');
+              markdownLines.push('  ```');
               for (const ctxLine of match.context) {
-                lines.push(`  ${ctxLine}`);
+                markdownLines.push(`  ${ctxLine}`);
               }
-              lines.push('  ```');
+              markdownLines.push('  ```');
             }
           }
-          lines.push('');
+          markdownLines.push('');
         }
 
         const notices: string[] = [];
@@ -538,11 +679,11 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           notices.push(`${maxResults} matches limit reached. Use maxResults=${maxResults * 2} for more, or refine pattern`);
         }
         if (notices.length > 0) {
-          lines.push('---');
-          lines.push(`[${notices.join('. ')}]`);
+          markdownLines.push('---');
+          markdownLines.push(`[${notices.join('. ')}]`);
         }
 
-        return lines.join('\n');
+        return await truncateToolResult(markdownLines.join('\n'), 1000, 50, 10000);
       } catch (error) {
         if (isAbortError(error)) {
           return 'Operation was cancelled by user.';
@@ -558,7 +699,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
     inputSchema: z.object({
       command: z.string().min(1).describe('The shell command to execute (e.g., ls -la, npm install).'),
       cwd: z.string().optional().describe('The working directory for the command (relative to <WorkingDirectory>). Default: <WorkingDirectory>.'),
-      timeout: z.number().int().min(0).optional().default(120000).describe('Timeout for the command execution in milliseconds. Default: 120000 ms.'),
+      timeout: z.coerce.number().int().min(0).optional().default(120000).describe('Timeout for the command execution in milliseconds. Default: 120000 ms.'),
     }),
     execute: async (input, { toolCallId }) => {
       const { command, cwd, timeout } = input;
@@ -610,6 +751,20 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
 
       const absoluteCwd = expandedCwd ? path.resolve(task.getTaskDir(), expandedCwd) : task.getTaskDir();
 
+      const isPosix = process.platform !== 'win32';
+
+      const killProcess = (pid: number) => {
+        if (isPosix) {
+          try {
+            process.kill(-pid, 'SIGKILL');
+          } catch {
+            treeKill(pid, 'SIGKILL');
+          }
+        } else {
+          treeKill(pid, 'SIGKILL');
+        }
+      };
+
       return await new Promise((resolve) => {
         let stdout = '';
         let stderr = '';
@@ -649,7 +804,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           }
 
           if (childProcess?.pid) {
-            treeKill(childProcess.pid, 'SIGKILL');
+            killProcess(childProcess.pid);
           }
 
           // Use the standard resolution method with proper type
@@ -662,11 +817,14 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         abortSignal?.addEventListener('abort', abortListener);
 
         try {
-          const { shell: shellExec, args: shellArgs } = getShellCommandArgs(command);
+          const shellInitCommand = getShellInitCommand();
+          const fullCommand = shellInitCommand ? `${shellInitCommand} ${command}` : command;
+          const { shell: shellExec, args: shellArgs } = getShellCommandArgs(fullCommand);
           childProcess = spawn(shellExec, shellArgs, {
             cwd: absoluteCwd,
             env: { ...process.env, TERM: 'dumb', DEBIAN_FRONTEND: 'noninteractive', PATH: getShellPath() },
             stdio: ['ignore', 'pipe', 'pipe'], // Explicitly pipe stdout and stderr to capture output from piped commands
+            detached: isPosix,
             signal: abortSignal,
           });
 
@@ -677,7 +835,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
             }
 
             if (childProcess?.pid) {
-              treeKill(childProcess.pid, 'SIGKILL');
+              killProcess(childProcess.pid);
             }
             stderr = `Error: Command timed out after ${timeout}ms. Consider increasing the timeout parameter.`;
             exitCode = 124;
@@ -763,7 +921,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
     description: POWER_TOOL_DESCRIPTIONS[TOOL_FETCH],
     inputSchema: z.object({
       url: z.string().describe('The URL to fetch.'),
-      timeout: z.number().int().min(0).optional().default(60000).describe('Timeout for the fetch operation in milliseconds. Default: 60000 ms.'),
+      timeout: z.coerce.number().int().min(0).optional().default(60000).describe('Timeout for the fetch operation in milliseconds. Default: 60000 ms.'),
       format: z
         .enum(['markdown', 'html', 'raw'])
         .optional()
@@ -804,7 +962,8 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
       }
 
       try {
-        return await scrapeWeb(url, timeout, abortSignal, format);
+        const content = await scrapeWeb(url, timeout, abortSignal, format);
+        return await truncateToolResult(content, 1000, 50, 10000);
       } catch (error) {
         if (isAbortError(error)) {
           return 'Operation was cancelled by user.';
@@ -824,20 +983,36 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         .optional()
         .default(task.getTaskDir())
         .describe('Absolute path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.'),
-      allowTests: z.boolean().optional().default(false).describe('Allow test files in search results'),
-      exact: z.boolean().optional().default(false).describe('Perform exact search without tokenization (case-insensitive)'),
-      maxResults: z.number().optional().describe('Maximum number of results to return'),
-      maxTokens: z.number().optional().default(5000).describe('Maximum number of tokens to return'),
+      allowTests: coerceBoolean.optional().default(false).describe('Allow test files in search results'),
+      exact: coerceBoolean.optional().default(false).describe('Perform exact search without tokenization (case-insensitive)'),
+      maxResults: z.coerce.number().optional().describe('Maximum number of results to return'),
+      maxTokens: z.coerce.number().optional().default(5000).describe('Maximum number of tokens to return'),
       language: z.string().optional().describe('Limit search to files of a specific programming language'),
     }),
     execute: async (input, { toolCallId }) => {
-      const { query: searchQuery, path: inputPath, allowTests, exact, maxTokens: paramMaxTokens, language } = input;
-      task.addToolMessage(toolCallId, TOOL_GROUP_NAME, TOOL_SEMANTIC_SEARCH, { searchQuery, path: inputPath }, undefined, undefined, promptContext);
+      const { query: searchQuery, path: inputPath, allowTests, exact, maxResults: paramMaxResults, maxTokens: paramMaxTokens, language } = input;
+      task.addToolMessage(
+        toolCallId,
+        TOOL_GROUP_NAME,
+        TOOL_SEMANTIC_SEARCH,
+        {
+          query: searchQuery,
+          path: inputPath,
+          allowTests,
+          exact,
+          maxResults: paramMaxResults,
+          maxTokens: paramMaxTokens,
+          language,
+        },
+        undefined,
+        undefined,
+        promptContext,
+      );
 
       const toolName = `${TOOL_GROUP_NAME}${TOOL_GROUP_NAME_SEPARATOR}${TOOL_SEMANTIC_SEARCH}`;
       const questionKey = toolName;
       const questionText = 'Approve running codebase search?';
-      const questionSubject = `Query: ${searchQuery}\nPath: ${inputPath || '.'}\nAllow Tests: ${allowTests}\nExact: ${exact}\nLanguage: ${language}`;
+      const questionSubject = `Query: ${searchQuery}\nPath: ${inputPath || '.'}\nAllow Tests: ${allowTests}\nExact: ${exact}\nMax Results: ${paramMaxResults ?? 'default'}\nMax Tokens: ${paramMaxTokens}\nLanguage: ${language || 'all'}`;
 
       const [isApproved, userInput] = await approvalManager.handleToolApproval(toolName, input, questionKey, questionText, questionSubject);
 
@@ -883,6 +1058,13 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         'rb',
         'php',
         'swift',
+        'solidity',
+        'sol',
+        'crystal',
+        'cr',
+        'haskell',
+        'hs',
+        'lhs',
         'csharp',
         'cs',
         'yaml',
@@ -901,6 +1083,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           timeout: 5 * 60, // 5 minutes
           json: false,
           maxTokens: effectiveMaxTokens,
+          maxResults: paramMaxResults,
           language: effectiveLanguage,
         });
 

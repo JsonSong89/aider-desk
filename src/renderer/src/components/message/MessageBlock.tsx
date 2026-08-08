@@ -29,6 +29,7 @@ import {
   TASKS_TOOL_GET_TASK_MESSAGE,
   TASKS_TOOL_CREATE_TASK,
   TASKS_TOOL_DELETE_TASK,
+  TASKS_TOOL_RUN_PROMPT,
   TASKS_TOOL_SEARCH_TASK,
   TASKS_TOOL_SEARCH_PARENT_TASK,
 } from '@common/tools';
@@ -66,6 +67,7 @@ import { GetTaskToolMessage } from './GetTaskToolMessage';
 import { GetTaskMessageToolMessage } from './GetTaskMessageToolMessage';
 import { CreateTaskToolMessage } from './CreateTaskToolMessage';
 import { DeleteTaskToolMessage } from './DeleteTaskToolMessage';
+import { RunPromptToolMessage } from './RunPromptToolMessage';
 import { SearchTaskToolMessage } from './SearchTaskToolMessage';
 import { SearchParentTaskToolMessage } from './SearchParentTaskToolMessage';
 import { StoreMemoryToolMessage } from './StoreMemoryToolMessage';
@@ -76,6 +78,8 @@ import { UpdateMemoryToolMessage } from './UpdateMemoryToolMessage';
 import { ActivateSkillToolMessage } from './ActivateSkillToolMessage';
 import { areMessagesEqual } from './utils';
 
+import { useProjectTaskWorktreePath } from '@/stores/projectStore';
+
 type Props = {
   baseDir: string;
   taskId: string;
@@ -83,10 +87,11 @@ type Props = {
   allFiles: string[];
   renderMarkdown: boolean;
   compact?: boolean;
+  showThinking?: boolean;
   hideMessageBar?: boolean;
   remove?: () => void;
   redo?: () => void;
-  edit?: (content: string) => void;
+  edit?: (content: string, images?: string[]) => void;
   onInterrupt?: () => void;
   onFork?: () => void;
   onRemoveUpTo?: () => void;
@@ -100,6 +105,7 @@ const MessageBlockComponent = ({
   renderMarkdown,
   compact = false,
   hideMessageBar = false,
+  showThinking = true,
   remove,
   redo,
   edit,
@@ -108,6 +114,8 @@ const MessageBlockComponent = ({
   onRemoveUpTo,
 }: Props) => {
   const { t } = useTranslation();
+  const worktreePath = useProjectTaskWorktreePath(baseDir, taskId);
+  const taskDir = worktreePath ?? baseDir;
 
   if (isLoadingMessage(message)) {
     return <LoadingMessageBlock key={message.content} message={message} baseDir={baseDir} taskId={taskId} onInterrupt={onInterrupt} />;
@@ -153,6 +161,8 @@ const MessageBlockComponent = ({
         onFork={onFork}
         onRemoveUpTo={onRemoveUpTo}
         compact={compact}
+        showThinking={showThinking}
+        hideMessageBar={hideMessageBar}
       />
     );
   }
@@ -244,6 +254,7 @@ const MessageBlockComponent = ({
             return (
               <SemanticSearchToolMessage
                 message={toolMessage}
+                taskDir={taskDir}
                 onRemove={remove}
                 compact={compact}
                 hideMessageBar={hideMessageBar}
@@ -314,6 +325,17 @@ const MessageBlockComponent = ({
           case TASKS_TOOL_DELETE_TASK:
             return (
               <DeleteTaskToolMessage
+                message={toolMessage}
+                onRemove={remove}
+                compact={compact}
+                hideMessageBar={hideMessageBar}
+                onFork={onFork}
+                onRemoveUpTo={onRemoveUpTo}
+              />
+            );
+          case TASKS_TOOL_RUN_PROMPT:
+            return (
+              <RunPromptToolMessage
                 message={toolMessage}
                 onRemove={remove}
                 compact={compact}

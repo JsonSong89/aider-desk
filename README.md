@@ -156,13 +156,16 @@ mindmap
 
 ## 🤝 Contributing
 
-We welcome contributions from engineers who share our vision of transparent, steerable AI! Whether it's a bug fix, a new Extension, or a core feature enhancement, please check out our Contributing Guidelines to get started.
+We welcome contributions from engineers who share our vision of transparent, steerable AI! Whether it's a bug fix, a new Extension, or a core feature enhancement, please check out our [Contributing Guidelines](CONTRIBUTING.md) to get started.
 
 ---
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=hotovo/aider-desk&type=Date)](https://star-history.com/#hotovo/aider-desk&Date)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs-site/static/img/star-history-dark.svg">
+  <img src="docs-site/static/img/star-history-light.svg" alt="Star History Chart" />
+</picture>
 
 Thank you ❤️
 
@@ -170,4 +173,4 @@ Thank you ❤️
 
 ## 📄 License
 
-AiderDesk is released under the MIT License.
+AiderDesk is released under the [Apache License 2.0](LICENSE).

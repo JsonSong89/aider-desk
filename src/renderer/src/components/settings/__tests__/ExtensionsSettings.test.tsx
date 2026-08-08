@@ -7,6 +7,7 @@ import { ExtensionsSettings } from '../ExtensionsSettings';
 
 import { useApi } from '@/contexts/ApiContext';
 import { createMockApi } from '@/__tests__/mocks/api';
+import { showErrorNotification } from '@/utils/notifications';
 
 // Test data factories with capabilities support
 const createMockAvailableExtension = (overrides: Partial<AvailableExtension> = {}): AvailableExtension => ({
@@ -74,16 +75,17 @@ interface ToggleProps {
   'aria-label'?: string;
 }
 
-// Mock react-i18next
+// Mock react-i18next — t must be a stable reference, matching real react-i18next behavior
+const mockT = (key: string, params?: Record<string, unknown>) => {
+  if (params?.name) {
+    return `${key}.${params.name}`;
+  }
+  return key;
+};
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, params?: Record<string, unknown>) => {
-      // Handle translation keys with parameters
-      if (params?.name) {
-        return `${key}.${params.name}`;
-      }
-      return key;
-    },
+    t: mockT,
     i18n: { changeLanguage: vi.fn() },
   }),
 }));
@@ -195,7 +197,7 @@ describe('ExtensionsSettings', () => {
       mockApi.getAvailableExtensions.mockResolvedValueOnce([defaultRepoExtension, customRepoExtension]);
 
       // After install, the extension will be installed
-      mockApi.installExtension.mockResolvedValue(true);
+      mockApi.installExtension.mockResolvedValue({ success: true });
       mockApi.getInstalledExtensions.mockResolvedValueOnce([createMockLoadedExtension({ id: 'custom-repo-ext' })]);
       mockApi.getAvailableExtensions.mockResolvedValueOnce([defaultRepoExtension, customRepoExtension]);
 
@@ -370,7 +372,7 @@ describe('ExtensionsSettings', () => {
       mockApi.getInstalledExtensions.mockResolvedValue([]);
       mockApi.getAvailableExtensions.mockResolvedValue([defaultExt, ext1, ext2]);
 
-      mockApi.installExtension.mockResolvedValue(true);
+      mockApi.installExtension.mockResolvedValue({ success: true });
       mockApi.getInstalledExtensions.mockResolvedValueOnce([createMockLoadedExtension({ id: 'ext1' })]);
       mockApi.getAvailableExtensions.mockResolvedValueOnce([defaultExt, ext1, ext2]);
 
@@ -572,7 +574,7 @@ describe('ExtensionsSettings', () => {
 
       mockApi.getInstalledExtensions.mockResolvedValue([]);
       mockApi.getAvailableExtensions.mockResolvedValue([extension]);
-      mockApi.installExtension.mockResolvedValue(true);
+      mockApi.installExtension.mockResolvedValue({ success: true });
 
       render(<ExtensionsSettings settings={mockSettings} setSettings={mockSetSettings} />);
 
@@ -651,7 +653,7 @@ describe('ExtensionsSettings', () => {
 
       mockApi.getInstalledExtensions.mockResolvedValue([]);
       mockApi.getAvailableExtensions.mockResolvedValue([extension]);
-      mockApi.installExtension.mockResolvedValue(false);
+      mockApi.installExtension.mockResolvedValue({ success: false });
 
       render(<ExtensionsSettings settings={mockSettings} setSettings={mockSetSettings} />);
 
@@ -681,6 +683,49 @@ describe('ExtensionsSettings', () => {
       await waitFor(() => {
         expect(mockApi.installExtension).toHaveBeenCalled();
       });
+
+      // Should not reload extensions on failure
+      expect(mockApi.getInstalledExtensions).toHaveBeenCalledTimes(1);
+    });
+
+    it('should show npm-not-found error when npm is not installed', async () => {
+      const extension = createMockAvailableExtension();
+
+      mockApi.getInstalledExtensions.mockResolvedValue([]);
+      mockApi.getAvailableExtensions.mockResolvedValue([extension]);
+      mockApi.installExtension.mockResolvedValue({ success: false, error: 'npm-not-found' });
+
+      render(<ExtensionsSettings settings={mockSettings} setSettings={mockSetSettings} />);
+
+      // Switch to Available tab
+      const availableTab = screen.getByText('settings.extensions.tabs.available');
+      fireEvent.click(availableTab);
+
+      // Wait for extensions to load
+      await waitFor(() => {
+        expect(mockApi.getAvailableExtensions).toHaveBeenCalled();
+      });
+
+      // Expand the repository section
+      const repoSection = screen.getByText('hotovo/aider-desk');
+      const repoHeader = repoSection.closest('div[class*="cursor-pointer"]');
+
+      if (!repoHeader) {
+        throw new Error('Repository header not found');
+      }
+
+      fireEvent.click(repoHeader);
+
+      // Try to install the extension
+      const installButton = await screen.findByText('settings.extensions.install');
+      fireEvent.click(installButton);
+
+      await waitFor(() => {
+        expect(mockApi.installExtension).toHaveBeenCalled();
+      });
+
+      // Should show the npm-not-found error message
+      expect(showErrorNotification).toHaveBeenCalledWith('settings.extensions.errors.npmNotFound', false);
 
       // Should not reload extensions on failure
       expect(mockApi.getInstalledExtensions).toHaveBeenCalledTimes(1);

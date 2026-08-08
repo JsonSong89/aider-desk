@@ -213,6 +213,16 @@ class ShellDetector {
 const getPathSeparator = (): string => (process.platform === 'win32' ? ';' : ':');
 
 /**
+ * Extract the PATH value from shell command output by taking the last
+ * non-empty line. This protects against login messages (MOTD, quota warnings,
+ * etc.) that may be printed to stdout during shell initialization.
+ */
+export const extractPathFromOutput = (output: string): string => {
+  const lines = output.split('\n').filter((line) => line.trim().length > 0);
+  return (lines[lines.length - 1] || '').trim();
+};
+
+/**
  * Get the user's shell PATH by executing their shell
  */
 export const getShellPath = (): string => {
@@ -300,57 +310,63 @@ export const getShellPath = (): string => {
           const homeDir = os.homedir();
 
           if (shell.includes('zsh')) {
-            // For zsh, source the standard config files
             sourceCommand =
-              'source /etc/zprofile 2>/dev/null || true; ' +
-              `source ${homeDir}/.zprofile 2>/dev/null || true; ` +
-              'source /etc/zshrc 2>/dev/null || true; ' +
-              `source ${homeDir}/.zshrc 2>/dev/null || true; `;
+              'source /etc/zprofile >/dev/null 2>&1 || true; ' +
+              `source ${homeDir}/.zprofile >/dev/null 2>&1 || true; ` +
+              'source /etc/zshrc >/dev/null 2>&1 || true; ' +
+              `source ${homeDir}/.zshrc >/dev/null 2>&1 || true; `;
           } else if (shell.includes('bash')) {
-            // For bash, source the standard config files
             sourceCommand =
-              'source /etc/profile 2>/dev/null || true; ' +
-              `source ${homeDir}/.bash_profile 2>/dev/null || true; ` +
-              `source ${homeDir}/.bashrc 2>/dev/null || true; `;
+              'source /etc/profile >/dev/null 2>&1 || true; ' +
+              `source ${homeDir}/.bash_profile >/dev/null 2>&1 || true; ` +
+              `source ${homeDir}/.bashrc >/dev/null 2>&1 || true; `;
           }
 
           const fullCommand = `${shell} -c '${sourceCommand}echo $PATH'`;
 
-          shellPath = execSync(fullCommand, {
-            encoding: 'utf8',
-            timeout: isLinux ? 3000 : 10000, // Shorter timeout for Linux
-            env: {
-              PATH: minimalPath,
-              SHELL: shell,
-              USER: os.userInfo().username,
-              HOME: homeDir,
-              // Add ZDOTDIR for zsh users who might have custom config location
-              ZDOTDIR: process.env.ZDOTDIR || homeDir,
-            },
-          }).trim();
-
-          logger.debug('Successfully loaded user PATH from shell config files', {
-            fullCommand,
-            pathLength: shellPath.split(':').length,
-          });
-        } catch (error) {
-          logger.error('Failed to load PATH from shell config:', error);
-
-          // Try the standard login shell approach
-          try {
-            shellPath = execSync(shellCommand, {
+          shellPath = extractPathFromOutput(
+            execSync(fullCommand, {
               encoding: 'utf8',
               timeout: isLinux ? 3000 : 10000, // Shorter timeout for Linux
               env: {
                 PATH: minimalPath,
                 SHELL: shell,
                 USER: os.userInfo().username,
-                HOME: os.homedir(),
+                HOME: homeDir,
+                // Add ZDOTDIR for zsh users who might have custom config location
+                ZDOTDIR: process.env.ZDOTDIR || homeDir,
               },
-            }).trim();
+            }),
+          );
+
+          logger.debug('Successfully loaded user PATH from shell config files', {
+            fullCommand,
+            pathLength: shellPath.split(':').length,
+          });
+        } catch (error) {
+          logger.error('Failed to load PATH from shell config:', {
+            error: error instanceof Error ? { message: error.message, name: error.name } : String(error),
+          });
+
+          // Try the standard login shell approach
+          try {
+            shellPath = extractPathFromOutput(
+              execSync(shellCommand, {
+                encoding: 'utf8',
+                timeout: isLinux ? 3000 : 10000, // Shorter timeout for Linux
+                env: {
+                  PATH: minimalPath,
+                  SHELL: shell,
+                  USER: os.userInfo().username,
+                  HOME: os.homedir(),
+                },
+              }),
+            );
             logger.debug('Loaded PATH using login shell flags');
           } catch (loginError) {
-            logger.error('Failed to load PATH from login shell:', loginError);
+            logger.error('Failed to load PATH from login shell:', {
+              error: loginError instanceof Error ? { message: loginError.message, name: loginError.name } : String(loginError),
+            });
             // Fallback to current PATH + common locations
             shellPath = process.env.PATH || '';
           }
@@ -358,21 +374,25 @@ export const getShellPath = (): string => {
       } else {
         // In development, try faster approach first
         try {
-          shellPath = execSync(`${shell} -c 'echo $PATH'`, {
-            encoding: 'utf8',
-            timeout: 2000,
-            env: process.env,
-          }).trim();
+          shellPath = extractPathFromOutput(
+            execSync(`${shell} -c 'echo $PATH'`, {
+              encoding: 'utf8',
+              timeout: 2000,
+              env: process.env,
+            }),
+          );
           logger.debug('Quick PATH retrieval succeeded');
         } catch (quickError) {
           logger.debug('Quick PATH retrieval failed, falling back to login shell approach', {
             error: quickError instanceof Error ? quickError.message : quickError,
           });
-          shellPath = execSync(shellCommand, {
-            encoding: 'utf8',
-            timeout: isLinux ? 3000 : 10000, // Shorter timeout for Linux
-            env: process.env,
-          }).trim();
+          shellPath = extractPathFromOutput(
+            execSync(shellCommand, {
+              encoding: 'utf8',
+              timeout: isLinux ? 3000 : 10000, // Shorter timeout for Linux
+              env: process.env,
+            }),
+          );
           logger.debug('Login shell PATH retrieval succeeded');
         }
       }
@@ -505,7 +525,7 @@ export const getShellPath = (): string => {
     return cachedPath;
   } catch (error) {
     logger.error('ERROR: Failed to get shell PATH', {
-      error,
+      error: error instanceof Error ? { message: error.message, name: error.name } : String(error),
       stack: error instanceof Error ? error.stack : 'No stack trace available',
     });
 
@@ -564,7 +584,7 @@ export const getShellPath = (): string => {
         }
       } catch (configError) {
         logger.error('ERROR: Failed to read shell config files', {
-          error: configError,
+          error: configError instanceof Error ? { message: configError.message, name: configError.name } : String(configError),
           stack: configError instanceof Error ? configError.stack : 'No stack trace',
         });
       }
@@ -631,6 +651,49 @@ export const findExecutableInPath = (executable: string, checkOnly = false): str
 };
 
 /**
+ * Get a shell initialization prefix that sources the user's shell config files
+ * and activates direnv if available. This ensures the bash tool has access to
+ * the same environment (env vars, shell functions, direnv) as an interactive
+ * terminal session.
+ *
+ * Only applies to Unix shells (bash, zsh, fish). Returns empty string for
+ * Windows shells or unsupported shells.
+ *
+ * @returns Shell command prefix string to prepend before the actual command
+ */
+export const getShellInitCommand = (): string => {
+  const shellInfo = ShellDetector.getDefaultShell();
+  const homeDir = os.homedir();
+
+  switch (shellInfo.name) {
+    case 'bash': {
+      const sourceCmd =
+        'source /etc/profile >/dev/null 2>&1 || true; ' +
+        `source ${homeDir}/.bash_profile >/dev/null 2>&1 || true; ` +
+        `source ${homeDir}/.bashrc >/dev/null 2>&1 || true; `;
+      const direnvCmd = 'command -v direnv >/dev/null 2>&1 && eval "$(direnv export bash 2>/dev/null)" 2>/dev/null || true; ';
+      return sourceCmd + direnvCmd;
+    }
+    case 'zsh': {
+      const sourceCmd =
+        'source /etc/zprofile >/dev/null 2>&1 || true; ' +
+        `source ${homeDir}/.zprofile >/dev/null 2>&1 || true; ` +
+        'source /etc/zshrc >/dev/null 2>&1 || true; ' +
+        `source ${homeDir}/.zshrc >/dev/null 2>&1 || true; `;
+      const direnvCmd = 'command -v direnv >/dev/null 2>&1 && eval "$(direnv export zsh 2>/dev/null)" 2>/dev/null || true; ';
+      return sourceCmd + direnvCmd;
+    }
+    case 'fish': {
+      const sourceCmd = `source ${homeDir}/.config/fish/config.fish >/dev/null 2>&1 || true; `;
+      const direnvCmd = 'command -v direnv >/dev/null 2>&1 && direnv export fish 2>/dev/null | source || true; ';
+      return sourceCmd + direnvCmd;
+    }
+    default:
+      return '';
+  }
+};
+
+/**
  * Get shell and arguments to execute a command using the user's default shell.
  * This respects the $SHELL environment variable instead of always using /bin/sh.
  * @param command The command string to execute
@@ -640,10 +703,36 @@ export const getShellCommandArgs = (command: string): { shell: string; args: str
   return ShellDetector.getShellCommandArgs(command);
 };
 
+/**
+ * Initialize the process PATH by loading it from the user's login shell.
+ * Uses non-interactive mode (-lc) to avoid triggering prompts from interactive configs (e.g. .bashrc).
+ */
+export const initPath = (): void => {
+  logger.info('Initializing PATH...');
+  try {
+    const userShell = os.userInfo().shell || process.env.SHELL || '/bin/sh';
+    const detectedPath = execSync(`${userShell} -lc 'echo $PATH'`, {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'ignore'],
+      env: { ...process.env, DISABLE_AUTO_UPDATE: 'true' },
+    }).trim();
+
+    if (detectedPath) {
+      process.env.PATH = detectedPath;
+      logger.info('PATH initialized from login shell');
+    }
+  } catch (error) {
+    logger.warn('Failed to initialize PATH from login shell, using process PATH', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
 // Wrapper for execAsync that includes enhanced PATH
 export const execWithShellPath = async (
   command: string,
-  options?: { cwd?: string; env?: NodeJS.ProcessEnv; maxBuffer?: number },
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv; maxBuffer?: number; signal?: AbortSignal; killSignal?: NodeJS.Signals | number },
 ): Promise<{ stdout: string; stderr: string }> => {
   logger.debug(`Executing command with shell path: ${command}`);
   const shellPath = getShellPath();

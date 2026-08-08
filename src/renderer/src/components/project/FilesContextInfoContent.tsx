@@ -1,14 +1,14 @@
-import { ContextFile, Mode, TaskData, TokensInfoData } from '@common/types';
+import { ContextFile, Mode, TaskData } from '@common/types';
 
 import { Workspace } from '@/components/Workspace';
 import { CostInfo } from '@/components/CostInfo';
+import { useTaskFileTokensInfo, useTaskTokensInfo } from '@/stores/taskStore';
 
 type Props = {
   baseDir: string;
   taskId: string;
   allFiles: string[];
   contextFiles: ContextFile[];
-  tokensInfo: TokensInfoData | null;
   aiderTotalCost: number;
   maxInputTokens: number;
   clearMessages: (clearContext?: boolean) => void;
@@ -19,6 +19,7 @@ type Props = {
   task: TaskData;
   updateTask: (taskId: string, updates: Partial<TaskData>) => void;
   refreshAllFiles: (useGit?: boolean) => Promise<void>;
+  refreshContextFiles: () => Promise<void>;
   onToggleFilesSidebarCollapse?: () => void;
 };
 
@@ -27,7 +28,6 @@ export const FilesContextInfoContent = ({
   taskId,
   allFiles,
   contextFiles,
-  tokensInfo,
   aiderTotalCost,
   maxInputTokens,
   clearMessages,
@@ -38,8 +38,12 @@ export const FilesContextInfoContent = ({
   task,
   updateTask,
   refreshAllFiles,
+  refreshContextFiles,
   onToggleFilesSidebarCollapse,
 }: Props) => {
+  const tokensInfo = useTaskTokensInfo(taskId);
+  const fileTokensInfo = useTaskFileTokensInfo(taskId);
+
   return (
     <>
       <div className="flex-grow flex flex-col overflow-y-hidden">
@@ -49,8 +53,9 @@ export const FilesContextInfoContent = ({
           allFiles={allFiles}
           contextFiles={contextFiles}
           showFileDialog={showFileDialog}
-          tokensInfo={tokensInfo}
+          fileTokensInfo={fileTokensInfo}
           refreshAllFiles={refreshAllFiles}
+          refreshContextFiles={refreshContextFiles}
           mode={mode}
           onToggleFilesSidebarCollapse={onToggleFilesSidebarCollapse}
           taskName={task.name}

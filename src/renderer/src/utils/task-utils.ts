@@ -1,8 +1,10 @@
-import { TaskData } from '@common/types';
+import { DEFAULT_TASK_STATES, TaskData } from '@common/types';
 
 import { getTaskDateGroup } from './date-utils';
 
 export type VirtualTaskItem = { type: 'header'; id: string; title: string } | { type: 'task'; id: string; task: TaskData; level: number };
+
+export const getTaskDir = (task: TaskData): string => task.worktree?.path ?? task.baseDir;
 
 const getMostRecentUpdatedAt = (task: TaskData, allTasks: TaskData[]): string | undefined => {
   let mostRecent = task.updatedAt;
@@ -24,7 +26,7 @@ export const getSortedVisibleTasks = (tasks: TaskData[], selectedStates: Set<str
       if (task.archived && !showArchived) {
         return false;
       }
-      if (task.state && !selectedStates.has(task.state)) {
+      if (task.state && DEFAULT_TASK_STATES.has(task.state) && !selectedStates.has(task.state)) {
         return false;
       }
       return true;

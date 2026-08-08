@@ -12,14 +12,13 @@ AiderDesk supports multiple Large Language Model (LLM) providers to power your A
 - [Alibaba Plan](#alibaba-plan)
 - [Anthropic](#anthropic)
 - [Anthropic Compatible](#anthropic-compatible)
-- [Auggie](#auggie)
+- [Auggie (Extension)](#auggie)
 - [Azure](#azure)
 - [Bedrock](#bedrock)
 - [Cerebras](#cerebras)
-- [Claude Agent SDK](#claude-agent-sdk)
+- [Claude Agent SDK (Extension)](#claude-agent-sdk)
 - [Deepseek](#deepseek)
 - [Gemini](#gemini)
-- [Gemini CLI](#gemini-cli)
 - [GPUStack](#gpustack)
 - [Groq](#groq)
 - [Kimi Plan](#kimi-plan)
@@ -106,7 +105,13 @@ Use any Anthropic-compatible API endpoint (e.g., third-party proxies, self-hoste
 
 ## Auggie
 
+> ⚠️ **Extension Required** — Auggie SDK is now available as a community extension. It must be installed separately before use.
+
 Auggie provides access to models through the Augment platform, supporting Claude and GPT models via the Auggie SDK.
+
+### Installation
+
+Go to **Settings → Extensions → Available**, find the Auggie SDK extension, and click **Install**.
 
 ### Configuration Parameters
 
@@ -218,28 +223,6 @@ Google's Gemini models offer versatile AI capabilities with advanced features li
 3. Enter the API key in the Model Library Gemini configuration
 4. Configure optional parameters based on your needs
 5. Or set appropriate environment variables
-
----
-
-## Gemini CLI
-
-Gemini CLI uses the locally installed Gemini CLI tool for authentication, providing free access to Gemini models via your Google account.
-
-### Configuration Parameters
-
-- **Project ID**: Optional Google Cloud project ID (required for organization/enterprise accounts)
-
-### Setup
-
-1. Install the [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-2. Authenticate with your Google account (`gemini` command will prompt you)
-3. Models are automatically available in AiderDesk when the Gemini CLI is detected in your PATH
-
-### Important Notes
-
-- **No API Key Required**: Authentication is handled by the Gemini CLI via OAuth
-- **Auto-Detection**: AiderDesk automatically detects the Gemini CLI installation
-- **Available Models**: Includes Gemini 2.5 and 3.x variants (e.g., `gemini-2.5-pro`, `gemini-3.1-pro-preview`)
 
 ---
 
@@ -413,33 +396,29 @@ Cerebras provides ultra-fast inference using purpose-built wafer-scale AI proces
 
 ## Claude Agent SDK
 
-Claude Agent SDK is a specialized provider for users with Claude Code Pro or Max subscriptions. It uses the Claude Code CLI for authentication and is powered by [ai-sdk-provider-claude-code](https://github.com/ben-vargas/ai-sdk-provider-claude-code).
+> ⚠️ **Not a Built-in Provider** — Claude Agent SDK is now available as a **community extension**. It is no longer bundled with AiderDesk.
 
-### Configuration Parameters
+> ⚠️ **Important: Subscription Changes** — Starting June 15, 2026, Claude subscription plans no longer include Agent SDK usage as part of the regular subscription. A separate monthly Agent SDK credit is provided ($20–$200 depending on plan). Once exhausted, you are charged at standard API rates. See [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for full details.
 
-- **No API Key Required**: Authentication is handled through the Claude Code CLI
-- **No Additional Configuration**: The provider works once the CLI is authenticated
+> ⚠️ **Educational Purposes Only** — This extension is provided primarily for educational and experimental purposes. For production use, it is **strongly recommended to use the [Anthropic provider](#anthropic) with API keys** directly in AiderDesk. The Anthropic API provider offers direct API access, better cost control, lower latency, full feature support across all modes, and no subscription credit limitations.
+
+Claude Agent SDK is an extension that integrates the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) as an LLM provider. It uses the Claude Code CLI for authentication and is powered by [ai-sdk-provider-claude-code](https://github.com/ben-vargas/ai-sdk-provider-claude-code).
+
+### Installation
+
+Go to **Settings → Extensions → Available**, find the Claude Agent SDK extension, and click **Install**.
 
 ### Prerequisites
 
-- **Claude Code Subscription**: Active Claude Code Pro or Max subscription required
 - **Claude Code CLI**: Must be installed from [Claude Code](https://claude.com/product/claude-code)
 - **Authentication**: Run `claude login` before using the provider
-- **No Environment Variables**: No environment variable configuration needed
+- **Claude Subscription**: Active Claude Code Pro, Max, Team, or Enterprise subscription (or a Claude Platform API key)
 
 ### Available Models
 
 - **haiku**: 200K input tokens, 64K output tokens
 - **sonnet**: 200K input tokens, 64K output tokens (default)
 - **opus**: 200K input tokens, 64K output tokens
-
-### Setup
-
-1. Ensure you have an active Claude Code Pro or Max subscription
-2. Install the Claude Code CLI from [https://claude.com/product/claude-code](https://claude.com/product/claude-code)
-3. Run `claude login` in your terminal to authenticate
-4. Add the Claude Agent SDK provider in AiderDesk's Model Library
-5. Select one of the available models (haiku, sonnet, or opus)
 
 ### Mode Support
 
@@ -452,18 +431,12 @@ This provider **only works in Agent mode**:
 - ❌ **Context Mode**: Not supported
 - ❌ **Aider Integration**: Cannot be used with Aider
 
-### Cost Tracking
-
-- **Subscription-based pricing**: No per-message costs
-- **Cost tracking**: Shows per-agent-turn costs (not per-message)
-- Costs are tracked for the entire agent conversation turn
-
 ### Important Notes
 
+- **Extension Required**: This is not a built-in provider — the extension must be installed separately
 - **CLI Required**: Claude Code CLI must be installed and authenticated before use
 - **Agent Mode Only**: This provider exclusively works in Agent mode
 - **Model Prefix**: Use `claude-agent-sdk/` prefix when specifying models
-- **Tool Usage**: This provider relies on tools from AiderDesk and does not use Claude Code's internal tools. Tools are executed within the AiderDesk environment.
 - **Provider Switching**: 
   - ✅ Switching FROM Claude Agent SDK to another provider works fine
   - ⚠️ Switching FROM another provider TO Claude Agent SDK during an active conversation might not fully work as expected and is not a recommended workflow
@@ -476,9 +449,8 @@ This provider **only works in Agent mode**:
 ### Troubleshooting
 
 **Provider Not Available**:
-1. Verify Claude Code CLI is installed and available in your system PATH
-2. Run `claude login` to authenticate if you haven't already
-3. Confirm you have an active Claude Code Pro or Max subscription
+1. Verify the extension is installed in **Settings → Extensions → Installed**
+2. Reinstall the extension from the Available tab if needed
 
 **Authentication Fails**:
 1. Run `claude login` again to re-authenticate
@@ -782,15 +754,13 @@ AiderDesk now uses a unified model prefix system across all modes (Agent, Code, 
 | Alibaba Plan | `openai/` |
 | Anthropic | `anthropic/` |
 | Anthropic Compatible | `anthropic/` |
-| Auggie | `auggie/` |
+| Auggie (Extension) | `auggie/` |
 | OpenAI | `openai/` |
 | Azure | `azure/` |
 | Bedrock | `bedrock/` |
 | Cerebras | `cerebras/` |
-| Claude Agent SDK | `claude-agent-sdk/` |
 | Deepseek | `deepseek/` |
 | Gemini | `gemini/` |
-| Gemini CLI | `gemini-cli/` |
 | GPUStack | `openai/` |
 | Groq | `groq/` |
 | Kimi Plan | `anthropic/` |

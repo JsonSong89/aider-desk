@@ -37,6 +37,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { OS } from '@aiderdesk/extensions';
 import type { Extension, ExtensionContext, ToolCalledEvent } from '@aiderdesk/extensions';
 
 interface SandboxConfig {
@@ -295,11 +296,12 @@ async function tryInitialize(context: ExtensionContext): Promise<void> {
 export default class SandboxExtension implements Extension {
   static metadata = {
     name: 'Sandbox',
-    version: '1.0.0',
+    version: '1.0.1',
     description: 'OS-level sandboxing for bash commands using @anthropic-ai/sandbox-runtime (sandbox-exec on macOS, bubblewrap on Linux)',
     author: 'wladimiiir',
     iconUrl: 'https://raw.githubusercontent.com/hotovo/aider-desk/refs/heads/main/packages/extensions/extensions/sandbox/icon.png',
     capabilities: ['security'],
+    supportedOS: [OS.Linux, OS.MacOS],
   };
 
   async onLoad(context: ExtensionContext) {

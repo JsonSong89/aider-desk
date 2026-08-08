@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { Font, FONTS, SettingsData, ProjectStartMode, SuggestionMode, Theme, THEMES, DiffViewMode, MessageViewMode } from '@common/types';
+import { Font, FONTS, SettingsData, ProjectStartMode, SuggestionMode, Theme, THEMES, DiffViewMode, MessageViewMode, FileWatchMode } from '@common/types';
 import { ChangeEvent } from 'react';
 
 import { Checkbox } from '../common/Checkbox';
@@ -158,6 +158,19 @@ export const GeneralSettings = ({ settings, setSettings, onLanguageChange, onZoo
     });
   };
 
+  const handleFileWatchModeChange = (value: string) => {
+    setSettings({
+      ...settings,
+      fileWatchMode: value as FileWatchMode,
+    });
+  };
+
+  const fileWatchModeOptions: Option[] = [
+    { label: t('settings.fileWatchMode.auto'), value: FileWatchMode.Auto },
+    { label: t('settings.fileWatchMode.native'), value: FileWatchMode.Native },
+    { label: t('settings.fileWatchMode.polling'), value: FileWatchMode.Polling },
+  ];
+
   const handleSuggestionDelayChange = (delay: number) => {
     setSettings({
       ...settings,
@@ -266,16 +279,16 @@ export const GeneralSettings = ({ settings, setSettings, onLanguageChange, onZoo
               />
               <div className="flex items-center space-x-2">
                 <Checkbox
-                  label={t('settings.messages.virtualizedRendering')}
-                  checked={settings.virtualizedRendering ?? false}
+                  label={t('settings.messages.fullMessageRendering')}
+                  checked={settings.fullMessageRendering ?? false}
                   onChange={(checked) =>
                     setSettings({
                       ...settings,
-                      virtualizedRendering: checked,
+                      fullMessageRendering: checked,
                     })
                   }
                 />
-                <InfoIcon tooltip={t('settings.messages.virtualizedRenderingTooltip')} />
+                <InfoIcon tooltip={t('settings.messages.fullMessageRenderingTooltip')} />
               </div>
             </div>
           </div>
@@ -396,9 +409,25 @@ export const GeneralSettings = ({ settings, setSettings, onLanguageChange, onZoo
         </div>
       </Section>
 
-      <Section id="general-notifications" title={t('settings.notifications.title')}>
-        <div className="px-4 py-3 space-y-3 mt-2">
-          <Checkbox label={t('settings.notificationsEnabled')} checked={settings.notificationsEnabled ?? false} onChange={handleNotificationsEnabledChange} />
+      <Section id="general-notifications" title={t('settings.notificationsAndFiles.title')}>
+        <div className="px-4 py-5 space-y-6">
+          <div className="space-y-3">
+            <Checkbox label={t('settings.notificationsEnabled')} checked={settings.notificationsEnabled ?? false} onChange={handleNotificationsEnabledChange} />
+          </div>
+          <div>
+            <div className="flex items-center gap-1 mb-2">
+              <span className="text-xs text-text-primary">{t('settings.fileWatchMode.label')}</span>
+              <InfoIcon tooltip={t('settings.fileWatchMode.tooltip')} />
+            </div>
+            <Select
+              options={fileWatchModeOptions}
+              value={settings.fileWatchMode ?? FileWatchMode.Auto}
+              onChange={handleFileWatchModeChange}
+              size="sm"
+              className="max-w-[200px]"
+              placement="top"
+            />
+          </div>
         </div>
       </Section>
     </div>

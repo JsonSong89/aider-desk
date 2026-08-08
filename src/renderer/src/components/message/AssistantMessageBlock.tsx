@@ -1,10 +1,9 @@
 import { memo, useCallback, useRef } from 'react';
 import { clsx } from 'clsx';
-import { RiRobot2Line } from 'react-icons/ri';
-import { Message, UsageReportData, AssistantGroupMessage, isResponseMessage, isToolMessage, ToolMessage } from '@common/types';
+import { Message, UsageReportData, AssistantGroupMessage, isResponseMessage, isToolMessage } from '@common/types';
 
 import { MessageBar } from './MessageBar';
-import { MessageBlock } from './MessageBlock';
+import { MessageBlockWrapper } from './MessageBlockWrapper';
 import { areMessagesEqual } from './utils';
 
 import { useParsedContent } from '@/hooks/useParsedContent';
@@ -24,7 +23,7 @@ const AssistantMessageBlockComponent = ({ baseDir, taskId, message, allFiles, re
   const { responseMessage, toolMessages } = message;
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const parsedContent = useParsedContent(baseDir, responseMessage.content, allFiles, renderMarkdown, true);
+  const parsedContent = useParsedContent(baseDir, responseMessage.content, allFiles, renderMarkdown, true, responseMessage.reasoning);
 
   const hasContent = parsedContent && (!Array.isArray(parsedContent) || parsedContent.length > 0);
 
@@ -53,7 +52,7 @@ const AssistantMessageBlockComponent = ({ baseDir, taskId, message, allFiles, re
 
   const aggregatedUsage = aggregateUsage();
 
-  const allContent = [responseMessage.content, ...toolMessages.map((t) => t.content)].filter(Boolean).join('\n\n');
+  const allContent = [responseMessage.reasoning, responseMessage.content, ...toolMessages.map((t) => t.content)].filter(Boolean).join('\n\n');
 
   const handleRemove = useCallback(() => {
     if (!remove) {
@@ -90,19 +89,23 @@ const AssistantMessageBlockComponent = ({ baseDir, taskId, message, allFiles, re
     >
       {/* Response content */}
       {hasContent && (
-        <div className="flex items-start gap-2">
-          <div className="mt-[1px] relative">
-            <RiRobot2Line className="text-text-muted w-4 h-4" />
-          </div>
-          <div className="flex-grow-1 w-full overflow-hidden">{parsedContent}</div>
-        </div>
+        <MessageBlockWrapper
+          key={responseMessage.id}
+          baseDir={baseDir}
+          taskId={taskId}
+          message={responseMessage}
+          allFiles={allFiles}
+          renderMarkdown={renderMarkdown}
+          compact={true}
+          hideMessageBar={true}
+        />
       )}
 
-      {/* Tool messages - using MessageBlock with hideMessageBar to avoid duplicate MessageBars */}
+      {/* Tool messages */}
       {toolMessages.length > 0 && (
         <div className={clsx(hasContent && 'mt-1 ml-6 space-y-1')}>
           {toolMessages.map((toolMessage) => (
-            <MessageBlock
+            <MessageBlockWrapper
               key={toolMessage.id}
               baseDir={baseDir}
               taskId={taskId}
@@ -141,28 +144,7 @@ const arePropsEqual = (prevProps: Props, nextProps: Props): boolean => {
     return false;
   }
 
-  const prevMessage = prevProps.message;
-  const nextMessage = nextProps.message;
-
-  if (prevMessage.id !== nextMessage.id) {
-    return false;
-  }
-
-  if (!areMessagesEqual(prevMessage.responseMessage, nextMessage.responseMessage)) {
-    return false;
-  }
-
-  if (prevMessage.toolMessages.length !== nextMessage.toolMessages.length) {
-    return false;
-  }
-
-  for (let i = 0; i < prevMessage.toolMessages.length; i++) {
-    if (!areMessagesEqual(prevMessage.toolMessages[i] as ToolMessage, nextMessage.toolMessages[i] as ToolMessage)) {
-      return false;
-    }
-  }
-
-  return true;
+  return areMessagesEqual(prevProps.message, nextProps.message);
 };
 
 export const AssistantMessageBlock = memo(AssistantMessageBlockComponent, arePropsEqual);

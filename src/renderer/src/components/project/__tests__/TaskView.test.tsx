@@ -7,10 +7,10 @@ import { TaskView } from '../TaskView';
 
 import { render } from '@/__tests__/render';
 import { useApi } from '@/contexts/ApiContext';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
 import { useTask } from '@/contexts/TasksContext';
-import { useTaskState, useTaskMessages } from '@/stores/taskStore';
+import { useOptimizedTaskState, useTaskMessages } from '@/stores/taskStore';
 import { useModelProviders } from '@/contexts/ModelProviderContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { useResponsive } from '@/hooks/useResponsive';
@@ -30,8 +30,8 @@ vi.mock('@/contexts/ApiContext', () => ({
   useApi: vi.fn(),
 }));
 
-vi.mock('@/contexts/SettingsContext', () => ({
-  useSettings: vi.fn(),
+vi.mock('@/stores/settingsStore', () => ({
+  useSettingsStore: vi.fn(),
 }));
 
 vi.mock('@/contexts/ProjectSettingsContext', () => ({
@@ -42,9 +42,40 @@ vi.mock('@/contexts/TasksContext', () => ({
   useTask: vi.fn(),
 }));
 
+const { mockStoreGetState, mockUseTaskStore } = vi.hoisted(() => {
+  const getState = vi.fn().mockReturnValue({
+    taskStateMap: new Map(),
+    taskMessagesMap: new Map(),
+  });
+
+  const fn = Object.assign(
+    vi.fn((selector?: (state: Record<string, unknown>) => unknown) => {
+      if (selector) {
+        return selector(getState());
+      }
+      return getState();
+    }),
+    { getState },
+  );
+
+  return { mockStoreGetState: getState, mockUseTaskStore: fn };
+});
+
 vi.mock('@/stores/taskStore', () => ({
+  useOptimizedTaskState: vi.fn(),
   useTaskState: vi.fn(),
   useTaskMessages: vi.fn(),
+  useTaskStore: mockUseTaskStore,
+  useTaskTokensInfo: vi.fn().mockReturnValue(null),
+  useTaskFileTokensInfo: vi.fn().mockReturnValue(null),
+  useTaskQuestion: vi.fn(),
+  useTaskTodoItems: vi.fn(),
+  useTaskQueuedPrompts: vi.fn(),
+}));
+
+vi.mock('@/stores/taskFilesStore', () => ({
+  useTaskAllFiles: vi.fn(() => []),
+  useTaskAutocompletionWords: vi.fn(() => []),
 }));
 
 vi.mock('@/contexts/ModelProviderContext', () => ({
@@ -97,14 +128,32 @@ vi.mock('../../message/Messages', () => ({
 }));
 
 vi.mock('../../message/VirtualizedMessages', () => ({
-  VirtualizedMessages: () => <div data-testid="virtualized-messages">Virtualized Messages</div>,
+  VirtualizedMessages: ({ messages }: { messages: { id: string; content: string }[] }) => (
+    <div data-testid="virtualized-messages">
+      {messages.map((m) => (
+        <div key={m.id}>{m.content}</div>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock('../../PromptField', () => ({
-  PromptField: ({ runPrompt, addFiles }: { runPrompt: (prompt: string) => void; addFiles: (files: string[], readOnly: boolean) => void }) => (
+  PromptField: ({
+    runPrompt,
+    addFiles,
+    editUserMessage,
+    savePrompt,
+  }: {
+    runPrompt: (prompt: string) => void;
+    addFiles: (files: string[], readOnly: boolean) => void;
+    editUserMessage: () => void;
+    savePrompt: (prompt: string) => Promise<void>;
+  }) => (
     <div data-testid="prompt-field">
       <button onClick={() => runPrompt('hello')}>Run Prompt</button>
       <button onClick={() => addFiles(['file1.ts'], false)}>Add File</button>
+      <button onClick={editUserMessage}>Edit Last Prompt</button>
+      <button onClick={() => void savePrompt('edited prompt')}>Save Prompt</button>
     </div>
   ),
 }));
@@ -136,34 +185,42 @@ describe('TaskView', () => {
   const mockApi = createMockApi();
 
   const mockTaskContext = createMockTaskContext();
-  const mockTaskState: ReturnType<typeof useTaskState> = {
+  const mockTaskState: ReturnType<typeof useOptimizedTaskState> = {
     loaded: true,
     loading: false,
-    allFiles: [],
     contextFiles: [],
-    autocompletionWords: [],
-    tokensInfo: null,
     question: null,
-    todoItems: [],
     aiderModelsData: null,
     lastActiveAt: null,
-    queuedPrompts: [],
+    canUndoContextChange: false,
   };
   const mockMessages: Message[] = [];
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockStoreGetState.mockReturnValue({
+      taskStateMap: new Map([['task-1', mockTaskState]]),
+      taskMessagesMap: new Map([['task-1', mockMessages]]),
+    });
     vi.mocked(useApi).mockReturnValue(mockApi);
-    vi.mocked(useSettings).mockReturnValue({
-      settings: {
-        virtualizedRendering: false,
-        renderMarkdown: true,
-        taskSettings: { contextCompactingThreshold: { percentage: 90, tokens: 100000 } },
-      },
-    } as ReturnType<typeof useSettings>);
+    vi.mocked(useSettingsStore).mockImplementation(((selector: (state: unknown) => unknown) =>
+      selector({
+        settings: {
+          fullMessageRendering: false,
+          renderMarkdown: true,
+          taskSettings: { contextCompactingThreshold: { percentage: 90, tokens: 100000 } },
+        },
+        theme: 'dark',
+        font: 'Sono',
+        fontSize: 14,
+        setSettingsState: vi.fn(),
+        setThemeValue: vi.fn(),
+        setFontValue: vi.fn(),
+        setFontSizeValue: vi.fn(),
+      })) as never);
     vi.mocked(useProjectSettings).mockReturnValue({ projectSettings: { agentProfileId: 'default' } } as ReturnType<typeof useProjectSettings>);
     vi.mocked(useTask).mockReturnValue(mockTaskContext as ReturnType<typeof useTask>);
-    vi.mocked(useTaskState).mockReturnValue(mockTaskState);
+    vi.mocked(useOptimizedTaskState).mockReturnValue(mockTaskState);
     vi.mocked(useTaskMessages).mockReturnValue(mockMessages);
     vi.mocked(useModelProviders).mockReturnValue(createMockModelProviderContext());
     vi.mocked(useAgents).mockReturnValue(createMockAgentsContext());
@@ -237,7 +294,37 @@ describe('TaskView', () => {
     await act(async () => {
       fireEvent.click(screen.getByText('Run Prompt'));
     });
-    expect(mockApi.runPrompt).toHaveBeenCalledWith(projectDir, mockTask.id, 'hello', 'code');
+    expect(mockApi.runPrompt).toHaveBeenCalledWith(projectDir, mockTask.id, 'hello', 'code', undefined);
+  });
+
+  it('saves an edited sole saved prompt without running it', async () => {
+    const savedPrompt: Message = { id: 'saved-prompt', type: 'user', content: 'original prompt' };
+    mockStoreGetState.mockReturnValue({
+      taskStateMap: new Map([['task-1', mockTaskState]]),
+      taskMessagesMap: new Map([['task-1', [savedPrompt]]]),
+    });
+    vi.mocked(useTaskMessages).mockReturnValue([savedPrompt]);
+
+    render(
+      <TaskView
+        projectDir={projectDir}
+        task={mockTask}
+        updateTask={mockUpdateTask}
+        updateOptimisticTaskState={mockUpdateOptimisticTaskState}
+        inputHistory={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Edit Last Prompt'));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Prompt'));
+    });
+
+    expect(mockApi.saveEditedPrompt).toHaveBeenCalledWith(projectDir, mockTask.id, savedPrompt.id, 'edited prompt');
+    expect(mockApi.runPrompt).not.toHaveBeenCalled();
   });
 
   it('calls api.addFile when files are added', async () => {

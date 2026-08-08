@@ -3,7 +3,9 @@ import { promises as fs } from 'fs';
 
 import { v4 as uuidv4 } from 'uuid';
 import debounce from 'lodash/debounce';
+import { isEqual } from 'lodash';
 import {
+  ToolResultPart,
   ConnectorMessage,
   ContextFile,
   ContextMessage,
@@ -18,12 +20,10 @@ import {
 import { extractServerNameToolName, extractTextContent, fileExists, isMessageEmpty, isTextContent } from '@common/utils';
 import { AIDER_TOOL_GROUP_NAME, AIDER_TOOL_RUN_PROMPT, SUBAGENTS_TOOL_GROUP_NAME, SUBAGENTS_TOOL_RUN_TASK } from '@common/tools';
 
-import type { ToolResultPart } from 'ai';
-
 import logger from '@/logger';
 import { Task } from '@/task';
 import { isDirectory, isFileIgnored } from '@/utils';
-import { ANSWER_RESPONSE_START_TAG, extractPromptContextFromToolResult, THINKING_RESPONSE_STAR_TAG } from '@/agent/utils';
+import { extractPromptContextFromToolResult } from '@/agent/utils';
 import { migrateContextV1toV2 } from '@/task/migrations/v1-to-v2';
 import { AIDER_DESK_TASKS_DIR } from '@/constants';
 
@@ -32,6 +32,7 @@ const CURRENT_CONTEXT_VERSION = 2;
 export class ContextManager {
   private messages: ContextMessage[];
   private files: ContextFile[];
+  private undoSnapshot: ContextMessage[] | null = null;
   private loadPromise: Promise<void> | null = null;
   private loaded = false;
   private autosaveEnabled = false;
@@ -48,6 +49,17 @@ export class ContextManager {
 
     // Task-specific storage path - single context per task
     this.storagePath = path.join(task.getProjectDir(), AIDER_DESK_TASKS_DIR, taskId, 'context.json');
+  }
+
+  hasUndoSnapshot(): boolean {
+    return this.undoSnapshot !== null;
+  }
+
+  undoContextChange(): ContextMessage[] | null {
+    const snapshot = this.undoSnapshot;
+    this.undoSnapshot = null;
+    this.task.sendContextInfoUpdated();
+    return snapshot;
   }
 
   public enableAutosave() {
@@ -75,6 +87,7 @@ export class ContextManager {
         role: roleOrMessage,
         content: content || '',
         usageReport,
+        timestamp: Date.now(),
       } as ContextMessage;
     } else {
       message = roleOrMessage;
@@ -89,6 +102,12 @@ export class ContextManager {
 
     this.messages.push(message);
     logger.debug(`Task ${this.taskId}: Added ${message.role} message. Total messages: ${this.messages.length}`);
+
+    if (this.undoSnapshot !== null) {
+      this.undoSnapshot = null;
+      this.task.sendContextInfoUpdated();
+    }
+
     this.autosave();
   }
 
@@ -182,7 +201,7 @@ export class ContextManager {
   }
 
   /**
-   * Checks whether a resolved absolute path matches any already-added context file.
+   * Finds an already-added context file matching the given resolved absolute path, if any.
    * Accounts for files that may have been resolved from either taskDir or projectDir.
    */
   private findExistingContextFile(absolutePath: string): ContextFile | undefined {
@@ -250,6 +269,10 @@ export class ContextManager {
       messages: contextMessages.length,
       save,
     });
+    if (this.messages.length > 0 && this.messages !== contextMessages) {
+      this.undoSnapshot = [...this.messages];
+      this.task.sendContextInfoUpdated();
+    }
     this.messages = contextMessages;
     if (save) {
       this.autosave();
@@ -283,8 +306,12 @@ export class ContextManager {
     }
   }
 
-  clearMessages(save = true) {
+  clearMessages(save = true, createSnapshot = true) {
     logger.debug('Clearing task messages', { taskId: this.taskId });
+    if (createSnapshot && this.messages.length > 0) {
+      this.undoSnapshot = [...this.messages];
+      this.task.sendContextInfoUpdated();
+    }
     this.messages = [];
     if (save) {
       this.autosave();
@@ -761,30 +788,70 @@ export class ContextManager {
     }
   }
 
-  private async loadInternal(): Promise<void> {
+  async reloadFromDisk(): Promise<boolean> {
+    if (!this.loaded) {
+      return false;
+    }
+
+    if (this.loadPromise) {
+      await this.loadPromise;
+    }
+
+    const previousContext = {
+      messages: this.messages,
+      files: this.files,
+    };
+
+    this.disableAutosave();
+    this.debouncedAutosave.cancel();
+    try {
+      const contextData = await this.readContextFromDisk();
+      const messages = contextData?.contextMessages || [];
+      const files = contextData?.contextFiles || [];
+      const changed = !isEqual(previousContext.messages, messages) || !isEqual(previousContext.files, files);
+
+      if (changed) {
+        this.messages = messages;
+        this.files = files;
+        this.undoSnapshot = null;
+        await this.cleanupContext();
+      }
+
+      return changed;
+    } finally {
+      this.enableAutosave();
+    }
+  }
+
+  private async readContextFromDisk(): Promise<TaskContext | null> {
     if (!(await fileExists(this.storagePath))) {
       logger.debug('No existing task context found:', {
         taskId: this.taskId,
       });
-      this.loaded = true;
-      return;
+      return null;
     }
-
-    this.disableAutosave();
 
     const content = await fs.readFile(this.storagePath, 'utf8');
     const contextData = content ? JSON.parse(content) : null;
 
     if (!contextData) {
       logger.debug('Empty task context found:', { taskId: this.taskId });
-      this.loaded = true;
-      return;
+      return {
+        contextMessages: [],
+        contextFiles: [],
+      };
     }
 
-    const migratedData = await this.migrateContext(contextData);
+    return this.migrateContext(contextData);
+  }
 
-    this.messages = migratedData.contextMessages || [];
-    this.files = migratedData.contextFiles || [];
+  private async loadInternal(): Promise<void> {
+    const contextData = await this.readContextFromDisk();
+
+    if (contextData) {
+      this.messages = contextData.contextMessages || [];
+      this.files = contextData.contextFiles || [];
+    }
     this.loaded = true;
 
     await this.cleanupContext();
@@ -792,7 +859,7 @@ export class ContextManager {
 
   async loadMessages(messages: ContextMessage[], updateTaskState = true): Promise<void> {
     // Clear all current messages
-    await this.task.clearContext(false, false, updateTaskState);
+    await this.task.clearContext(false, false, updateTaskState, false);
 
     this.messages = messages;
 
@@ -861,6 +928,7 @@ export class ContextManager {
           toolMessage.response = JSON.stringify(part.output.value);
           toolMessage.usageReport = message.usageReport || toolMessage.usageReport;
           toolMessage.promptContext = promptContext;
+          toolMessage.finished = true;
         }
 
         // Handle aider tool responses - create ResponseCompletedData for each response
@@ -887,6 +955,7 @@ export class ContextManager {
                 diff: response.diff,
                 usageReport: response.usageReport,
                 promptContext: message.promptContext,
+                timestamp: message.timestamp,
               };
               messagesData.push(responseCompletedData);
             });
@@ -914,31 +983,29 @@ export class ContextManager {
 
                   for (const subPart of subMessage.content) {
                     if (subPart.type === 'reasoning' && subPart.text?.trim()) {
-                      subReasoningContent = subPart.text.trim();
-                      subHasReasoning = true;
+                      if (subHasReasoning) {
+                        subReasoningContent += '\n\n' + subPart.text.trim();
+                      } else {
+                        subReasoningContent = subPart.text.trim();
+                        subHasReasoning = true;
+                      }
                     } else if (subPart.type === 'text' && subPart.text) {
                       subTextContent = subPart.text.trim();
                       subHasText = true;
                     }
                   }
 
-                  // Process combined reasoning and text content
                   if (subHasReasoning || subHasText) {
-                    let subFinalContent = '';
-                    if (subHasReasoning && subHasText) {
-                      subFinalContent = `${THINKING_RESPONSE_STAR_TAG}${subReasoningContent}${ANSWER_RESPONSE_START_TAG}${subTextContent}`;
-                    } else {
-                      subFinalContent = subReasoningContent || subTextContent;
-                    }
-
                     const responseCompletedData: ResponseCompletedData = {
                       type: 'response-completed',
                       messageId: subMessage.id,
-                      content: subFinalContent,
+                      content: subTextContent,
+                      reasoning: subHasReasoning ? subReasoningContent : undefined,
                       baseDir: this.task.getProjectDir(),
                       taskId: this.taskId,
                       usageReport: subMessage.usageReport,
                       promptContext: subMessage.promptContext,
+                      timestamp: subMessage.timestamp,
                     };
                     messagesData.push(responseCompletedData);
                   }
@@ -957,6 +1024,7 @@ export class ContextManager {
                         args: subPart.input,
                         usageReport: undefined,
                         promptContext: subMessage.promptContext,
+                        timestamp: subMessage.timestamp,
                       };
                       messagesData.push(toolData);
                     }
@@ -971,6 +1039,7 @@ export class ContextManager {
                     taskId: this.taskId,
                     usageReport: subMessage.usageReport,
                     promptContext: subMessage.promptContext,
+                    timestamp: subMessage.timestamp,
                   };
                   messagesData.push(responseCompletedData);
                 }
@@ -980,6 +1049,7 @@ export class ContextManager {
                     const toolMessage = messagesData.find((message) => message.type === 'tool' && message.id === subPart.toolCallId) as ToolData | undefined;
                     if (toolMessage) {
                       toolMessage.response = JSON.stringify(subPart.output.value);
+                      toolMessage.finished = true;
                     }
                   }
                 }
@@ -996,18 +1066,12 @@ export class ContextManager {
           let responseMessageIndex = 0;
 
           const pushResponseCompletedData = (content = '') => {
-            let finalContent = '';
-            if (reasoning) {
-              finalContent = `${THINKING_RESPONSE_STAR_TAG}${reasoning.trim()}${ANSWER_RESPONSE_START_TAG}${content.trim()}`;
-            } else {
-              finalContent = content.trim();
-            }
-
             const messageId = responseMessageIndex === 0 ? message.id : `${message.id}-${responseMessageIndex}`;
             const responseCompletedData: ResponseCompletedData = {
               type: 'response-completed',
               messageId,
-              content: finalContent,
+              content: content.trim(),
+              reasoning: reasoning ? reasoning.trim() : undefined,
               baseDir: this.task.getProjectDir(),
               taskId: this.taskId,
               reflectedMessage: message.reflectedMessage,
@@ -1017,6 +1081,7 @@ export class ContextManager {
               diff: message.diff,
               usageReport: message.usageReport,
               promptContext: message.promptContext,
+              timestamp: message.timestamp,
             };
             messagesData.push(responseCompletedData);
 
@@ -1026,7 +1091,11 @@ export class ContextManager {
 
           for (const part of message.content) {
             if (part.type === 'reasoning' && part.text?.trim()) {
-              reasoning = part.text.trim();
+              if (reasoning) {
+                reasoning += '\n\n' + part.text.trim();
+              } else {
+                reasoning = part.text.trim();
+              }
             } else if (part.type === 'text' && part.text) {
               pushResponseCompletedData(part.text);
             } else if (part.type === 'tool-call') {
@@ -1051,6 +1120,7 @@ export class ContextManager {
                 args: toolCall.input,
                 usageReport: message.usageReport,
                 promptContext: message.promptContext,
+                timestamp: message.timestamp,
               };
               messagesData.push(toolData);
             } else if (part.type === 'tool-result') {
@@ -1069,6 +1139,7 @@ export class ContextManager {
             if (toolMessage) {
               toolMessage.response = JSON.stringify(toolResultData.output);
               toolMessage.usageReport = message.usageReport || toolMessage.usageReport;
+              toolMessage.finished = true;
               const promptContext = extractPromptContextFromToolResult(toolResultData.output);
               if (promptContext) {
                 toolMessage.promptContext = promptContext;
@@ -1090,18 +1161,41 @@ export class ContextManager {
             reflectedMessage: message.reflectedMessage,
             usageReport: message.usageReport,
             promptContext: message.promptContext,
+            timestamp: message.timestamp,
           };
           messagesData.push(responseCompletedData);
         }
       } else if (message.role === 'user') {
         const content = extractTextContent(message.content);
+        const images = Array.isArray(message.content)
+          ? message.content
+              .map((part) => {
+                const p = part as { type: string; image?: string; data?: string; mediaType?: string };
+                const isImage = p.type === 'image';
+                const isFileImage = p.type === 'file' && (p.mediaType || '').startsWith('image/');
+                if (isImage && typeof p.image === 'string') {
+                  const data = p.image;
+                  const mediaType = p.mediaType || 'image/png';
+                  return data.startsWith('data:') ? data : `data:${mediaType};base64,${data}`;
+                }
+                if (isFileImage && typeof p.data === 'string') {
+                  const data = p.data;
+                  const mediaType = p.mediaType || 'image/png';
+                  return data.startsWith('data:') ? data : `data:${mediaType};base64,${data}`;
+                }
+                return undefined;
+              })
+              .filter((v): v is string => v !== undefined)
+          : undefined;
         const userMessageData: UserMessageData = {
           type: 'user',
           id: message.id || uuidv4(),
           baseDir: this.task.getProjectDir(),
           taskId: this.taskId,
           content: content,
+          images: images && images.length > 0 ? images : undefined,
           promptContext: message.promptContext,
+          timestamp: message.timestamp,
         };
         messagesData.push(userMessageData);
       } else if (message.role === 'tool' && Array.isArray(message.content)) {

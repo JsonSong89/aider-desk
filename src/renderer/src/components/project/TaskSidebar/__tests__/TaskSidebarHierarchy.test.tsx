@@ -5,7 +5,7 @@ import { TaskData } from '@common/types';
 import { TaskSidebar } from '../TaskSidebar';
 
 import { render } from '@/__tests__/render';
-import { useTaskState, EMPTY_TASK_STATE } from '@/stores/taskStore';
+import { useOptimizedTaskState, EMPTY_TASK_STATE } from '@/stores/taskStore';
 
 // Mock @tanstack/react-virtual
 vi.mock('@tanstack/react-virtual', () => ({
@@ -34,15 +34,15 @@ vi.mock('react-i18next', () => ({
 
 // Mock useTaskState from taskStore
 vi.mock('@/stores/taskStore', () => ({
+  useOptimizedTaskState: vi.fn(() => EMPTY_TASK_STATE),
   useTaskState: vi.fn(),
+  useTaskQuestion: vi.fn(() => null),
   EMPTY_TASK_STATE: {
     loading: false,
     loaded: false,
     tokensInfo: null,
     question: null,
     todoItems: [],
-    allFiles: [],
-    autocompletionWords: [],
     aiderTotalCost: 0,
     contextFiles: [],
     aiderModelsData: null,
@@ -87,7 +87,7 @@ describe('TaskSidebar Hierarchy', () => {
   ] as TaskData[];
 
   beforeEach(() => {
-    vi.mocked(useTaskState).mockReturnValue(EMPTY_TASK_STATE);
+    vi.mocked(useOptimizedTaskState).mockReturnValue(EMPTY_TASK_STATE);
     localStorage.clear();
   });
 

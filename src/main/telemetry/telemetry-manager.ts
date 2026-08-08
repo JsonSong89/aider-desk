@@ -3,7 +3,7 @@ import { AgentProfile, Mode, SettingsData, TaskData } from '@common/types';
 
 import { Store } from '@/store';
 import logger from '@/logger';
-import { POSTHOG_PUBLIC_API_KEY, POSTHOG_HOST } from '@/constants';
+import { POSTHOG_PUBLIC_API_KEY, POSTHOG_HOST, APP_TYPE } from '@/constants';
 import { getElectronApp } from '@/app';
 
 export class TelemetryManager {
@@ -36,6 +36,11 @@ export class TelemetryManager {
     try {
       await import('./open-telemetry');
 
+      if (!POSTHOG_PUBLIC_API_KEY) {
+        logger.info('TelemetryManager skipped: POSTHOG_PUBLIC_API_KEY not configured.');
+        return;
+      }
+
       const app = getElectronApp();
       this.client = new PostHog(POSTHOG_PUBLIC_API_KEY, {
         host: POSTHOG_HOST,
@@ -46,6 +51,7 @@ export class TelemetryManager {
         properties: {
           os: process.platform,
           version: app?.getVersion(),
+          appType: APP_TYPE,
         },
       });
     } catch (error) {
@@ -120,7 +126,7 @@ export class TelemetryManager {
         useTodoTools: profile.useTodoTools,
         includeContextFiles: profile.includeContextFiles,
         includeRepoMap: profile.includeRepoMap,
-        autoApprove: task?.autoApprove ?? false,
+        autonomyMode: task?.autonomyMode ?? 'guided',
         enabledMcpServersCount: profile.enabledServers.length,
         totalMcpServersCount: Object.keys(this.store.getSettings().mcpServers).length,
       },

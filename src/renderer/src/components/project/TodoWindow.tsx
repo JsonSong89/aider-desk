@@ -9,10 +9,11 @@ import { Button } from '../common/Button';
 
 import { TodoListItem } from './TodoListItem';
 
+import { useTaskTodoItems } from '@/stores/taskStore';
 import { Input } from '@/components/common/Input';
 
 type Props = {
-  todos: TodoItem[];
+  taskId: string;
   onToggleTodo?: (name: string, completed: boolean) => void;
   onAddTodo?: (name: string) => void;
   onUpdateTodo?: (name: string, updates: Partial<TodoItem>) => void;
@@ -21,8 +22,9 @@ type Props = {
   onClearAllTodos: () => void;
 };
 
-export const TodoWindow = ({ todos, onToggleTodo, onAddTodo, onUpdateTodo, onDeleteTodo, onHandoffTodo, onClearAllTodos }: Props) => {
+export const TodoWindow = ({ taskId, onToggleTodo, onAddTodo, onUpdateTodo, onDeleteTodo, onHandoffTodo, onClearAllTodos }: Props) => {
   const { t } = useTranslation();
+  const todos = useTaskTodoItems(taskId);
   const [isExpanded, setIsExpanded] = useState(true);
   const [isAddingTodo, setIsAddingTodo] = useState(false);
   const [newTodoName, setNewTodoName] = useState('');
@@ -60,13 +62,17 @@ export const TodoWindow = ({ todos, onToggleTodo, onAddTodo, onUpdateTodo, onDel
   const completedCount = todos.filter((todo) => todo.completed).length;
   const totalCount = todos.length;
 
-  // Auto-collapse when all todo items are completed
+  // Auto-collapse when all items are completed
   useEffect(() => {
     if (totalCount > 0 && completedCount === totalCount) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsExpanded(false);
     }
   }, [completedCount, totalCount]);
+
+  if (totalCount === 0) {
+    return null; // Don't render the if there are no todos
+  }
 
   return (
     <div className="absolute top-3 right-3 z-20 max-w-[360px]">

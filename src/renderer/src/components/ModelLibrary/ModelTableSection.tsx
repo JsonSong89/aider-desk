@@ -147,8 +147,12 @@ export const ModelTableSection = ({
       {
         accessor: 'id',
         header: t('modelLibrary.modelId'),
-        cell: (value) => value as ReactNode,
-        cellClassName: 'text-xs',
+        cell: (value) => (
+          <Tooltip content={String(value ?? '')} delayDuration={1000}>
+            <span className="truncate block">{String(value ?? '')}</span>
+          </Tooltip>
+        ),
+        cellClassName: 'text-xs overflow-hidden',
       },
       {
         accessor: 'providerId',
@@ -262,7 +266,7 @@ export const ModelTableSection = ({
 
           return (
             <div className="flex items-center justify-end space-x-2">
-              {!isExtension && <IconButton icon={<FiEdit2 className="w-4 h-4" />} onClick={() => onEditModel(row)} />}
+              <IconButton icon={<FiEdit2 className="w-4 h-4" />} onClick={() => onEditModel(row)} />
               <IconButton
                 icon={<FiEye className="w-4 h-4" />}
                 onClick={() => onToggleHidden(row)}

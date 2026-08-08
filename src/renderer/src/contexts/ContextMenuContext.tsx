@@ -1,4 +1,4 @@
-import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ContextMenuParams } from '@common/types';
 
@@ -47,10 +47,12 @@ export const ContextMenuProvider = ({ children }: Props) => {
     setMenuState((prev) => ({ ...prev, isVisible: false, targetElement: undefined }));
   }, []);
 
-  useClickOutside(menuRef, hideMenu);
+  useClickOutside(menuRef, hideMenu, menuState.isVisible);
+
+  const value = useMemo(() => ({ showMenu, hideMenu }), [showMenu, hideMenu]);
 
   return (
-    <ContextMenuContext.Provider value={{ showMenu, hideMenu }}>
+    <ContextMenuContext.Provider value={value}>
       {children}
       {menuState.isVisible && (
         <div
@@ -91,12 +93,27 @@ export const useContextMenu = () => {
 
   useEffect(() => {
     const handleContextMenu = (params: ContextMenuParams) => {
-      const { x, y, selectionText, isEditable } = params;
+      const { x, y, selectionText, isEditable, linkURL } = params;
 
       // Capture the target element when context menu is triggered
       const targetElement = document.elementFromPoint(x, y);
 
       const options: MenuOption[] = [];
+
+      // Show copy link option if right-clicked on a link
+      if (linkURL) {
+        options.push({
+          label: t('contextMenu.copyLink'),
+          action: async () => {
+            try {
+              await api.writeToClipboard(linkURL);
+            } catch (error) {
+              // eslint-disable-next-line no-console
+              console.error('Failed to copy link to clipboard:', error);
+            }
+          },
+        });
+      }
 
       // Always show copy option
       options.push({

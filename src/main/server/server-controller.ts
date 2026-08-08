@@ -21,8 +21,9 @@ import {
   TerminalApi,
   ExtensionsApi,
   SkillsApi,
+  ReadonlyApi,
 } from '@/server/rest-api';
-import { AUTH_PASSWORD, AUTH_USERNAME, SERVER_PORT } from '@/constants';
+import { AUTH_PASSWORD, AUTH_USERNAME, READONLY_MODE, SERVER_PORT } from '@/constants';
 import logger from '@/logger';
 import { ProjectManager } from '@/project';
 import { EventsHandler } from '@/events-handler';
@@ -36,6 +37,11 @@ const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 export class ServerController {
   private readonly app = express();
   private isStarted = false;
+  private readonlyReady = !READONLY_MODE;
+
+  private get isReadonlyMode(): boolean {
+    return READONLY_MODE || this.store.getSettings().server.readonly === true;
+  }
 
   constructor(
     private readonly server: Server,
@@ -47,7 +53,12 @@ export class ServerController {
     this.init();
   }
 
-  private serverGuardMiddleware(_: Request, res: Response, next: NextFunction): void {
+  private serverGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
+    // Always allow health check regardless of server.enabled setting
+    if (req.path === '/api/health') {
+      next();
+      return;
+    }
     // In headless mode, always allow requests regardless of server.enabled setting
     if (process.env.AIDER_DESK_HEADLESS === 'true' || this.isStarted) {
       next();
@@ -59,6 +70,12 @@ export class ServerController {
   }
 
   private timeoutMiddleware(req: Request, res: Response, next: NextFunction): void {
+    // Skip timeout for SSE responses (Accept: text/event-stream)
+    if (req.accepts('text/event-stream')) {
+      next();
+      return;
+    }
+
     req.setTimeout(REQUEST_TIMEOUT_MS, () => {
       res.status(504).json({ error: 'Request timeout' });
     });
@@ -102,6 +119,25 @@ export class ServerController {
   }
 
   private setupApiRoutes(): void {
+    const readonlyRouter = express.Router();
+    new ReadonlyApi(this.projectManager, this.eventsHandler, this.store, () => this.readonlyReady).registerRoutes(readonlyRouter);
+    this.app.use('/api/readonly', readonlyRouter);
+
+    this.app.use('/api', (req, res, next) => {
+      if (req.path === '/health' || req.path.startsWith('/readonly')) {
+        next();
+        return;
+      }
+      if (this.isReadonlyMode) {
+        res.status(403).json({
+          error: 'This action is unavailable in readonly mode.',
+          code: 'READ_ONLY_MODE',
+        });
+        return;
+      }
+      next();
+    });
+
     // Create API router
     const apiRouter = express.Router();
 
@@ -132,7 +168,6 @@ export class ServerController {
   }
 
   private init() {
-    // Configure Express
     this.app.use(express.json({ limit: '50mb' }));
     this.setupCors();
 
@@ -160,7 +195,11 @@ export class ServerController {
 
       this.app.use(express.static(rendererDir));
       // Handle SPA routing: serve index.html for non-API routes
-      this.app.get('*', (_, res) => {
+      this.app.get('*', (req, res) => {
+        if (this.isReadonlyMode && req.path !== '/') {
+          res.redirect('/#/readonly');
+          return;
+        }
         res.sendFile(path.join(rendererDir, 'index.html'));
       });
     }
@@ -169,6 +208,10 @@ export class ServerController {
     this.server.on('request', this.app);
 
     this.isStarted = this.store.getSettings().server.enabled;
+  }
+
+  setReadonlyReady(): void {
+    this.readonlyReady = true;
   }
 
   async close() {

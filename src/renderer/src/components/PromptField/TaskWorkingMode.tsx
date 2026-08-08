@@ -1,32 +1,38 @@
-import { TaskData, WorkingMode } from '@common/types';
-import { useState } from 'react';
+import { SwitchToLocalOptions, SwitchToWorktreeOptions, TaskData, WorkingMode, WorktreeUncommittedFiles } from '@common/types';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { AiFillFolderOpen } from 'react-icons/ai';
 import { IoGitBranch } from 'react-icons/io5';
+import { MdClose } from 'react-icons/md';
+import { CgSpinner } from 'react-icons/cg';
 import { useTranslation } from 'react-i18next';
 
-import { ItemConfig, ItemSelector } from '@/components/common/ItemSelector';
+import { Button } from '@/components/common/Button';
+import { IconButton } from '@/components/common/IconButton';
 import { useResponsive } from '@/hooks/useResponsive';
 import { WorktreeMergeButton } from '@/components/project/WorktreeMergeButton';
 import { WorktreeRevertButton } from '@/components/project/WorktreeRevertButton';
-import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { BaseDialog } from '@/components/common/BaseDialog';
+import { RadioButton } from '@/components/common/RadioButton';
 import { WorktreeStatusBadges } from '@/components/project/WorktreeStatusBadges';
 import { useApi } from '@/contexts/ApiContext';
 import { useWorktreeIntegrationStatus } from '@/hooks/useWorktreeIntegrationStatus';
+import { useCommitChanges } from '@/hooks/useCommitChanges';
+import { useProjectTasks } from '@/stores/projectStore';
 
-const WORKING_MODE_ITEMS: ItemConfig<WorkingMode>[] = [
-  {
-    value: 'local',
-    icon: AiFillFolderOpen,
-    labelKey: 'workingMode.local',
-    tooltipKey: 'workingModeTooltip.local',
-  },
-  {
-    value: 'worktree',
-    icon: IoGitBranch,
-    labelKey: 'workingMode.worktree',
-    tooltipKey: 'workingModeTooltip.worktree',
-  },
-];
+enum LocalSwitchOption {
+  Merge = 'merge',
+  MergeAll = 'mergeAll',
+  Remove = 'remove',
+}
+
+enum WorktreeSwitchOption {
+  JustSwitch = 'justSwitch',
+  CarryOverRemove = 'carryOverRemove',
+  CarryOverKeep = 'carryOverKeep',
+}
+
+const LOCAL_MODE_ICON = AiFillFolderOpen;
+const WORKTREE_MODE_ICON = IoGitBranch;
 
 type Props = {
   task: TaskData;
@@ -58,48 +64,165 @@ export const TaskWorkingMode = ({
   const { isMobile } = useResponsive();
   const { t } = useTranslation();
   const api = useApi();
+  const allTasks = useProjectTasks(task.baseDir);
   const [isSwitching, setIsSwitching] = useState(false);
   const [showConfirmLocal, setShowConfirmLocal] = useState(false);
+  const [showConfirmWorktree, setShowConfirmWorktree] = useState(false);
+  const [localOption, setLocalOption] = useState<LocalSwitchOption>(LocalSwitchOption.Merge);
+  const [worktreeOption, setWorktreeOption] = useState<WorktreeSwitchOption>(WorktreeSwitchOption.JustSwitch);
+  const [localUncommittedFiles, setLocalUncommittedFiles] = useState<WorktreeUncommittedFiles | null>(null);
   const isWorktree = task.workingMode === 'worktree';
   const { worktreeStatus, refreshStatus: handleRefresh } = useWorktreeIntegrationStatus(task.baseDir, task.id, isWorktree);
+  const { isCommitting, cancelCommit } = useCommitChanges(task.baseDir, task.id);
 
-  const handleWorkingModeChanged = async (mode: WorkingMode) => {
-    if (mode === 'local' && task.workingMode === 'worktree' && worktreeStatus) {
-      const hasUncommitted = worktreeStatus.uncommittedFiles.count > 0;
-      const hasUnmerged = worktreeStatus.aheadCommits.count > 0;
+  const isWorktreeShared = useMemo(() => {
+    if (!task.worktree?.path) {
+      return false;
+    }
+    return allTasks.some((t) => t.id !== task.id && t.workingMode === 'worktree' && t.worktree?.path === task.worktree!.path);
+  }, [allTasks, task.id, task.worktree]);
 
-      if (hasUncommitted || hasUnmerged) {
-        setShowConfirmLocal(true);
-        return;
+  useEffect(() => {
+    let cancelled = false;
+    if (task.workingMode !== 'local') {
+      setLocalUncommittedFiles(null);
+      return;
+    }
+    api
+      .getLocalUncommittedFiles(task.baseDir, task.id)
+      .then((files) => {
+        if (!cancelled) {
+          setLocalUncommittedFiles(files);
+        }
+      })
+      .catch((error) => {
+        // eslint-disable-next-line no-console
+        console.error('Failed to check local uncommitted files:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, task.baseDir, task.id, task.workingMode]);
+
+  const hasWorktreeChanges = Boolean(worktreeStatus && (worktreeStatus.uncommittedFiles.count > 0 || worktreeStatus.aheadCommits.count > 0));
+  const hasLocalChanges = Boolean(localUncommittedFiles && localUncommittedFiles.count > 0);
+  const willShowConfirmDialog = isWorktree ? hasWorktreeChanges : hasLocalChanges;
+
+  const performSwitch = useCallback(
+    async (mode: WorkingMode) => {
+      setIsSwitching(true);
+      try {
+        if (mode === 'local') {
+          await api.switchToLocalWorkingMode(task.baseDir, task.id);
+        } else {
+          await api.switchToWorktreeWorkingMode(task.baseDir, task.id);
+        }
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to update task:', error);
+      } finally {
+        setIsSwitching(false);
+        setShowConfirmLocal(false);
+        setShowConfirmWorktree(false);
       }
-    }
+    },
+    [api, task.baseDir, task.id],
+  );
 
-    await performSwitch(mode);
-  };
+  const handleWorkingModeChanged = useCallback(
+    async (mode: WorkingMode) => {
+      if (mode === 'local' && task.workingMode === 'worktree' && worktreeStatus) {
+        const hasUncommitted = worktreeStatus.uncommittedFiles.count > 0;
+        const hasUnmerged = worktreeStatus.aheadCommits.count > 0;
 
-  const performSwitch = async (mode: WorkingMode) => {
-    setIsSwitching(true);
-    try {
-      await api.updateTask(task.baseDir, task.id, { workingMode: mode });
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to update task:', error);
-    } finally {
-      setIsSwitching(false);
-      setShowConfirmLocal(false);
-    }
-  };
+        if (hasUncommitted || hasUnmerged) {
+          setLocalOption(LocalSwitchOption.Merge);
+          setShowConfirmLocal(true);
+          return;
+        }
+      }
+
+      if (mode === 'worktree' && task.workingMode === 'local') {
+        try {
+          const uncommittedFiles = await api.getLocalUncommittedFiles(task.baseDir, task.id);
+          if (uncommittedFiles.count > 0) {
+            setLocalUncommittedFiles(uncommittedFiles);
+            setWorktreeOption(WorktreeSwitchOption.JustSwitch);
+            setShowConfirmWorktree(true);
+            return;
+          }
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error('Failed to check local uncommitted files:', error);
+        }
+      }
+
+      await performSwitch(mode);
+    },
+    [task.workingMode, task.baseDir, task.id, worktreeStatus, api, performSwitch],
+  );
 
   const performMergeAndSwitch = async () => {
     setIsSwitching(true);
     try {
-      await api.mergeAndSwitchToLocal(task.baseDir, task.id, worktreeStatus?.targetBranch);
+      const options: SwitchToLocalOptions = { mergeBeforeSwitch: true, targetBranch: worktreeStatus?.targetBranch };
+      await api.switchToLocalWorkingMode(task.baseDir, task.id, options);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to merge and switch:', error);
     } finally {
       setIsSwitching(false);
       setShowConfirmLocal(false);
+    }
+  };
+
+  const performMergeAndSwitchAll = async () => {
+    setIsSwitching(true);
+    try {
+      const options: SwitchToLocalOptions = { mergeBeforeSwitch: true, targetBranch: worktreeStatus?.targetBranch, switchAllInWorktree: true };
+      await api.switchToLocalWorkingMode(task.baseDir, task.id, options);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to merge and switch all:', error);
+    } finally {
+      setIsSwitching(false);
+      setShowConfirmLocal(false);
+    }
+  };
+
+  const handleLocalConfirm = async () => {
+    if (localOption === LocalSwitchOption.Remove) {
+      await performSwitch('local');
+    } else if (localOption === LocalSwitchOption.MergeAll) {
+      await performMergeAndSwitchAll();
+    } else {
+      await performMergeAndSwitch();
+    }
+  };
+
+  const handleWorktreeConfirm = async () => {
+    if (worktreeOption === WorktreeSwitchOption.JustSwitch) {
+      await performSwitch('worktree');
+    } else {
+      const dropSource = worktreeOption === WorktreeSwitchOption.CarryOverRemove;
+      await performSwitchToWorktreeWithChanges(dropSource);
+    }
+  };
+
+  const performSwitchToWorktreeWithChanges = async (dropSourceChanges: boolean) => {
+    setIsSwitching(true);
+    try {
+      const options: SwitchToWorktreeOptions = {
+        carryOverUncommittedChanges: true,
+        dropSourceChanges,
+      };
+      await api.switchToWorktreeWorkingMode(task.baseDir, task.id, options);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to switch to worktree with changes:', error);
+    } finally {
+      setIsSwitching(false);
+      setShowConfirmWorktree(false);
     }
   };
 
@@ -122,9 +245,32 @@ export const TaskWorkingMode = ({
     return warnings.join('\n');
   };
 
+  const handleSwitchToLocal = () => {
+    handleWorkingModeChanged('local');
+  };
+
+  const handleSwitchToWorktree = () => {
+    handleWorkingModeChanged('worktree');
+  };
+
+  const handleCancelCommit = () => {
+    cancelCommit();
+  };
+
   return (
     <div className="flex items-center gap-1 max-h-5">
-      {isSwitching ? (
+      {isCommitting ? (
+        <span className="flex items-center gap-1 text-2xs text-text-secondary">
+          <CgSpinner className="w-3 h-3 animate-spin mb-[2px] mr-0.5" />
+          {t('contextFiles.committing')}
+          <IconButton
+            icon={<MdClose className="w-3 h-3" />}
+            onClick={handleCancelCommit}
+            tooltip={t('contextFiles.cancelCommit')}
+            className="p-1 rounded-md transition-colors hover:bg-bg-tertiary hover:text-error text-text-muted"
+          />
+        </span>
+      ) : isSwitching ? (
         <span className="text-2xs">{t('workingMode.switching')}</span>
       ) : (
         <>
@@ -152,32 +298,156 @@ export const TaskWorkingMode = ({
               />
             </>
           )}
-          <ItemSelector
-            items={WORKING_MODE_ITEMS}
-            selectedValue={task.workingMode!}
-            onChange={handleWorkingModeChanged}
-            popupPlacement="bottom-right"
-            minWidth={120}
-            iconOnly={isMobile}
-          />
+          {task.workingMode === 'worktree' ? (
+            <Button size="xs" variant="text" color="tertiary" onClick={handleSwitchToLocal} tooltip={t('workingMode.switchToLocalTooltip')}>
+              <LOCAL_MODE_ICON className="w-3.5 h-3.5" />
+              {!isMobile && (
+                <span className="text-2xs ml-1">
+                  {t('workingMode.switchToLocal')}
+                  {willShowConfirmDialog ? '...' : ''}
+                </span>
+              )}
+            </Button>
+          ) : (
+            <Button size="xs" variant="text" color="tertiary" onClick={handleSwitchToWorktree} tooltip={t('workingMode.switchToWorktreeTooltip')}>
+              <WORKTREE_MODE_ICON className="w-3.5 h-3.5" />
+              {!isMobile && (
+                <span className="text-2xs ml-1">
+                  {t('workingMode.switchToWorktree')}
+                  {willShowConfirmDialog ? '...' : ''}
+                </span>
+              )}
+            </Button>
+          )}
         </>
       )}
       {showConfirmLocal && (
-        <ConfirmDialog
+        <BaseDialog
           title={t('workingMode.confirmLocalTitle')}
-          onConfirm={() => performSwitch('local')}
-          onCancel={() => setShowConfirmLocal(false)}
-          confirmButtonText={t('workingMode.confirmLocalAction')}
-          confirmButtonColor="danger"
+          onClose={() => setShowConfirmLocal(false)}
           width={600}
-          additionalAction={{
-            label: t('workingMode.mergeAndSwitchAction'),
-            onClick: performMergeAndSwitch,
-            color: 'primary',
-          }}
+          closeOnEscape={false}
+          footer={
+            <>
+              <Button onClick={() => setShowConfirmLocal(false)} variant="text">
+                {t('common.cancel')}
+              </Button>
+              <Button onClick={handleLocalConfirm} autoFocus variant="contained" color="primary">
+                {t('common.ok')}
+              </Button>
+            </>
+          }
         >
-          <div className="whitespace-pre-wrap text-xs">{t('workingMode.confirmLocalMessage', { warnings: getWarningMessage() })}</div>
-        </ConfirmDialog>
+          <div className="space-y-4">
+            <div className="whitespace-pre-wrap text-xs">{t('workingMode.confirmLocalMessage', { warnings: getWarningMessage() })}</div>
+            <div className="space-y-3">
+              <RadioButton
+                id="local-merge"
+                name="local-switch-option"
+                value="merge"
+                checked={localOption === LocalSwitchOption.Merge}
+                onChange={() => setLocalOption(LocalSwitchOption.Merge)}
+                label={
+                  <div>
+                    <div className="font-medium">{t('workingMode.localOptionMergeLabel')}</div>
+                    <div className="text-text-muted text-2xs mt-0.5">{t('workingMode.localOptionMergeDescription')}</div>
+                  </div>
+                }
+              />
+              {isWorktreeShared && (
+                <RadioButton
+                  id="local-merge-all"
+                  name="local-switch-option"
+                  value="mergeAll"
+                  checked={localOption === LocalSwitchOption.MergeAll}
+                  onChange={() => setLocalOption(LocalSwitchOption.MergeAll)}
+                  label={
+                    <div>
+                      <div className="font-medium">{t('workingMode.localOptionMergeAllLabel')}</div>
+                      <div className="text-text-muted text-2xs mt-0.5">{t('workingMode.localOptionMergeAllDescription')}</div>
+                    </div>
+                  }
+                />
+              )}
+              <RadioButton
+                id="local-remove"
+                name="local-switch-option"
+                value="remove"
+                checked={localOption === LocalSwitchOption.Remove}
+                onChange={() => setLocalOption(LocalSwitchOption.Remove)}
+                label={
+                  <div>
+                    <div className="font-medium">{t('workingMode.localOptionRemoveLabel')}</div>
+                    <div className="text-text-muted text-2xs mt-0.5">{t('workingMode.localOptionRemoveDescription')}</div>
+                  </div>
+                }
+              />
+            </div>
+          </div>
+        </BaseDialog>
+      )}
+      {showConfirmWorktree && (
+        <BaseDialog
+          title={t('workingMode.confirmWorktreeTitle')}
+          onClose={() => setShowConfirmWorktree(false)}
+          width={600}
+          closeOnEscape={false}
+          footer={
+            <>
+              <Button onClick={() => setShowConfirmWorktree(false)} variant="text">
+                {t('common.cancel')}
+              </Button>
+              <Button onClick={handleWorktreeConfirm} autoFocus variant="contained" color="primary">
+                {t('common.ok')}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <div className="whitespace-pre-wrap text-xs">{t('workingMode.confirmWorktreeMessage', { count: localUncommittedFiles?.count ?? 0 })}</div>
+            <div className="space-y-3">
+              <RadioButton
+                id="worktree-just-switch"
+                name="worktree-switch-option"
+                value="justSwitch"
+                checked={worktreeOption === WorktreeSwitchOption.JustSwitch}
+                onChange={() => setWorktreeOption(WorktreeSwitchOption.JustSwitch)}
+                label={
+                  <div>
+                    <div className="font-medium">{t('workingMode.worktreeOptionJustSwitchLabel')}</div>
+                    <div className="text-text-muted text-2xs mt-0.5">{t('workingMode.worktreeOptionJustSwitchDescription')}</div>
+                  </div>
+                }
+              />
+              <RadioButton
+                id="worktree-carry-remove"
+                name="worktree-switch-option"
+                value="carryOverRemove"
+                checked={worktreeOption === WorktreeSwitchOption.CarryOverRemove}
+                onChange={() => setWorktreeOption(WorktreeSwitchOption.CarryOverRemove)}
+                label={
+                  <div>
+                    <div className="font-medium">{t('workingMode.worktreeOptionCarryOverRemoveLabel')}</div>
+                    <div className="text-text-muted text-2xs mt-0.5">{t('workingMode.worktreeOptionCarryOverRemoveDescription')}</div>
+                  </div>
+                }
+              />
+              <RadioButton
+                id="worktree-carry-keep"
+                name="worktree-switch-option"
+                value="carryOverKeep"
+                checked={worktreeOption === WorktreeSwitchOption.CarryOverKeep}
+                onChange={() => setWorktreeOption(WorktreeSwitchOption.CarryOverKeep)}
+                label={
+                  <div>
+                    <div className="font-medium">{t('workingMode.worktreeOptionCarryOverKeepLabel')}</div>
+                    <div className="text-text-muted text-2xs mt-0.5">{t('workingMode.worktreeOptionCarryOverKeepDescription')}</div>
+                  </div>
+                }
+              />
+            </div>
+          </div>
+        </BaseDialog>
       )}
     </div>
   );

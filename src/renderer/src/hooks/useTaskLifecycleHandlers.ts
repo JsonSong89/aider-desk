@@ -1,25 +1,23 @@
 import { useCallback, useEffect } from 'react';
-import { useStoreWithEqualityFn } from 'zustand/traditional';
-import { shallow } from 'zustand/vanilla/shallow';
 
 import type { ClearTaskData } from '@common/types';
 
 import { useApi } from '@/contexts/ApiContext';
-import { useTaskStore } from '@/stores/taskStore';
+import { clearSession, setMessages } from '@/stores/taskStore';
 
 export const useTaskLifecycleHandlers = (baseDir: string, taskId: string) => {
   const api = useApi();
-  const clearSession = useStoreWithEqualityFn(useTaskStore, (storeState) => storeState.clearSession, shallow);
 
   const handleClearProject = useCallback(
     ({ clearMessages: messages, clearSession: session }: ClearTaskData) => {
+      if (messages) {
+        setMessages(taskId, () => []);
+      }
       if (session) {
-        clearSession(taskId, false);
-      } else if (messages) {
-        clearSession(taskId, true);
+        clearSession(taskId);
       }
     },
-    [taskId, clearSession],
+    [taskId],
   );
 
   useEffect(() => {

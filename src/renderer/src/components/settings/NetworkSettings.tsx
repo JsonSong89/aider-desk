@@ -50,6 +50,16 @@ export const NetworkSettings = ({ settings, setSettings }: Props) => {
     });
   };
 
+  const handleNoProxyChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setSettings({
+      ...settings,
+      proxy: {
+        ...settings.proxy,
+        noProxy: e.target.value,
+      },
+    });
+  };
+
   useEffect(() => {
     const loadTunnelStatus = async () => {
       if (isServerRunning) {
@@ -107,6 +117,26 @@ export const NetworkSettings = ({ settings, setSettings }: Props) => {
       setIsLoading(false);
       setOperation(null);
     }
+  };
+
+  const handleReadonlyChange = (checked: boolean) => {
+    setSettings({
+      ...settings,
+      server: {
+        ...settings.server,
+        readonly: checked,
+      },
+    });
+  };
+
+  const handleReadonlyExtensionUiChange = (checked: boolean) => {
+    setSettings({
+      ...settings,
+      server: {
+        ...settings.server,
+        readonlyExtensionUi: checked,
+      },
+    });
   };
 
   const handleBasicAuthEnabledChange = (checked: boolean) => {
@@ -248,13 +278,27 @@ export const NetworkSettings = ({ settings, setSettings }: Props) => {
           <p className="text-xs text-text-muted mt-2">{t('settings.network.enableProxyDescription')}</p>
         </div>
         {settings.proxy.enabled && (
-          <Input
-            label={<div className="text-xs">{t('settings.network.proxyUrl')}</div>}
-            value={settings.proxy.url}
-            onChange={handleProxyUrlChange}
-            type="text"
-            placeholder={t('settings.network.proxyUrlPlaceholder')}
-          />
+          <>
+            <Input
+              label={<div className="text-xs">{t('settings.network.proxyUrl')}</div>}
+              value={settings.proxy.url}
+              onChange={handleProxyUrlChange}
+              type="text"
+              placeholder={t('settings.network.proxyUrlPlaceholder')}
+            />
+            <Input
+              label={
+                <div className="flex items-center">
+                  <span className="text-xs">{t('settings.network.noProxy')}</span>
+                  <InfoIcon tooltip={t('settings.network.noProxyDescription')} />
+                </div>
+              }
+              value={settings.proxy.noProxy}
+              onChange={handleNoProxyChange}
+              type="text"
+              placeholder={t('settings.network.noProxyPlaceholder')}
+            />
+          </>
         )}
       </div>
     </Section>
@@ -300,8 +344,8 @@ export const NetworkSettings = ({ settings, setSettings }: Props) => {
       {renderProxySection()}
 
       <Section id="network-server" title={t('settings.tabs.server')}>
-        <div className="p-4 space-y-6">
-          <div className="space-y-4">
+        <div className="p-4 space-y-3">
+          <div className="space-y-3">
             <div className="flex items-center">
               <Checkbox
                 label={t('settings.server.enableBasicAuth')}
@@ -312,7 +356,7 @@ export const NetworkSettings = ({ settings, setSettings }: Props) => {
               <InfoIcon tooltip={t('settings.server.enableBasicAuthDescription')} />
             </div>
             {settings.server.basicAuth.enabled && (
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-4 pb-3">
                 <Input
                   label={<div className="text-xs">{t('settings.server.username')}</div>}
                   value={settings.server.basicAuth.username}
@@ -330,6 +374,27 @@ export const NetworkSettings = ({ settings, setSettings }: Props) => {
               </div>
             )}
           </div>
+
+          <div className="flex items-center">
+            <Checkbox
+              label={t('settings.server.enableReadonly')}
+              checked={settings.server.readonly}
+              onChange={handleReadonlyChange}
+              disabled={isServerRunning}
+            />
+            <InfoIcon tooltip={t('settings.server.enableReadonlyDescription')} />
+          </div>
+
+          {settings.server.readonly && (
+            <div className="flex items-center pl-6">
+              <Checkbox
+                label={t('settings.server.enableReadonlyExtensionUi')}
+                checked={settings.server.readonlyExtensionUi ?? true}
+                onChange={handleReadonlyExtensionUiChange}
+              />
+              <InfoIcon tooltip={t('settings.server.enableReadonlyExtensionUiDescription')} />
+            </div>
+          )}
 
           <div className="space-y-2">
             <div className="flex items-center justify-between p-3 bg-bg-secondary rounded-md">

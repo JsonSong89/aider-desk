@@ -1,17 +1,15 @@
 import '@/themes/themes.scss';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { HashRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ToastContainer } from 'react-toastify';
 import { useTranslation } from 'react-i18next';
-import { THEMES } from '@common/types';
+import { BrowserBootstrap, THEMES } from '@common/types';
 import { IconContext } from 'react-icons';
 
-import { Onboarding } from '@/pages/Onboarding';
 import { Home } from '@/pages/Home';
 import { Logs } from '@/pages/Logs';
 import { ContextMenuProvider, useContextMenu } from '@/contexts/ContextMenuContext';
-import { SettingsProvider, useSettings } from '@/contexts/SettingsContext';
 import 'react-toastify/dist/ReactToastify.css';
 import { ROUTES } from '@/utils/routes';
 import '@/i18n';
@@ -23,6 +21,11 @@ import { ModalOverlayUrlViewer } from '@/components/common/ModalOverlayUrlViewer
 import { UpdatedFilesDiff } from '@/pages/UpdatedFilesDiff';
 import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
 import { DiffsWorkerPoolProvider } from '@/contexts/DiffsWorkerPoolContext';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { ReadonlyApp } from '@/pages/ReadonlyApp';
+import { loadBrowserBootstrap } from '@/api/readonly-browser-api';
+
+const Onboarding = lazy(() => import('@/pages/Onboarding').then((module) => ({ default: module.Onboarding })));
 
 const ICON_CONTEXT_DEFAULT_VALUE: IconContext = {};
 
@@ -31,10 +34,9 @@ const ModalOverlayUrlHandler = () => {
   const api = useApi();
 
   useEffect(() => {
-    const unsubscribe = api.onModalOverlayUrl((data) => {
+    return api.onModalOverlayUrl((data) => {
       setModalOverlayUrl(data.url);
     });
-    return unsubscribe;
   }, [api]);
 
   if (!modalOverlayUrl) {
@@ -44,8 +46,26 @@ const ModalOverlayUrlHandler = () => {
   return <ModalOverlayUrlViewer url={modalOverlayUrl} onClose={() => setModalOverlayUrl(null)} />;
 };
 
+const SettingsInitializer = () => {
+  const api = useApi();
+
+  useEffect(() => {
+    void api.loadSettings().then((data) => {
+      useSettingsStore.getState().setSettingsState(data);
+    });
+
+    return api.addSettingsUpdatedListener((data) => {
+      useSettingsStore.getState().setSettingsState(data);
+    });
+  }, [api]);
+
+  return null;
+};
+
 const ThemeAndFontManager = () => {
-  const { theme, font = 'Sono', fontSize = 16 } = useSettings();
+  const theme = useSettingsStore((state) => state.theme);
+  const font = useSettingsStore((state) => state.font) ?? 'Sono';
+  const fontSize = useSettingsStore((state) => state.fontSize) ?? 16;
 
   useEffect(() => {
     // Remove all theme classes first
@@ -67,7 +87,7 @@ const ThemeAndFontManager = () => {
 const AnimatedRoutes = () => {
   const { i18n } = useTranslation();
   const location = useLocation();
-  const { settings } = useSettings();
+  const settings = useSettingsStore((state) => state.settings);
 
   useContextMenu();
 
@@ -94,7 +114,14 @@ const AnimatedRoutes = () => {
         >
           {settings && (
             <Routes location={location}>
-              <Route path={ROUTES.Onboarding} element={<Onboarding />} />
+              <Route
+                path={ROUTES.Onboarding}
+                element={
+                  <Suspense fallback={null}>
+                    <Onboarding />
+                  </Suspense>
+                }
+              />
               <Route path={ROUTES.Home} element={<Home />} />
               <Route path={ROUTES.Logs} element={<Logs />} />
               <Route path={ROUTES.Diff} element={<UpdatedFilesDiff />} />
@@ -107,7 +134,7 @@ const AnimatedRoutes = () => {
   );
 };
 
-const App = () => {
+const NormalApp = () => {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -123,20 +150,19 @@ const App = () => {
           <ApiProvider>
             <IconContext.Provider value={ICON_CONTEXT_DEFAULT_VALUE}>
               <ModelProviderProvider>
-                <SettingsProvider>
-                  <AgentsProvider>
-                    <ContextMenuProvider>
-                      <ExtensionsProvider>
-                        <DiffsWorkerPoolProvider>
-                          <ThemeAndFontManager />
-                          <AnimatedRoutes />
-                          <ToastContainer />
-                          <ModalOverlayUrlHandler />
-                        </DiffsWorkerPoolProvider>
-                      </ExtensionsProvider>
-                    </ContextMenuProvider>
-                  </AgentsProvider>
-                </SettingsProvider>
+                <SettingsInitializer />
+                <AgentsProvider>
+                  <ContextMenuProvider>
+                    <ExtensionsProvider>
+                      <DiffsWorkerPoolProvider>
+                        <ThemeAndFontManager />
+                        <AnimatedRoutes />
+                        <ToastContainer />
+                        <ModalOverlayUrlHandler />
+                      </DiffsWorkerPoolProvider>
+                    </ExtensionsProvider>
+                  </ContextMenuProvider>
+                </AgentsProvider>
               </ModelProviderProvider>
             </IconContext.Provider>
           </ApiProvider>
@@ -144,6 +170,40 @@ const App = () => {
       </Router>
     </motion.div>
   );
+};
+
+const App = () => {
+  const { t } = useTranslation();
+  const [bootstrap, setBootstrap] = useState<BrowserBootstrap | null>(null);
+  const [bootstrapLoaded, setBootstrapLoaded] = useState(Boolean(window.api));
+
+  useEffect(() => {
+    if (window.api) {
+      return;
+    }
+    void loadBrowserBootstrap()
+      .then((data) => setBootstrap(data))
+      .catch(() => setBootstrap(null))
+      .finally(() => setBootstrapLoaded(true));
+  }, []);
+
+  if (!bootstrapLoaded) {
+    return null;
+  }
+
+  if (!window.api && !bootstrap) {
+    return <div className="absolute inset-0 flex items-center justify-center text-text-muted">{t('readonly.bootstrapError')}</div>;
+  }
+
+  if (bootstrap?.mode === 'readonly') {
+    return (
+      <Router>
+        <ReadonlyApp bootstrap={bootstrap} />
+      </Router>
+    );
+  }
+
+  return <NormalApp />;
 };
 
 export default App;

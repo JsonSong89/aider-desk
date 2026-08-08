@@ -1,4 +1,4 @@
-import { ContextFile, OS, TokensInfoData, UpdatedFile, UpdatedFilesGroupMode } from '@common/types';
+import { ContextFile, OS, TokensCost, UpdatedFile, UpdatedFilesGroupMode } from '@common/types';
 import React, { Activity, useCallback, useEffect, useMemo, useState } from 'react';
 import { HiChevronDown } from 'react-icons/hi';
 import { MdDragIndicator, MdOutlineDifference, MdOutlineRefresh } from 'react-icons/md';
@@ -30,22 +30,6 @@ interface CommitGroup {
   additions: number;
   deletions: number;
 }
-
-type Props = {
-  baseDir: string;
-  taskId: string;
-  isOpen: boolean;
-  tokensInfo?: TokensInfoData | null;
-  os: OS | null;
-  contextFilesMap: Map<string, ContextFile>;
-  visitedSections: Set<string>;
-  onToggle: () => void;
-  taskName?: string;
-  editMode?: boolean;
-  isHidden?: boolean;
-  onToggleHidden?: () => void;
-  showBorderTop?: boolean;
-};
 
 const UpdatedSectionHeader = ({
   isOpen,
@@ -110,11 +94,27 @@ const UpdatedSectionHeader = ({
   );
 };
 
+type Props = {
+  baseDir: string;
+  taskId: string;
+  isOpen: boolean;
+  fileTokensInfo?: Record<string, TokensCost> | null;
+  os: OS | null;
+  contextFilesMap: Map<string, ContextFile>;
+  visitedSections: Set<string>;
+  onToggle: () => void;
+  taskName?: string;
+  editMode?: boolean;
+  isHidden?: boolean;
+  onToggleHidden?: () => void;
+  showBorderTop?: boolean;
+};
+
 export const UpdatedFilesSection = ({
   baseDir,
   taskId,
   isOpen,
-  tokensInfo,
+  fileTokensInfo,
   os,
   contextFilesMap,
   visitedSections,
@@ -236,17 +236,13 @@ export const UpdatedFilesSection = ({
     setFlatExpandedItems((prev) => Array.from(new Set([...prev, ...allFolders])));
   }, [flatTreeData]);
 
-  // Default: only the bottom-most (last) group is expanded.
-  // Only re-run when group count changes, not on every file refresh,
-  // to preserve user's manual expand/collapse choices between refreshes.
   useEffect(() => {
     if (commitGroups.length > 0) {
       setExpandedGroups([commitGroups[commitGroups.length - 1].id]);
     } else {
       setExpandedGroups([]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commitGroups.length]);
+  }, [commitGroups, commitGroups.length]);
 
   const fetchUpdatedFiles = useCallback(async () => {
     try {
@@ -452,7 +448,7 @@ export const UpdatedFilesSection = ({
                               }
                               contextFilesMap={contextFilesMap}
                               updatedFiles={group.files}
-                              tokensInfo={tokensInfo}
+                              fileTokensInfo={fileTokensInfo}
                               os={os}
                               onFileDiffClick={handleFileDiffClick}
                               onRevertFile={(filePath) => {
@@ -475,7 +471,7 @@ export const UpdatedFilesSection = ({
                         setExpandedItems={(items) => setFlatExpandedItems(typeof items === 'function' ? items(flatExpandedItems) : items)}
                         contextFilesMap={contextFilesMap}
                         updatedFiles={updatedFiles}
-                        tokensInfo={tokensInfo}
+                        fileTokensInfo={fileTokensInfo}
                         os={os}
                         onFileDiffClick={handleFileDiffClick}
                         onRevertFile={handleRevertFile}

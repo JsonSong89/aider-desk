@@ -1,16 +1,28 @@
+import os from 'os';
 import fs from 'fs/promises';
 import path from 'path';
 
 import { FSWatcher, watch } from 'chokidar';
 import debounce from 'lodash/debounce';
 import { z } from 'zod';
-import { AvailableExtension, ExtensionConfigComponent, SettingsData, SkillDefinition, ToolApprovalState } from '@common/types';
+import {
+  AvailableExtension,
+  ExtensionConfigComponent,
+  ExtensionOperationResult,
+  ExtensionToolInfo,
+  SettingsData,
+  SkillDefinition,
+  ToolApprovalState,
+} from '@common/types';
+import { TOOL_GROUP_NAME_SEPARATOR } from '@common/tools';
 import { AIDER_DESK_EXTENSIONS_REPO_URL, ProviderDefinition, Tool, UIComponentDefinition } from '@common/extensions';
+import { DEFAULT_AGENT_PROFILE } from '@common/agent';
 
 import { ExtensionLoader } from './extension-loader';
 import { ExtensionRegistry, LoadedExtension } from './extension-registry';
 import { ExtensionContextImpl } from './extension-context';
 import { ExtensionFetcher } from './extension-fetcher';
+import { ExtensionLibraryLoader } from './extension-library-loader';
 
 import type {
   AfterCommitEvent,
@@ -47,6 +59,7 @@ import type {
   SubagentStartedEvent,
   TaskClosedEvent,
   TaskCreatedEvent,
+  TaskDeletedEvent,
   TaskInitializedEvent,
   TaskPreparedEvent,
   TaskUpdatedEvent,
@@ -61,10 +74,12 @@ import type { ModelManager } from '@/models';
 import type { EventManager } from '@/events';
 import type { MemoryManager } from '@/memory/memory-manager';
 import type { TelemetryManager } from '@/telemetry';
-import type { ToolCallOptions, ToolSet } from 'ai';
+import type { ToolExecutionOptions, ToolSet } from 'ai';
 
+import { shouldUsePolling } from '@/utils/file-watch';
 import logger from '@/logger';
 import { AIDER_DESK_EXTENSIONS_DIR, AIDER_DESK_GLOBAL_EXTENSIONS_DIR } from '@/constants';
+import { ApprovalManager } from '@/agent/tools/approval-manager';
 import { Project } from '@/project';
 import { Task } from '@/task';
 
@@ -119,6 +134,7 @@ export type ExtensionEventMap = {
   onTaskInitialized: TaskInitializedEvent;
   onTaskClosed: TaskClosedEvent;
   onTaskUpdated: TaskUpdatedEvent;
+  onTaskDeleted: TaskDeletedEvent;
   onPromptStarted: PromptStartedEvent;
   onPromptFinished: PromptFinishedEvent;
   onPromptTemplate: PromptTemplateEvent;
@@ -157,6 +173,9 @@ export class ExtensionManager {
   private projectWatchers: Map<string, FSWatcher> = new Map();
   private initialized = false;
   private listeners: ExtensionsChangeListener[] = [];
+  private extensionMtimes: Map<string, number> = new Map();
+
+  private libraryLoader: ExtensionLibraryLoader;
 
   constructor(
     private readonly store: Store,
@@ -168,6 +187,7 @@ export class ExtensionManager {
   ) {
     this.loader = new ExtensionLoader();
     this.fetcher = new ExtensionFetcher();
+    this.libraryLoader = new ExtensionLibraryLoader();
   }
 
   private debouncedNotifyListeners = debounce(() => {
@@ -226,6 +246,11 @@ export class ExtensionManager {
     if (repositoriesChanged) {
       logger.debug('[Extensions] Repository list changed, refreshing extension cache');
       void this.fetcher.getAvailableExtensions(newRepositories, true);
+    }
+
+    // Re-create watchers if fileWatchMode changed
+    if (oldSettings.fileWatchMode !== newSettings.fileWatchMode) {
+      void this.restartWatchers();
     }
   }
 
@@ -338,6 +363,11 @@ export class ExtensionManager {
         return { success: false, hasUIComponents: false };
       }
 
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (stat) {
+        this.extensionMtimes.set(filePath, stat.mtimeMs);
+      }
+
       logger.info(`[Extensions] Loaded and initialized extension: ${metadata.name} v${metadata.version}${project ? ` for project ${project.baseDir}` : ''}`);
       return { success: true, hasUIComponents: loaded.instance.getUIComponents !== undefined };
     } catch (error) {
@@ -399,12 +429,95 @@ export class ExtensionManager {
     this.debouncedNotifyListeners();
   }
 
+  /**
+   * Diff-based reload: only unload/load extensions that were added, removed, or changed,
+   * rather than reloading all extensions in the directory.
+   */
+  private async reloadChangedExtensions(dir: string, project?: Project): Promise<void> {
+    const before = new Set(
+      this.registry
+        .getExtensions()
+        .filter((ext) => ext.filePath.startsWith(dir))
+        .map((ext) => ext.filePath),
+    );
+
+    const after = await this.discoverExtensionsFromDir(dir);
+
+    let reloadComponents = false;
+
+    // Unload removed extensions
+    for (const filePath of before) {
+      if (!after.includes(filePath)) {
+        logger.debug(`[Extensions] Extension removed: ${filePath}`);
+        const ext = this.registry.getExtension(filePath);
+        await this.unloadExtension(filePath);
+        if (ext?.instance.getUIComponents !== undefined) {
+          reloadComponents = true;
+        }
+      }
+    }
+
+    // Load added extensions
+    for (const filePath of after) {
+      if (!before.has(filePath)) {
+        logger.debug(`[Extensions] Extension added: ${filePath}`);
+        const { success, hasUIComponents } = await this.loadAndInitializeExtension(filePath, project);
+        if (success && hasUIComponents) {
+          reloadComponents = true;
+        }
+      }
+    }
+
+    // Reload changed extensions (file exists before and after, but mtime differs)
+    for (const filePath of after) {
+      if (!before.has(filePath)) {
+        continue;
+      }
+      const oldMtime = this.extensionMtimes.get(filePath);
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (!stat) {
+        continue;
+      }
+      if (oldMtime === undefined || stat.mtimeMs !== oldMtime) {
+        logger.debug(`[Extensions] Extension changed: ${filePath}`);
+        const ext = this.registry.getExtension(filePath);
+        await this.unloadExtension(filePath);
+        const { success, hasUIComponents } = await this.loadAndInitializeExtension(filePath, project);
+        if (success && hasUIComponents) {
+          reloadComponents = true;
+        } else if (ext?.instance.getUIComponents !== undefined) {
+          reloadComponents = true;
+        }
+      }
+    }
+
+    if (reloadComponents) {
+      this.eventManager.sendExtensionUIRefresh({
+        projectDir: project?.baseDir,
+        reloadComponents: true,
+      });
+    }
+
+    const providers = this.getProviders(project);
+    if (providers.length > 0) {
+      this.modelManager.registerExtensionProviders(providers);
+    }
+
+    this.debouncedNotifyListeners();
+  }
+
   getExtensions(projectDir?: string): LoadedExtension[] {
     return this.registry.getExtensions(projectDir);
   }
 
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  async waitForInit(): Promise<void> {
+    while (!this.initialized) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /**
@@ -488,6 +601,7 @@ export class ExtensionManager {
       }
     }
 
+    this.extensionMtimes.clear();
     this.initialized = false;
     logger.debug('[Extensions] Extension system disposed');
   }
@@ -512,8 +626,39 @@ export class ExtensionManager {
     }
 
     this.registry.unregister(filePath);
+    this.extensionMtimes.delete(filePath);
     this.modelManager.unregisterExtensionProviders(extension.id);
     logger.debug(`[Extensions] Unloaded extension: ${filePath}`);
+  }
+
+  async reloadExtension(filePath: string, project?: Project): Promise<boolean> {
+    const extension = this.findExtensionByPath(filePath);
+    if (!extension) {
+      logger.warn(`[Extensions] Cannot reload: extension not found at ${filePath}`);
+      return false;
+    }
+
+    logger.info(`[Extensions] Reloading extension: ${extension.metadata.name} (${filePath})`);
+
+    const hadUIComponents = extension.instance.getUIComponents !== undefined;
+
+    await this.unloadExtension(filePath);
+    const { success, hasUIComponents } = await this.loadAndInitializeExtension(filePath, project);
+
+    if (success && (hasUIComponents || hadUIComponents)) {
+      this.eventManager.sendExtensionUIRefresh({
+        projectDir: project?.baseDir,
+        reloadComponents: true,
+      });
+    }
+
+    const providers = this.getProviders(project);
+    if (providers.length > 0) {
+      this.modelManager.registerExtensionProviders(providers);
+    }
+
+    this.debouncedNotifyListeners();
+    return success;
   }
 
   private findExtensionByPath(filePath: string): LoadedExtension | undefined {
@@ -602,11 +747,14 @@ export class ExtensionManager {
 
       const watcher = watch(dir, {
         persistent: true,
-        usePolling: true,
+        usePolling: shouldUsePolling(dir, this.store.getSettings().fileWatchMode),
         ignoreInitial: true,
         ignored: (filePath: string) => {
           const basename = path.basename(filePath);
           if (basename.startsWith('.')) {
+            return true;
+          }
+          if (basename === 'node_modules') {
             return true;
           }
           if (!path.extname(filePath)) {
@@ -650,8 +798,7 @@ export class ExtensionManager {
   }
 
   private async reloadGlobalExtensions(): Promise<void> {
-    await this.unloadExtensionsForDir(AIDER_DESK_GLOBAL_EXTENSIONS_DIR);
-    await this.loadExtensionsForDir(AIDER_DESK_GLOBAL_EXTENSIONS_DIR);
+    await this.reloadChangedExtensions(AIDER_DESK_GLOBAL_EXTENSIONS_DIR);
   }
 
   private async unloadExtensionsForDir(dir: string): Promise<void> {
@@ -683,8 +830,7 @@ export class ExtensionManager {
     if (!this.projectWatchers.has(projectDir)) {
       const watcher = await this.setupWatcherForDir(projectExtensionsDir, async () => {
         logger.debug(`[Extensions] Project extensions changed for ${projectDir}, reloading...`);
-        await this.unloadExtensionsForDir(projectExtensionsDir);
-        await this.loadExtensionsForDir(projectExtensionsDir, project);
+        await this.reloadChangedExtensions(projectExtensionsDir, project);
       });
 
       if (watcher) {
@@ -705,7 +851,30 @@ export class ExtensionManager {
     }
   }
 
+  private async restartWatchers(): Promise<void> {
+    const projectDirs = Array.from(this.projectWatchers.keys());
+
+    await this.stopGlobalWatcher();
+    for (const dir of projectDirs) {
+      await this.stopProjectWatcher(dir);
+    }
+
+    await this.startHotReloadWatcher();
+    for (const dir of projectDirs) {
+      const projectExtensionsDir = path.join(dir, AIDER_DESK_EXTENSIONS_DIR);
+      const watcher = await this.setupWatcherForDir(projectExtensionsDir, async () => {
+        logger.debug(`[Extensions] Project extensions changed for ${dir}, reloading...`);
+        await this.reloadChangedExtensions(projectExtensionsDir);
+      });
+      if (watcher) {
+        this.projectWatchers.set(dir, watcher);
+      }
+    }
+  }
+
   private static readonly TOOL_NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+
+  private static readonly COMMAND_NAME_REGEX = /^[a-z][a-z0-9_:-]*$/;
 
   validateToolDefinition(tool: ToolDefinition): {
     isValid: boolean;
@@ -743,15 +912,57 @@ export class ExtensionManager {
     };
   }
 
-  getTools(task: Task, mode: string, profile: AgentProfile): RegisteredTool[] {
-    const collectedTools: RegisteredTool[] = [];
-    const allExtensions = this.registry.getExtensions(task.getProjectDir());
+  getToolsInfo(projectDir?: string): ExtensionToolInfo[] {
+    const allExtensions = this.registry.getExtensions(projectDir);
     const extensions = this.filterEnabledExtensions(allExtensions);
+    const result: ExtensionToolInfo[] = [];
 
     for (const loaded of extensions) {
       const { instance, metadata } = loaded;
 
       if (!instance.getTools) {
+        continue;
+      }
+
+      try {
+        const context = new ExtensionContextImpl(loaded.id, metadata.name, this.store, this.modelManager, this.eventManager, this.memoryManager);
+        const tools = instance.getTools(context, 'agent', DEFAULT_AGENT_PROFILE);
+
+        if (!Array.isArray(tools)) {
+          continue;
+        }
+
+        const toolInfos = tools.filter((tool) => tool.name && tool.description).map((tool) => ({ name: tool.name, description: tool.description }));
+
+        if (toolInfos.length > 0) {
+          result.push({
+            extensionId: loaded.id,
+            extensionName: metadata.name,
+            tools: toolInfos,
+          });
+        }
+      } catch (error) {
+        logger.error(`[Extensions] Failed to get tools info from extension '${metadata.name}':`, error);
+      }
+    }
+
+    return result;
+  }
+
+  getTools(task: Task, mode: string, profile: AgentProfile): RegisteredTool[] {
+    const collectedTools: RegisteredTool[] = [];
+    const allExtensions = this.registry.getExtensions(task.getProjectDir());
+    const extensions = this.filterEnabledExtensions(allExtensions);
+    const disabledExtensionTools = profile.disabledExtensionTools ?? [];
+
+    for (const loaded of extensions) {
+      const { instance, metadata } = loaded;
+
+      if (!instance.getTools) {
+        continue;
+      }
+
+      if (disabledExtensionTools.includes(loaded.id)) {
         continue;
       }
 
@@ -781,6 +992,11 @@ export class ExtensionManager {
             continue;
           }
 
+          const fullToolId = `${loaded.id}${TOOL_GROUP_NAME_SEPARATOR}${tool.name}`;
+          if (profile.toolApprovals?.[fullToolId] === ToolApprovalState.Never || profile.toolApprovals?.[tool.name] === ToolApprovalState.Never) {
+            continue;
+          }
+
           collectedTools.push({
             extensionId: loaded.id,
             extensionName: metadata.name,
@@ -806,12 +1022,20 @@ export class ExtensionManager {
    * @param abortSignal - Optional AbortSignal for cancellation support
    * @returns A ToolSet containing all approved extension tools
    */
-  createExtensionToolset(task: Task, mode: string, profile: AgentProfile, allTools: ToolSet, abortSignal?: AbortSignal): ToolSet {
+  createExtensionToolset(
+    task: Task,
+    mode: string,
+    profile: AgentProfile,
+    allTools: ToolSet,
+    approvalManager: ApprovalManager,
+    abortSignal?: AbortSignal,
+  ): ToolSet {
     const toolSet: ToolSet = {};
     const registeredTools = this.getTools(task, mode, profile);
 
     for (const { extensionId, extensionName, tool } of registeredTools) {
       const toolId = tool.name;
+      const fullToolId = `${extensionId}${TOOL_GROUP_NAME_SEPARATOR}${tool.name}`;
       const context = new ExtensionContextImpl(
         extensionId,
         extensionName,
@@ -823,16 +1047,32 @@ export class ExtensionManager {
         task,
       );
 
-      // Skip if tool is marked as Never approved
-      if (profile.toolApprovals?.[toolId] === ToolApprovalState.Never) {
-        logger.debug(`[Extensions] Skipping tool '${tool.name}' (marked as Never approved)`);
-        continue;
-      }
+      // Tool approval filtering is handled in getTools()
 
       toolSet[toolId] = {
         description: tool.description,
         inputSchema: tool.inputSchema,
-        execute: async (input: Record<string, unknown>, options: ToolCallOptions) => {
+        execute: async (input: Record<string, unknown>, options: ToolExecutionOptions<unknown>) => {
+          // --- Tool Approval Logic ---
+          const toolApproval = profile.toolApprovals?.[fullToolId];
+          logger.debug(
+            `[Extensions] Tool '${tool.name}' approval check: fullToolId='${fullToolId}', approval=${toolApproval}, allApprovals=${JSON.stringify(profile.toolApprovals)}`,
+          );
+          if (toolApproval === ToolApprovalState.Ask) {
+            const questionKey = fullToolId;
+            const questionText = `Approve tool ${tool.name} from ${extensionName} extension?`;
+            const questionSubject = input ? JSON.stringify(input) : undefined;
+
+            const [isApproved, userInput] = await approvalManager.handleToolApproval(fullToolId, input, questionKey, questionText, questionSubject);
+
+            if (!isApproved) {
+              logger.warn(`Tool execution denied by user: ${fullToolId}`);
+              return `Tool execution denied by user.${userInput ? ` User input: ${userInput}` : ''}`;
+            }
+            logger.debug(`Tool execution approved: ${fullToolId}`);
+          }
+          // --- End Tool Approval Logic ---
+
           const allToolsInternal = Object.entries(allTools).reduce(
             (acc, [toolId, tool]) => {
               acc[toolId] = {
@@ -842,6 +1082,7 @@ export class ExtensionManager {
                       toolCallId: '',
                       abortSignal: abortSignal || options.abortSignal,
                       messages: [],
+                      context: undefined as never,
                     });
                   } else {
                     return 'Tool does not have an execute function';
@@ -882,9 +1123,9 @@ export class ExtensionManager {
     try {
       if (!command.name) {
         errors.push('Command name must be a non-empty string');
-      } else if (!ExtensionManager.TOOL_NAME_REGEX.test(command.name)) {
+      } else if (!ExtensionManager.COMMAND_NAME_REGEX.test(command.name)) {
         errors.push(
-          `Command name '${command.name}' must start with a lowercase letter and contain only lowercase letters, numbers, hyphens, or underscores (e.g., 'generate-tests', 'my---command', 'command_name')`,
+          `Command name '${command.name}' must start with a lowercase letter and contain only lowercase letters, numbers, hyphens, underscores, or colons (e.g., 'generate-tests', 'impl:tweak', 'command_name')`,
         );
       }
 
@@ -1207,6 +1448,48 @@ export class ExtensionManager {
     return collectedComponents;
   }
 
+  getUIComponentsLibraries(project?: Project): Map<string, Record<string, string>> {
+    const librariesByExtension = new Map<string, Record<string, string>>();
+    const allExtensions = this.registry.getExtensions(project?.baseDir);
+    const extensions = this.filterEnabledExtensions(allExtensions);
+
+    for (const loaded of extensions) {
+      const { instance, initialized, metadata } = loaded;
+
+      if (!initialized || !instance.getUIComponentsLibraries) {
+        continue;
+      }
+
+      try {
+        const libraries = instance.getUIComponentsLibraries();
+
+        if (typeof libraries !== 'object' || libraries === null || Array.isArray(libraries)) {
+          logger.error(`[Extensions] Extension '${metadata.name}' getUIComponentsLibraries() did not return a Record<string, string>`);
+          continue;
+        }
+
+        const validLibs: Record<string, string> = {};
+        for (const [key, spec] of Object.entries(libraries)) {
+          if (typeof key === 'string' && typeof spec === 'string') {
+            validLibs[key] = spec;
+          }
+        }
+
+        if (Object.keys(validLibs).length > 0) {
+          librariesByExtension.set(loaded.id, validLibs);
+        }
+      } catch (error) {
+        logger.error(`[Extensions] Failed to get UI component libraries from extension '${metadata.name}':`, error);
+      }
+    }
+
+    return librariesByExtension;
+  }
+
+  async loadExtensionLibrary(librarySpec: string): Promise<string> {
+    return await this.libraryLoader.loadLibrary(librarySpec);
+  }
+
   /**
    * Check if an extension provides a settings config component.
    * Uses the dedicated getConfigComponent() method on the Extension interface.
@@ -1426,6 +1709,26 @@ export class ExtensionManager {
       errors.push('UI component must have valid jsx content');
     }
 
+    if (component.placement === 'task-message' && !component.messageFilter) {
+      errors.push('UI component with task-message placement must have a messageFilter');
+    }
+
+    if (component.messageFilter) {
+      if (typeof component.messageFilter !== 'object') {
+        errors.push('messageFilter must be an object');
+      } else {
+        if (component.messageFilter.types !== undefined && !Array.isArray(component.messageFilter.types)) {
+          errors.push('messageFilter.types must be an array');
+        }
+        if (component.messageFilter.serverName !== undefined && typeof component.messageFilter.serverName !== 'string') {
+          errors.push('messageFilter.serverName must be a string');
+        }
+        if (component.messageFilter.toolName !== undefined && typeof component.messageFilter.toolName !== 'string') {
+          errors.push('messageFilter.toolName must be a string');
+        }
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors,
@@ -1534,9 +1837,9 @@ export class ExtensionManager {
    * @param extensionId - Extension identifier
    * @param repositoryUrl - Repository URL where the extension is located
    * @param project - Optional project for project-level install
-   * @returns true if installation succeeded
+   * @returns ExtensionOperationResult indicating success or failure with error details
    */
-  async installExtension(extensionId: string, repositoryUrl: string, project?: Project): Promise<boolean> {
+  async installExtension(extensionId: string, repositoryUrl: string, project?: Project): Promise<ExtensionOperationResult> {
     const projectDir = project?.baseDir;
     try {
       logger.debug(`[Extensions] Installing extension '${extensionId}' from ${repositoryUrl} into ${projectDir ?? 'global'}`);
@@ -1574,18 +1877,42 @@ export class ExtensionManager {
         const repoDir = await this.fetcher.ensureRepoCloned(repositoryUrl);
 
         const extensionsPath = this.fetcher.getExtensionsPath(repositoryUrl, repoDir);
-        const sourcePath = path.join(extensionsPath, extension.folder);
         const targetPath = path.join(targetDir, extension.folder);
+
+        // For repo-root extensions (entire repo is the extension), use extensionsPath directly
+        // For subdirectory extensions, join with the folder name
+        let sourcePath = path.join(extensionsPath, extension.folder);
+        if (!(await this.fileExists(sourcePath))) {
+          sourcePath = extensionsPath;
+        }
 
         if (!(await this.fileExists(sourcePath))) {
           throw new Error(`Extension folder not found in repository: ${extension.folder}`);
         }
 
-        await fs.cp(sourcePath, targetPath, { recursive: true });
+        // Use temp dir for npm install to avoid triggering the watcher with
+        // hundreds of node_modules file writes
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aider-desk-ext-'));
+        const tempExtPath = path.join(tempDir, extension.folder);
 
-        if (extension.hasDependencies) {
-          logger.debug(`[Extensions] Installing dependencies for ${extension.name}...`);
-          await this.installDependencies(targetPath);
+        try {
+          await fs.cp(sourcePath, tempExtPath, { recursive: true });
+
+          // Remove .git directory if present (from cloned repos)
+          const gitDir = path.join(tempExtPath, '.git');
+          if (await this.fileExists(gitDir)) {
+            await fs.rm(gitDir, { recursive: true, force: true });
+          }
+
+          if (extension.hasDependencies) {
+            logger.debug(`[Extensions] Installing dependencies for ${extension.name} in temp dir...`);
+            await this.installDependencies(tempExtPath);
+          }
+
+          // Copy to final location — node_modules is ignored by the watcher
+          await fs.cp(tempExtPath, targetPath, { recursive: true });
+        } finally {
+          await fs.rm(tempDir, { recursive: true, force: true });
         }
 
         logger.debug(`[Extensions] Installed folder extension: ${extension.folder}`);
@@ -1595,10 +1922,10 @@ export class ExtensionManager {
 
       logger.info(`[Extensions] Successfully installed ${extension.name}`);
       this.telemetryManager.captureExtensionInstalled(extension.name, projectDir ? 'project' : 'global');
-      return true;
+      return { success: true };
     } catch (error) {
       logger.error(`[Extensions] Failed to install extension '${extensionId}':`, error);
-      return false;
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -1612,11 +1939,14 @@ export class ExtensionManager {
       const child = spawn('npm', ['install'], {
         cwd: extensionPath,
         stdio: 'inherit',
+        shell: true,
       });
 
       child.on('close', (code) => {
         if (code === 0) {
           resolve();
+        } else if (code === 127) {
+          reject(new Error('npm-not-found'));
         } else {
           reject(new Error(`npm install failed with code ${code}`));
         }
@@ -1677,9 +2007,9 @@ export class ExtensionManager {
    * @param extensionId - Extension identifier (filePath of installed extension)
    * @param repositoryUrl - Repository URL where the extension is located
    * @param project - Optional project for project-level extension
-   * @returns true if update succeeded
+   * @returns ExtensionOperationResult indicating success or failure with error details
    */
-  async updateExtension(extensionId: string, repositoryUrl: string, project?: Project): Promise<boolean> {
+  async updateExtension(extensionId: string, repositoryUrl: string, project?: Project): Promise<ExtensionOperationResult> {
     const projectDir = project?.baseDir;
     try {
       logger.debug(`[Extensions] Updating extension '${extensionId}' from ${repositoryUrl}`);
@@ -1707,8 +2037,8 @@ export class ExtensionManager {
         throw new Error('Invalid GitHub repository URL');
       }
 
-      // Unload existing extension before overwriting files
-      await this.unloadExtensionsForDir(targetDir);
+      // Unload only the extension being updated (not all extensions in the directory)
+      await this.unloadExtension(existingExtension.filePath);
 
       // Clean up old extension if the type changed (file → folder or folder → file)
       const parsedExistingPath = path.parse(existingExtension.filePath);
@@ -1724,6 +2054,8 @@ export class ExtensionManager {
         logger.debug(`[Extensions] Removed old folder extension: ${parsedExistingPath.dir}`);
       }
 
+      let entryPath: string;
+
       if (extension.type === 'single' && extension.file) {
         const url = `${githubRawBase}/${extension.file}`;
         const response = await fetch(url);
@@ -1733,39 +2065,78 @@ export class ExtensionManager {
         }
 
         const code = await response.text();
-        const targetPath = path.join(targetDir, extension.file);
-        await fs.writeFile(targetPath, code, 'utf-8');
+        entryPath = path.join(targetDir, extension.file);
+        await fs.writeFile(entryPath, code, 'utf-8');
 
         logger.debug(`[Extensions] Updated single-file extension: ${extension.file}`);
       } else if (extension.type === 'folder' && extension.folder) {
         const repoDir = await this.fetcher.ensureRepoCloned(repositoryUrl);
 
         const extensionsPath = this.fetcher.getExtensionsPath(repositoryUrl, repoDir);
-        const sourcePath = path.join(extensionsPath, extension.folder);
         const targetPath = path.join(targetDir, extension.folder);
+
+        // For repo-root extensions (entire repo is the extension), use extensionsPath directly
+        let sourcePath = path.join(extensionsPath, extension.folder);
+        if (!(await this.fileExists(sourcePath))) {
+          sourcePath = extensionsPath;
+        }
 
         if (!(await this.fileExists(sourcePath))) {
           throw new Error(`Extension folder not found in repository: ${extension.folder}`);
         }
 
-        await fs.cp(sourcePath, targetPath, { recursive: true });
+        // Use temp dir for npm install to avoid triggering the watcher
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aider-desk-ext-'));
+        const tempExtPath = path.join(tempDir, extension.folder);
 
-        const packageJsonPath = path.join(targetPath, 'package.json');
-        if (await this.fileExists(packageJsonPath)) {
-          logger.debug(`[Extensions] Installing dependencies for ${extension.name}...`);
-          await this.installDependencies(targetPath);
+        try {
+          await fs.cp(sourcePath, tempExtPath, { recursive: true });
+
+          // Remove .git directory if present (from cloned repos)
+          const gitDir = path.join(tempExtPath, '.git');
+          if (await this.fileExists(gitDir)) {
+            await fs.rm(gitDir, { recursive: true, force: true });
+          }
+
+          const packageJsonPath = path.join(tempExtPath, 'package.json');
+          if (await this.fileExists(packageJsonPath)) {
+            logger.debug(`[Extensions] Installing dependencies for ${extension.name} in temp dir...`);
+            await this.installDependencies(tempExtPath);
+          }
+
+          // Copy on top of existing directory — merges files, overwriting source
+          // files while preserving user-created files like config.json
+          await fs.cp(tempExtPath, targetPath, { recursive: true });
+        } finally {
+          await fs.rm(tempDir, { recursive: true, force: true });
         }
 
+        // Determine the entry file path
+        const indexTs = path.join(targetPath, 'index.ts');
+        const indexJs = path.join(targetPath, 'index.js');
+        entryPath = (await this.fileExists(indexTs)) ? indexTs : indexJs;
+
         logger.debug(`[Extensions] Updated folder extension: ${extension.folder}`);
+      } else {
+        throw new Error(`Unknown extension type for ${extension.name}`);
       }
 
-      await this.loadExtensionsForDir(targetDir, project);
+      // Load only the updated extension
+      const { hasUIComponents } = await this.loadAndInitializeExtension(entryPath, project);
+      if (hasUIComponents) {
+        this.eventManager.sendExtensionUIRefresh({ projectDir: project?.baseDir, reloadComponents: true });
+      }
+      const providers = this.getProviders(project);
+      if (providers.length > 0) {
+        this.modelManager.registerExtensionProviders(providers);
+      }
+      this.debouncedNotifyListeners();
 
       logger.info(`[Extensions] Successfully updated ${extension.name}`);
-      return true;
+      return { success: true };
     } catch (error) {
       logger.error(`[Extensions] Failed to update extension '${extensionId}':`, error);
-      return false;
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -1831,7 +2202,7 @@ export class ExtensionManager {
           currentEvent = { ...currentEvent, ...partialEvent };
 
           // Check for blocking
-          if ('blocked' in currentEvent && currentEvent.blocked === true) {
+          if ('blocked' in currentEvent && currentEvent.blocked) {
             logger.debug(`[Extensions] Event '${String(eventName)}' blocked by extension '${metadata.name}'`);
             break;
           }

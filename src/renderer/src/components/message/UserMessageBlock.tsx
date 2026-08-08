@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { UserMessage } from '@common/types';
 
 import { MessageBar } from './MessageBar';
+import { MessageImages } from './MessageImages';
 
 import { useParsedContent } from '@/hooks/useParsedContent';
 
@@ -15,7 +16,7 @@ type Props = {
   compact?: boolean;
   onRemove?: () => void;
   onRedo?: () => void;
-  onEdit?: (content: string) => void;
+  onEdit?: (content: string, images?: string[]) => void;
   onFork?: () => void;
   onRemoveUpTo?: () => void;
 };
@@ -26,7 +27,7 @@ export const UserMessageBlock = ({ baseDir, message, allFiles, renderMarkdown, c
 
   const handleEdit = () => {
     if (onEdit) {
-      onEdit(message.content);
+      onEdit(message.content, message.images);
     }
   };
 
@@ -43,7 +44,10 @@ export const UserMessageBlock = ({ baseDir, message, allFiles, renderMarkdown, c
           <div className="mt-[3px]">
             <FaRegUser className="text-text-tertiary w-3.5 h-3.5" />
           </div>
-          <div className="flex-grow-1 w-full overflow-hidden">{parsedContent}</div>
+          <div className="flex-grow-1 w-full overflow-hidden">
+            {parsedContent}
+            {message.images && message.images.length > 0 && <MessageImages images={message.images} />}
+          </div>
         </div>
         {!compact && (
           <MessageBar

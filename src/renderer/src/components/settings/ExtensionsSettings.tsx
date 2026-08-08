@@ -1,5 +1,6 @@
 import { AvailableExtension, InstalledExtension, ProjectData, SettingsData } from '@common/types';
-import { Activity, useEffect, useMemo, useState } from 'react';
+import { Activity, useCallback, useEffect, useMemo, useState } from 'react';
+import { useMount } from '@reactuses/core';
 import { useTranslation } from 'react-i18next';
 import { FaChevronDown, FaChevronLeft, FaChevronRight, FaPlus, FaSearch, FaSync, FaTrash } from 'react-icons/fa';
 import { AIDER_DESK_EXTENSIONS_REPO_URL } from '@common/extensions';
@@ -68,6 +69,7 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
   const [installingExtensions, setInstallingExtensions] = useState<Set<string>>(new Set());
   const [uninstallingExtensions, setUninstallingExtensions] = useState<Set<string>>(new Set());
   const [updatingExtensions, setUpdatingExtensions] = useState<Set<string>>(new Set());
+  const [reloadingExtensions, setReloadingExtensions] = useState<Set<string>>(new Set());
   const [newRepositoryUrl, setNewRepositoryUrl] = useState('');
   const [expandedRepositories, setExpandedRepositories] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
@@ -110,7 +112,7 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
 
   const projectDir = profileContext !== 'global' ? profileContext : undefined;
 
-  const loadInstalledExtensions = async () => {
+  const loadInstalledExtensions = useCallback(async () => {
     setLoadingInstalled(true);
     try {
       const extensions = await api.getInstalledExtensions(projectDir);
@@ -120,35 +122,37 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
     } finally {
       setLoadingInstalled(false);
     }
-  };
+  }, [projectDir, api, t]);
 
-  const loadAvailableExtensions = async (forceRefresh = false, repositories?: string[]) => {
-    setLoadingAvailable(true);
-    try {
-      const repos = repositories || settings.extensions?.repositories || [AIDER_DESK_EXTENSIONS_REPO_URL];
-      const extensions = await api.getAvailableExtensions(repos, forceRefresh);
-      setAvailableExtensions(extensions);
-    } catch {
-      showErrorNotification(t('settings.extensions.errors.loadAvailable'));
-    } finally {
-      setLoadingAvailable(false);
-    }
-  };
+  const loadAvailableExtensions = useCallback(
+    async (forceRefresh = false, repositories?: string[]) => {
+      setLoadingAvailable(true);
+      try {
+        const repos = repositories || settings.extensions?.repositories || [AIDER_DESK_EXTENSIONS_REPO_URL];
+        const extensions = await api.getAvailableExtensions(repos, forceRefresh);
+        setAvailableExtensions(extensions);
+      } catch {
+        showErrorNotification(t('settings.extensions.errors.loadAvailable'));
+      } finally {
+        setLoadingAvailable(false);
+      }
+    },
+    [settings.extensions?.repositories, api, t],
+  );
 
   const handleRefresh = async () => {
     await Promise.all([loadInstalledExtensions(), loadAvailableExtensions(true)]);
   };
 
+  // Re-load installed extensions when project context changes
   useEffect(() => {
     void loadInstalledExtensions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectDir]);
+  }, [loadInstalledExtensions]);
 
   // Load available extensions on initial mount only
-  useEffect(() => {
+  useMount(() => {
     void loadAvailableExtensions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
   const handleToggleDisabled = (extensionFilePath: string, isCurrentlyDisabled: boolean) => {
     const disabledExtensions = settings.extensions?.disabled || [];
@@ -189,10 +193,12 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
   const handleInstall = async (extension: AvailableExtension) => {
     setInstallingExtensions((prev) => new Set(prev).add(extension.id));
     try {
-      const success = await api.installExtension(extension.id, extension.repositoryUrl, projectDir);
-      if (success) {
+      const result = await api.installExtension(extension.id, extension.repositoryUrl, projectDir);
+      if (result.success) {
         showSuccessNotification(t('settings.extensions.success.install', { name: extension.name }));
         await loadInstalledExtensions();
+      } else if (result.error === 'npm-not-found') {
+        showErrorNotification(t('settings.extensions.errors.npmNotFound'), false);
       } else {
         showErrorNotification(t('settings.extensions.errors.install'));
       }
@@ -224,11 +230,13 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
 
     setUpdatingExtensions((prev) => new Set(prev).add(installedExtension.filePath));
     try {
-      const success = await api.updateExtension(installedExtension.filePath, extension.repositoryUrl, projectDir);
-      if (success) {
+      const result = await api.updateExtension(installedExtension.filePath, extension.repositoryUrl, projectDir);
+      if (result.success) {
         showSuccessNotification(t('settings.extensions.success.update', { name: extension.name }));
         await loadInstalledExtensions();
         await loadAvailableExtensions();
+      } else if (result.error === 'npm-not-found') {
+        showErrorNotification(t('settings.extensions.errors.npmNotFound'), false);
       } else {
         showErrorNotification(t('settings.extensions.errors.update'));
       }
@@ -238,6 +246,27 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
       setUpdatingExtensions((prev) => {
         const next = new Set(prev);
         next.delete(installedExtension.filePath);
+        return next;
+      });
+    }
+  };
+
+  const handleReload = async (extensionFilePath: string) => {
+    setReloadingExtensions((prev) => new Set(prev).add(extensionFilePath));
+    try {
+      const success = await api.reloadExtension(extensionFilePath, projectDir);
+      if (success) {
+        showSuccessNotification(t('settings.extensions.success.reload', { name: extensionFilePath }));
+        await loadInstalledExtensions();
+      } else {
+        showErrorNotification(t('settings.extensions.errors.reload'));
+      }
+    } catch {
+      showErrorNotification(t('settings.extensions.errors.reload'));
+    } finally {
+      setReloadingExtensions((prev) => {
+        const next = new Set(prev);
+        next.delete(extensionFilePath);
         return next;
       });
     }
@@ -398,10 +427,12 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
               isDisabled={disabledExtensions.includes(extension.filePath)}
               isUninstalling={uninstallingExtensions.has(extension.filePath)}
               isUpdating={updatingExtensions.has(extension.filePath)}
+              isReloading={reloadingExtensions.has(extension.filePath)}
               hasUpdate={extensionHasUpdate}
               onUpdate={availableExt ? () => handleUpdate(availableExt) : undefined}
               onToggle={handleToggleDisabled}
               onUninstall={handleUninstall}
+              onReload={handleReload}
             />
           );
         })}
@@ -469,11 +500,13 @@ export const ExtensionsSettings = ({ settings, setSettings, openProjects = [], s
             isDisabled={disabledExtensions.includes(installedExtension.filePath)}
             isUninstalling={uninstallingExtensions.has(installedExtension.filePath)}
             isUpdating={updatingExtensions.has(installedExtension.filePath)}
+            isReloading={reloadingExtensions.has(installedExtension.filePath)}
             hasUpdate={extensionHasUpdate}
             installedFilePath={installedExtension.filePath}
             onToggle={handleToggleDisabled}
             onUninstall={handleUninstall}
             onUpdate={() => handleUpdate(extension)}
+            onReload={handleReload}
           />
         );
       }

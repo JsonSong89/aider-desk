@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
-import { ContextFile, Mode, TaskData, TokensInfoData } from '@common/types';
+import { ContextFile, Mode, TaskData } from '@common/types';
 import { FiChevronDown } from 'react-icons/fi';
 
 import { FilesContextInfoContent } from '@/components/project/FilesContextInfoContent';
@@ -17,7 +17,6 @@ type Props = {
   taskId: string;
   allFiles: string[];
   contextFiles: ContextFile[];
-  tokensInfo: TokensInfoData | null;
   aiderTotalCost: number;
   maxInputTokens: number;
   clearMessages: (clearContext?: boolean) => void;
@@ -28,6 +27,7 @@ type Props = {
   task: TaskData;
   updateTask: (taskId: string, updates: Partial<TaskData>) => void;
   refreshAllFiles: (useGit?: boolean) => Promise<void>;
+  refreshContextFiles: () => Promise<void>;
 };
 
 export const MobileSidebar = ({
@@ -37,7 +37,6 @@ export const MobileSidebar = ({
   taskId,
   allFiles,
   contextFiles,
-  tokensInfo,
   aiderTotalCost,
   maxInputTokens,
   clearMessages,
@@ -48,6 +47,7 @@ export const MobileSidebar = ({
   task,
   updateTask,
   refreshAllFiles,
+  refreshContextFiles,
 }: Props) => {
   return (
     <motion.div
@@ -64,7 +64,6 @@ export const MobileSidebar = ({
           taskId={taskId}
           allFiles={allFiles}
           contextFiles={contextFiles}
-          tokensInfo={tokensInfo}
           aiderTotalCost={aiderTotalCost}
           maxInputTokens={maxInputTokens}
           clearMessages={clearMessages}
@@ -79,6 +78,7 @@ export const MobileSidebar = ({
           task={task}
           updateTask={updateTask}
           refreshAllFiles={refreshAllFiles}
+          refreshContextFiles={refreshContextFiles}
         />
       </div>
     </motion.div>

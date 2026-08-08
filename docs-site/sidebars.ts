@@ -47,6 +47,7 @@ const sidebars: SidebarsConfig = {
         "features/compact",
         "features/usage-dashboard",
         "features/aider-mcp-server",
+        "features/readonly-view",
       ],
     },
     {
@@ -112,6 +113,8 @@ const sidebars: SidebarsConfig = {
       items: [
         "advanced/docker",
         "advanced/npm-cli",
+        "advanced/cli-run",
+        "advanced/acp",
         "advanced/custom-aider-version",
         "advanced/extra-python-packages",
         "advanced/open-telemetry",

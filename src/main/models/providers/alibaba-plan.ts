@@ -1,8 +1,9 @@
-import { Model, ProviderProfile, SettingsData } from '@common/types';
+import { Model, ProviderProfile, Reasoning, SettingsData } from '@common/types';
 import { isAlibabaPlanProvider, AlibabaPlanProvider, LlmProvider } from '@common/agent';
 import { createAlibaba } from '@ai-sdk/alibaba';
 
-import type { LanguageModelV2, SharedV2ProviderOptions } from '@ai-sdk/provider';
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
+import type { LanguageModel } from 'ai';
 
 import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
 import logger from '@/logger';
@@ -75,7 +76,7 @@ const getAlibabaPlanAiderMapping = (provider: ProviderProfile, modelId: string, 
   };
 };
 
-const createAlibabaPlanLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModelV2 => {
+const createAlibabaPlanLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel => {
   const provider = profile.provider as AlibabaPlanProvider;
   let apiKey = provider.apiKey;
 
@@ -99,9 +100,13 @@ const createAlibabaPlanLlm = (profile: ProviderProfile, model: Model, settings: 
   return alibabaPlanProvider(model.id);
 };
 
-const getAlibabaPlanProviderOptions = (llmProvider: LlmProvider, model: Model): SharedV2ProviderOptions | undefined => {
+const getAlibabaPlanProviderOptions = (llmProvider: LlmProvider, model: Model, reasoning?: Reasoning): SharedV4ProviderOptions | undefined => {
   if (isAlibabaPlanProvider(llmProvider)) {
     const providerOverrides = model.providerOverrides as Partial<AlibabaPlanProvider> | undefined;
+
+    if (reasoning && reasoning !== 'provider-default') {
+      return undefined;
+    }
 
     const thinkingEnabled = providerOverrides?.thinkingEnabled ?? llmProvider.thinkingEnabled ?? true;
     const thinkingBudget = providerOverrides?.thinkingBudget ?? llmProvider.thinkingBudget ?? 8192;

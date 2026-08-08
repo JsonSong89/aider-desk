@@ -7,7 +7,7 @@ import { DEFAULT_AGENT_PROFILE, DEFAULT_AIDER_MAIN_MODEL, DEFAULT_PROVIDER_MODEL
 import { EnvironmentVariable, Model, ProjectSettings, ProviderProfile, SettingsData } from '@common/types';
 
 import logger from '@/logger';
-import { getLangfuseEnvironmentVariables } from '@/telemetry';
+import { getLangfuseEnvironmentVariables, getPostHogAiderEnvironmentVariables } from '@/telemetry';
 import { Store } from '@/store';
 
 const readEnvFile = (filePath: string): Record<string, string> | null => {
@@ -53,17 +53,18 @@ const readApiKeyFromConfFile = (filePath: string, envVarName: string): string | 
           GOOGLE_API_KEY: ['gemini', 'google'],
           OPENAI_API_KEY: ['openai'],
           ANTHROPIC_API_KEY: ['anthropic', 'anthropic-compatible'],
-          AUGMENT_API_TOKEN: ['auggie'],
           GROQ_API_KEY: ['groq'],
           ALIBABA_PLAN_API_KEY: ['alibaba-plan'],
           KIMI_PLAN_API_KEY: ['kimi-plan'],
           DEEPSEEK_API_KEY: ['deepseek'],
           OPENROUTER_API_KEY: ['openrouter'],
           CEREBRAS_API_KEY: ['cerebras'],
+          CLINE_API_KEY: ['clinepass'],
           OPENCODE_API_KEY: ['opencode'],
           REQUESTY_API_KEY: ['requesty'],
           SYNTHETIC_API_KEY: ['synthetic'],
           MISTRAL_API_KEY: ['mistral'],
+          NEURALWATT_API_KEY: ['neuralwatt'],
         };
 
         const providerNames = envVarToProviderName[envVarName] || [envVarName.replace(/_API_KEY$/, '').toLowerCase()];
@@ -280,6 +281,7 @@ export const getEnvironmentVariablesForAider = (settings: SettingsData, baseDir:
 const getTelemetryEnvironmentVariablesForAider = (settings: SettingsData, baseDir: string): Record<string, unknown> => {
   return {
     ...getLangfuseEnvironmentVariables(baseDir, settings),
+    ...getPostHogAiderEnvironmentVariables(baseDir, settings),
   };
 };
 
@@ -305,7 +307,7 @@ export const getDefaultProjectSettings = (
     modelEditFormats: {},
     currentMode: 'agent',
     agentProfileId: defaultAgentProfileId,
-    autoApproveLocked: false,
+    autonomyModeLocked: false,
     updatedFilesGroupMode: 'flat',
     disabledRuleFiles: [],
     contextSidebarSectionsOrder: [],
