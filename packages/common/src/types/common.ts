@@ -753,7 +753,6 @@ export interface SettingsData {
   };
   preferredModels: string[];
 
-  mcpServers: Record<string, McpServerConfig>;
   llmProviders: {
     openai?: OpenAiProvider;
     anthropic?: AnthropicProvider;
@@ -816,6 +815,11 @@ export interface ProvidersUpdatedData {
 
 export interface AgentProfilesUpdatedData {
   profiles: AgentProfile[];
+}
+
+export interface McpServersData {
+  global: Record<string, McpServerConfig>;
+  projectServers: Record<string, Record<string, McpServerConfig>>;
 }
 
 export interface VoiceSession {
@@ -910,6 +914,17 @@ export interface McpServerConfig {
   env?: Readonly<Record<string, string>>;
   url?: string;
   headers?: Readonly<Record<string, string>>;
+}
+
+export enum McpOAuthStatus {
+  NotRequired = 'not-required',
+  AuthenticationRequired = 'authentication-required',
+  Authorizing = 'authorizing',
+  Authenticated = 'authenticated',
+}
+
+export interface McpOAuthStatusData {
+  status: McpOAuthStatus;
 }
 
 export interface VersionsInfo {
