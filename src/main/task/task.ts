@@ -94,7 +94,7 @@ import {
   AIDER_DESK_TODOS_FILE,
   WORKTREE_BRANCH_PREFIX,
 } from '@/constants';
-import { Agent, AgentProfileManager, McpManager } from '@/agent';
+import { Agent, AgentProfileManager, McpConfigManager, McpManager } from '@/agent';
 import { findEnabledSubagent, runSubagentTask } from '@/agent/subagent';
 import { Connector } from '@/connector';
 import { DataManager } from '@/data-manager';
@@ -195,6 +195,7 @@ export class Task {
     public readonly taskId: string,
     private readonly store: Store,
     private readonly mcpManager: McpManager,
+    private readonly mcpConfigManager: McpConfigManager,
     private readonly customCommandManager: CustomCommandManager,
     private readonly agentProfileManager: AgentProfileManager,
     private readonly telemetryManager: TelemetryManager,
@@ -221,6 +222,7 @@ export class Task {
       this.store,
       this.agentProfileManager,
       this.mcpManager,
+      this.mcpConfigManager,
       this.modelManager,
       this.telemetryManager,
       this.memoryManager,
@@ -1813,7 +1815,7 @@ export class Task {
     this.findMessageConnectors('drop-file').forEach((connector) => connector.sendDropFileMessage(pathToSend, noUpdate));
   }
 
-  public async addToGit(absolutePath: string, promptContext?: PromptContext): Promise<void> {
+  public async addToGit(absolutePath: string): Promise<void> {
     if (!this.git) {
       return;
     }
@@ -1830,7 +1832,10 @@ export class Task {
       await this.updateAutocompletionData(undefined, true);
     } catch (gitError) {
       const gitErrorMessage = gitError instanceof Error ? gitError.message : String(gitError);
-      this.addLogMessage('warning', `Failed to add new file ${absolutePath} to git staging area: ${gitErrorMessage}`, false, promptContext);
+      logger.warn(`Failed to add new file ${absolutePath} to git staging area: ${gitErrorMessage}`, {
+        baseDir: this.project.baseDir,
+        taskId: this.taskId,
+      });
     }
   }
 
