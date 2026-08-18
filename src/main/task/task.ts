@@ -95,6 +95,7 @@ import {
   WORKTREE_BRANCH_PREFIX,
 } from '@/constants';
 import { Agent, AgentProfileManager, McpConfigManager, McpManager } from '@/agent';
+import { safeJsonStringify } from '@/agent/utils';
 import { findEnabledSubagent, runSubagentTask } from '@/agent/subagent';
 import { Connector } from '@/connector';
 import { DataManager } from '@/data-manager';
@@ -1159,7 +1160,9 @@ export class Task {
       const settings = this.store.getSettings();
       let state: string | null = DefaultTaskState.ReadyForReview;
 
-      if (settings.taskSettings.smartTaskState) {
+      if (this.isWaitingForApproval(agentMessages)) {
+        state = DefaultTaskState.ReadyForImplementation;
+      } else if (settings.taskSettings.smartTaskState) {
         state = await this.determineTaskState(agentMessages);
 
         // check once again after determining task state which can task some time
@@ -1226,6 +1229,23 @@ export class Task {
     }
 
     return null;
+  }
+
+  private isWaitingForApproval(resultMessages: ContextMessage[]): boolean {
+    const lastAssistantMessage = [...resultMessages].reverse().find((msg) => msg.role === MessageRole.Assistant) as ContextAssistantMessage | undefined;
+
+    if (!lastAssistantMessage) {
+      return false;
+    }
+
+    const contentText = extractTextContent(lastAssistantMessage.content);
+    const lastLine = contentText.trim().split('\n').pop();
+    if (!lastLine) {
+      return false;
+    }
+
+    const lower = lastLine.toLowerCase();
+    return lower.includes('proceed') && lower.includes('(y/n)');
   }
 
   private async determineTaskState(resultMessages: ContextMessage[]): Promise<string | null> {
@@ -2026,7 +2046,7 @@ export class Task {
           SUBAGENTS_TOOL_GROUP_NAME,
           SUBAGENTS_TOOL_RUN_TASK,
           toolInput,
-          JSON.stringify(cancelledToolMessage.content[0].output),
+          safeJsonStringify(cancelledToolMessage.content[0].output),
           undefined,
           result.promptContext,
         );
@@ -2042,7 +2062,7 @@ export class Task {
           SUBAGENTS_TOOL_GROUP_NAME,
           SUBAGENTS_TOOL_RUN_TASK,
           toolInput,
-          JSON.stringify({ type: 'error-text', value: result.error }),
+          safeJsonStringify({ type: 'error-text', value: result.error }),
           undefined,
           result.promptContext,
         );
@@ -2092,7 +2112,7 @@ export class Task {
         SUBAGENTS_TOOL_GROUP_NAME,
         SUBAGENTS_TOOL_RUN_TASK,
         toolInput,
-        JSON.stringify(toolResultMessage.content[0].output),
+        safeJsonStringify(toolResultMessage.content[0].output),
         undefined,
         result.promptContext,
       );
@@ -4140,7 +4160,7 @@ ${error.stderr}`,
     this.eventManager.sendWorktreeIntegrationStatusUpdated(this.project.baseDir, this.taskId, await this.getWorktreeIntegrationStatus());
   }
 
-  private async sendUpdatedFilesUpdated() {
+  public async sendUpdatedFilesUpdated() {
     const updatedFiles = await this.getUpdatedFiles();
     logger.debug('Sending updated files', {
       baseDir: this.project.baseDir,
@@ -4587,6 +4607,18 @@ ${error.stderr}`,
       );
     }
 
+    await this.sendUpdatedFilesUpdated();
+    await this.sendWorktreeIntegrationStatusUpdated();
+  }
+
+  public async addFileToGit(filePath: string): Promise<void> {
+    logger.info('Adding file to Git', {
+      baseDir: this.project.baseDir,
+      taskId: this.taskId,
+      filePath,
+    });
+
+    await this.worktreeManager.addFileToGit(this.getTaskDir(), filePath);
     await this.sendUpdatedFilesUpdated();
     await this.sendWorktreeIntegrationStatusUpdated();
   }

@@ -5,6 +5,40 @@
     "ru": "Русский",
     "ko": "한국어"
   },
+  "commandPalette": {
+    "title": "Command Palette",
+    "placeholder": "Type to search...",
+    "noResults": "No matching results",
+    "scrollForMore": "Scroll for more results",
+    "tabs": {
+      "all": "All",
+      "file": "Files",
+      "action": "Actions",
+      "task": "Tasks",
+      "project": "Projects"
+    }
+  },
+  "uiActions": {
+    "openModelSelector": "Open Model Selector",
+    "changeAgentProfile": "Change Agent Profile",
+    "setAutonomyMode": "Switch autonomy mode",
+    "openSettingsPage": "Open settings page",
+    "showLogs": "Show Logs",
+    "archiveTask": "Archive Task",
+    "unarchiveTask": "Unarchive Task",
+    "deleteTask": "Delete Task",
+    "duplicateTask": "Duplicate Task",
+    "exportTaskImage": "Export Task as Image",
+    "exportTaskMarkdown": "Export Task as Markdown",
+    "copyTaskMarkdown": "Copy Task as Markdown",
+    "interruptResponse": "Interrupt Response",
+    "restartConnector": "Restart Aider Connector",
+    "togglePin": "Toggle Pin",
+    "moveToTop": "Move Task to Top",
+    "switchToLocal": "Switch to Local Mode",
+    "switchToWorktree": "Switch to Worktree Mode",
+    "switchWorkingMode": "Switch the working mode"
+  },
   "common": {
     "settings": "Settings",
     "cancel": "Cancel",
@@ -550,6 +584,7 @@
       "newTask": "New Task",
       "closeTask": "Close Task",
       "browseFolder": "Browse Folder",
+      "commandPalette": "Command Palette",
       "enterHotkey": "Enter hotkey...",
       "resetToDefaults": "Reset to Defaults",
       "hotkeyFormat": "Hotkey Format:",
@@ -565,7 +600,8 @@
       "recordShortcutDescription": "Press the record button below and then press the key combination you want to use as a shortcut.",
       "pressKeysToRecord": "Press keys to record...",
       "startRecording": "Start Recording",
-      "stopRecording": "Stop Recording"
+      "stopRecording": "Stop Recording",
+      "openEditor": "Open Editor"
     },
     "gui": "Appearance",
     "voice": {
@@ -837,7 +873,8 @@
       "fresh": "Fresh",
       "botanical-garden": "Botanical Garden",
       "botanical-garden-dark": "Botanical Garden (Dark)",
-      "obsidian": "Obsidian"
+      "obsidian": "Obsidian",
+      "crimson": "Crimson"
     },
     "aiderRestartConfirm": {
       "title": "Restart Required",
@@ -1104,9 +1141,23 @@
   "fileChip": {
     "removeFileTooltip": "Remove file"
   },
-  "filePreview": {
-    "title": "File Viewer",
-    "errorLoading": "Failed to load file"
+  "fileEditor": {
+    "errorLoading": "Failed to load file",
+    "requestChangeOnLine": "Request a change on this line",
+    "saved": "File saved",
+    "errorSaving": "Failed to save file: {{error}}",
+    "errorSubmitting": "Failed to submit change requests: {{error}}",
+    "saveBeforeSubmitting": "Save the file before submitting change requests.",
+    "unsavedChanges": "Unsaved changes",
+    "saveShortcut": "Save (Ctrl+S)",
+    "saveAll": "Save all",
+    "saveAllTooltip": "Save all open files",
+    "savedAll": "Saved {{count}} files",
+    "closeTab": "Close tab {{file}}",
+    "discardTitle": "Discard unsaved changes?",
+    "discard": "Discard",
+    "discardMessage": "Your unsaved file changes will be lost.",
+    "title": "Editor"
   },
   "contextFiles": {
     "workspaceTitle": "Workspace",
@@ -1159,6 +1210,7 @@
     "useGitEnabled": "Git enabled - Click to use filesystem",
     "useGitDisabled": "Filesystem enabled - Click to use Git",
     "revertFile": "Revert changes",
+    "addFileToGit": "Add file to Git",
     "fileHasConflicts": "File has merge conflicts",
     "confirmRevertTitle": "Revert file changes?",
     "confirmRevertMessage": "This will discard all changes to this file. This action cannot be undone.",

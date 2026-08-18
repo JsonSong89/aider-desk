@@ -318,6 +318,7 @@ export interface UpdatedFile {
   commitHash?: string;
   commitMessage?: string;
   hasConflicts?: boolean;
+  isUntracked?: boolean;
 }
 
 export interface UpdatedFilesUpdatedData {
@@ -588,6 +589,7 @@ export const THEMES = [
   'botanical-garden',
   'botanical-garden-dark',
   'obsidian',
+  'crimson',
 ] as const;
 export type Theme = (typeof THEMES)[number];
 
@@ -605,6 +607,7 @@ export const isCodeEditorDarkTheme = (theme: Theme) =>
     'neopunk',
     'ocean',
     'obsidian',
+    'crimson',
   ].includes(theme);
 
 export const FONTS = [
@@ -639,6 +642,7 @@ export interface HotkeyConfig {
     settings: string;
     cycleNextProject: string;
     cyclePrevProject: string;
+    openEditor: string;
     switchProject1: string;
     switchProject2: string;
     switchProject3: string;
@@ -665,6 +669,7 @@ export interface HotkeyConfig {
   };
   dialogHotkeys: {
     browseFolder: string;
+    commandPalette: string;
   };
 }
 

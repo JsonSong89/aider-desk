@@ -103,6 +103,7 @@ export const createMockApi = (overrides: Partial<ApplicationAPI> = {}): MockedOb
     getAllFiles: vi.fn((): Promise<string[]> => Promise.resolve([])),
     refreshContextFiles: vi.fn((): Promise<void> => Promise.resolve()),
     getUpdatedFiles: vi.fn((): Promise<Array<{ path: string; additions: number; deletions: number }>> => Promise.resolve([])),
+    addFileToGit: vi.fn((): Promise<void> => Promise.resolve()),
     restoreFile: vi.fn((): Promise<void> => Promise.resolve()),
     generateCommitMessage: vi.fn((): Promise<string> => Promise.resolve('')),
     commitChanges: vi.fn((): Promise<void> => Promise.resolve()),
@@ -116,6 +117,7 @@ export const createMockApi = (overrides: Partial<ApplicationAPI> = {}): MockedOb
     scrapeWeb: vi.fn((): Promise<void> => Promise.resolve()),
     initProjectRulesFile: vi.fn((_baseDir?: string, _taskId?: string, _args?: string): Promise<void> => Promise.resolve()),
     readFile: vi.fn((): Promise<string> => Promise.resolve('')),
+    saveFile: vi.fn((): Promise<void> => Promise.resolve()),
 
     // Skills operations
     getSkills: vi.fn((): Promise<never[]> => Promise.resolve([])),

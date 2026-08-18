@@ -1,6 +1,6 @@
-import { InputHistoryData, ProjectStartMode, TaskCreatedData, TaskData, DefaultTaskState } from '@common/types';
+import { AutonomyMode, InputHistoryData, ProjectStartMode, TaskCreatedData, TaskData, DefaultTaskState } from '@common/types';
 import { useTranslation } from 'react-i18next';
-import { Activity, startTransition, useCallback, useEffect, useOptimistic, useRef, useState, useTransition } from 'react';
+import { Activity, startTransition, useCallback, useEffect, useOptimistic, useRef, useState } from 'react';
 import { useLocalStorage } from '@reactuses/core';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { clsx } from 'clsx';
@@ -17,7 +17,7 @@ import {
   useProjectStore,
 } from '@/stores/projectStore';
 import { unloadTasks } from '@/stores/taskStore';
-import { releaseTaskFiles } from '@/stores/taskFilesStore';
+import { releaseTaskFiles, useTaskAllFiles } from '@/stores/taskFilesStore';
 import { getTaskDir, getSortedVisibleTasks } from '@/utils/task-utils';
 import { cleanupProjectCache } from '@/stores/extensionUIStore';
 import { cleanupProcessingResponseMessage } from '@/hooks/useTaskResponseHandlers';
@@ -28,30 +28,36 @@ import { TaskView, TaskViewRef } from '@/components/project/TaskView';
 import { useApi } from '@/contexts/ApiContext';
 import { TasksProvider } from '@/contexts/TasksContext';
 import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
+import { useOverlayFocusRestore } from '@/hooks/useOverlayFocusRestore';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useBooleanState } from '@/hooks/useBooleanState';
 import { showNotification } from '@/utils/browser-notifications';
 import { showInfoNotification } from '@/utils/notifications';
 import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
 import { FloatingExtensionPanels } from '@/components/extensions/FloatingExtensionPanels';
+import { useFileEditorStore } from '@/stores/fileEditorStore';
 import { useActiveAgentProfile } from '@/utils/agents';
+import { PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
+import { registerAction, unregisterAction } from '@/stores/actionsStore';
+import { FileEditorModal } from '@/components/Workspace/FileEditorModal';
 
 type Props = {
   projectDir: string;
   isProjectActive?: boolean;
-  showSettingsPage?: (pageId?: string, options?: Record<string, unknown>) => void;
   initialTaskId?: string;
 };
 
-export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsPage, initialTaskId }: Props) => {
+export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId }: Props) => {
   const { t } = useTranslation();
   const startupMode = useSettingsStore((state) => state.settings?.startupMode);
   const windowTitleTemplate = useSettingsStore((state) => state.settings?.windowTitleTemplate);
   const settingsLoaded = useSettingsStore((state) => !!state.settings);
   const { projectSettings } = useProjectSettings();
   const api = useApi();
-  const { TASK_HOTKEYS } = useConfiguredHotkeys();
+  const { TASK_HOTKEYS, PROJECT_HOTKEYS } = useConfiguredHotkeys();
   const { isMobile } = useResponsive();
+  const replaceItems = useCommandPaletteStore((state) => state.replaceItems);
+  const clearItems = useCommandPaletteStore((state) => state.clearItems);
 
   const tasks = useProjectTasks(projectDir);
   const [optimisticTasks, setOptimisticTasks] = useOptimistic(tasks);
@@ -67,22 +73,27 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
   const taskContentRef = useRef<HTMLDivElement>(null);
   const creatingTaskRef = useRef(false);
   const activeTask = activeTaskId ? optimisticTasks.find((task) => task.id === activeTaskId) : null;
+  const activeTaskFiles = useTaskAllFiles(activeTask ? getTaskDir(activeTask) : undefined);
+  const editorOpenFiles = useFileEditorStore((state) => state.projectsMap.get(projectDir)?.openFiles ?? []);
+  const isEditorOpen = useFileEditorStore((state) => state.projectsMap.get(projectDir)?.isEditorOpen ?? false);
+  const openFile = useFileEditorStore((state) => state.openFile);
+  const openEditor = useFileEditorStore((state) => state.openEditor);
+  const closeEditor = useFileEditorStore((state) => state.closeEditor);
   const agentProfile = useActiveAgentProfile(activeTask, projectDir) || undefined;
-  const [isActiveTaskSwitching, startActiveTaskTransition] = useTransition();
 
   const focusActiveTaskPrompt = useCallback(() => {
     taskViewRef.current?.focusPromptField();
   }, []);
 
+  useOverlayFocusRestore(focusActiveTaskPrompt, isProjectActive);
+
   const activateTask = useCallback(
     (taskId: string, shouldFocusActiveTaskPrompt = true, shouldFocusNewTask = false) => {
-      startActiveTaskTransition(() => {
-        setActiveTaskId(taskId);
-        setShouldFocusNewTask(shouldFocusNewTask);
-        if (shouldFocusActiveTaskPrompt) {
-          focusActiveTaskPrompt();
-        }
-      });
+      setActiveTaskId(taskId);
+      setShouldFocusNewTask(shouldFocusNewTask);
+      if (shouldFocusActiveTaskPrompt) {
+        focusActiveTaskPrompt();
+      }
     },
     [focusActiveTaskPrompt],
   );
@@ -450,9 +461,62 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
     [activeTaskId, handleDeleteTask],
   );
 
+  const handleOpenEditor = useCallback(() => {
+    openEditor(projectDir);
+  }, [openEditor, projectDir]);
+
+  useHotkeys(
+    PROJECT_HOTKEYS.OPEN_EDITOR,
+    (e) => {
+      e.preventDefault();
+      handleOpenEditor();
+    },
+    {
+      enabled: !!activeTaskId,
+      scopes: 'task',
+      enableOnFormTags: true,
+      enableOnContentEditable: true,
+    },
+    [handleOpenEditor, PROJECT_HOTKEYS.OPEN_EDITOR],
+  );
+
   const handleExportTaskToImage = useCallback(() => {
     taskViewRef.current?.exportMessagesToImage();
   }, []);
+
+  useEffect(() => {
+    if (!isProjectActive) {
+      clearItems(`project:${projectDir}`);
+      return;
+    }
+
+    const tasks = [...optimisticTasks]
+      .sort((first, second) => (second.updatedAt || second.createdAt || '').localeCompare(first.updatedAt || first.createdAt || ''))
+      .map((task) => ({
+        id: `task.switch.${projectDir}.${task.id}`,
+        label: task.name,
+        state: task.state,
+        archived: task.archived,
+        type: PaletteItemType.Task,
+        action: () => handleTaskSelect(task.id),
+      }));
+    const files = activeTaskFiles.map((filePath) => ({
+      id: `file.open.${projectDir}.${filePath}`,
+      label: filePath.split('/').pop() || filePath,
+      description: filePath,
+      type: PaletteItemType.File,
+      action: () => {
+        if (activeTaskId) {
+          openFile(projectDir, filePath, activeTaskId);
+        }
+      },
+    }));
+    replaceItems(`project:${projectDir}`, [...tasks, ...files]);
+  }, [isProjectActive, replaceItems, clearItems, activeTaskFiles, activeTaskId, handleTaskSelect, optimisticTasks, openFile, projectDir]);
+
+  useEffect(() => {
+    return () => clearItems(`project:${projectDir}`);
+  }, [clearItems, projectDir]);
 
   const handleExportTaskToMarkdown = useCallback(
     async (taskId: string) => {
@@ -514,6 +578,105 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
     [setOptimisticTasks],
   );
 
+  useEffect(() => {
+    if (!isProjectActive) {
+      return;
+    }
+
+    const actions: Record<string, () => void> = {
+      'task.new': () => void createNewTask(),
+      'task.focusPrompt': focusActiveTaskPrompt,
+      'editor.open': () => openEditor(projectDir),
+      'task.modelSelector': () => taskViewRef.current?.openMainModelSelector(),
+      'task.agentProfileSelector': () => taskViewRef.current?.openAgentProfileSelector(),
+      'task.autonomy.manual': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { autonomyMode: AutonomyMode.Manual });
+        }
+      },
+      'task.autonomy.guided': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { autonomyMode: AutonomyMode.Guided });
+        }
+      },
+      'task.autonomy.autonomous': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { autonomyMode: AutonomyMode.Autonomous });
+        }
+      },
+      'task.archive': () => void handleArchiveActiveTask(),
+      'task.unarchive': () => void handleUnarchiveActiveTask(),
+      'task.delete': () => void handleDeleteActiveTask(),
+      'task.duplicate': () => {
+        if (activeTaskId) {
+          void handleDuplicateTask(activeTaskId);
+        }
+      },
+      'task.exportImage': handleExportTaskToImage,
+      'task.exportMarkdown': () => {
+        if (activeTaskId) {
+          void handleExportTaskToMarkdown(activeTaskId);
+        }
+      },
+      'task.copyMarkdown': () => {
+        if (activeTaskId) {
+          void handleCopyTaskAsMarkdown(activeTaskId);
+        }
+      },
+      'task.interrupt': () => {
+        if (activeTaskId) {
+          void api.interruptResponse(projectDir, activeTaskId);
+          handleUpdateOptimisticTaskState(activeTaskId, DefaultTaskState.Interrupted);
+        }
+      },
+      'task.restartConnector': () => {
+        if (activeTaskId) {
+          api.restartAiderConnector(projectDir, activeTaskId);
+        }
+      },
+      'task.togglePin': () => {
+        if (activeTaskId) {
+          const task = optimisticTasks.find((t) => t.id === activeTaskId);
+          if (task) {
+            void handleUpdateTask(activeTaskId, { pinned: !task.pinned });
+          }
+        }
+      },
+      'task.moveToTop': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { updatedAt: new Date().toISOString() });
+        }
+      },
+    };
+
+    for (const [id, handler] of Object.entries(actions)) {
+      registerAction(id, handler);
+    }
+    return () => {
+      for (const id of Object.keys(actions)) {
+        unregisterAction(id);
+      }
+    };
+  }, [
+    isProjectActive,
+    createNewTask,
+    focusActiveTaskPrompt,
+    openEditor,
+    projectDir,
+    activeTaskId,
+    handleUpdateTask,
+    handleArchiveActiveTask,
+    handleUnarchiveActiveTask,
+    handleDeleteActiveTask,
+    handleDuplicateTask,
+    handleExportTaskToImage,
+    handleExportTaskToMarkdown,
+    handleCopyTaskAsMarkdown,
+    api,
+    handleUpdateOptimisticTaskState,
+    optimisticTasks,
+  ]);
+
   if (!projectSettings || !settingsLoaded) {
     return <LoadingOverlay message={t('common.loadingProjectSettings')} />;
   }
@@ -565,7 +728,6 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
               left: isMobile ? 0 : isTaskBarCollapsed ? COLLAPSED_WIDTH : (taskSidebarWidth ?? EXPANDED_WIDTH),
             }}
           >
-            {isActiveTaskSwitching && <LoadingOverlay message={t('common.loadingTask')} animateOpacity />}
             {isProjectActive && <FloatingExtensionPanels placement="project-floating" />}
             {activeTask && (
               <Activity mode={isProjectActive ? 'visible' : 'hidden'}>
@@ -580,7 +742,6 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
                     inputHistory={inputHistory}
                     isActive={activeTaskId === activeTask.id}
                     shouldFocusPrompt={shouldFocusNewTask}
-                    showSettingsPage={showSettingsPage}
                     onArchiveTask={handleArchiveActiveTask}
                     onUnarchiveTask={handleUnarchiveActiveTask}
                     onDeleteTask={handleDeleteActiveTask}
@@ -591,6 +752,7 @@ export const ProjectView = ({ projectDir, isProjectActive = false, showSettingsP
               </Activity>
             )}
           </div>
+          {isEditorOpen && editorOpenFiles.length > 0 && <FileEditorModal baseDir={projectDir} onClose={() => closeEditor(projectDir)} />}
         </div>
       </ExtensionsProvider>
     </TasksProvider>

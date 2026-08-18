@@ -5,6 +5,40 @@
     "ru": "俄语",
     "ko": "한국어"
   },
+  "commandPalette": {
+    "title": "命令面板",
+    "placeholder": "输入以搜索...",
+    "noResults": "没有匹配的结果",
+    "scrollForMore": "滚动以查看更多结果",
+    "tabs": {
+      "all": "全部",
+      "file": "文件",
+      "action": "操作",
+      "task": "任务",
+      "project": "项目"
+    }
+  },
+  "uiActions": {
+    "openModelSelector": "打开模型选择器",
+    "changeAgentProfile": "更改代理配置",
+    "setAutonomyMode": "切换自主模式",
+    "openSettingsPage": "打开设置页面",
+    "showLogs": "显示日志",
+    "archiveTask": "归档任务",
+    "unarchiveTask": "取消归档任务",
+    "deleteTask": "删除任务",
+    "duplicateTask": "复制任务",
+    "exportTaskImage": "导出任务为图片",
+    "exportTaskMarkdown": "导出任务为Markdown",
+    "copyTaskMarkdown": "复制任务为Markdown",
+    "interruptResponse": "中断响应",
+    "restartConnector": "重启Aider连接器",
+    "togglePin": "切换固定",
+    "moveToTop": "移至顶部",
+    "switchToLocal": "切换到本地模式",
+    "switchToWorktree": "切换到工作树模式",
+    "switchWorkingMode": "切换工作模式"
+  },
   "common": {
     "settings": "设置",
     "cancel": "取消",
@@ -549,6 +583,7 @@
       "newTask": "新建任务",
       "closeTask": "关闭任务",
       "browseFolder": "浏览文件夹",
+      "commandPalette": "命令面板",
       "enterHotkey": "输入快捷键...",
       "resetToDefaults": "重置为默认值",
       "hotkeyFormat": "快捷键格式：",
@@ -564,7 +599,8 @@
       "recordShortcutDescription": "点击下方的录制按钮，然后按下您想要用作快捷键的组合键。",
       "pressKeysToRecord": "按键录制中...",
       "startRecording": "开始录制",
-      "stopRecording": "停止录制"
+      "stopRecording": "停止录制",
+      "openEditor": "打开编辑器"
     },
     "gui": "GUI",
     "voice": {
@@ -833,7 +869,8 @@
       "fresh": "清新",
       "botanical-garden": "植物园",
       "botanical-garden-dark": "植物园（深色）",
-      "obsidian": "黑曜石"
+      "obsidian": "黑曜石",
+      "crimson": "绯红"
     },
     "aiderRestartConfirm": {
       "title": "需要重启",
@@ -1037,9 +1074,23 @@
   "fileChip": {
     "removeFileTooltip": "移除文件"
   },
-  "filePreview": {
-    "title": "文件查看器",
-    "errorLoading": "加载文件失败"
+  "fileEditor": {
+    "errorLoading": "加载文件失败",
+    "requestChangeOnLine": "请求更改此行",
+    "saved": "文件已保存",
+    "errorSaving": "保存文件失败：{{error}}",
+    "errorSubmitting": "提交更改请求失败：{{error}}",
+    "saveBeforeSubmitting": "请先保存文件，再提交更改请求。",
+    "unsavedChanges": "有未保存的更改",
+    "saveShortcut": "保存 (Ctrl+S)",
+    "saveAll": "全部保存",
+    "saveAllTooltip": "保存所有打开的文件",
+    "savedAll": "已保存 {{count}} 个文件",
+    "closeTab": "关闭标签页 {{file}}",
+    "discardTitle": "放弃未保存的更改？",
+    "discard": "放弃",
+    "discardMessage": "未保存的文件更改将丢失。",
+    "title": "编辑器"
   },
   "contextFiles": {
     "workspaceTitle": "工作区",
@@ -1092,6 +1143,7 @@
     "useGitEnabled": "Git 已启用 - 点击使用文件系统",
     "useGitDisabled": "文件系统已启用 - 点击使用 Git",
     "revertFile": "恢复更改",
+    "addFileToGit": "添加文件到 Git",
     "fileHasConflicts": "文件存在合并冲突",
     "confirmRevertTitle": "恢复文件更改？",
     "confirmRevertMessage": "这将丢弃此文件的所有更改。此操作无法撤销。",

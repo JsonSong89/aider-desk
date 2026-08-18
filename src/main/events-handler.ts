@@ -730,6 +730,15 @@ export class EventsHandler {
     await task.revertLastMerge();
   }
 
+  async addFileToGit(baseDir: string, taskId: string, filePath: string): Promise<void> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+
+    await task.addFileToGit(filePath);
+  }
+
   async restoreFile(baseDir: string, taskId: string, filePath: string): Promise<void> {
     const task = this.projectManager.getProject(baseDir).getTask(taskId);
     if (!task) {
@@ -754,6 +763,20 @@ export class EventsHandler {
     }
 
     return fileContentBuffer.toString('utf-8');
+  }
+
+  async saveFile(baseDir: string, taskId: string, filePath: string, content: string): Promise<void> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    const expandedPath = expandTilde(filePath);
+    const absolutePath = path.isAbsolute(expandedPath)
+      ? expandedPath
+      : task
+        ? ((await task.resolveContextFilePath(expandedPath)) ?? path.join(baseDir, expandedPath))
+        : path.join(baseDir, expandedPath);
+    await fs.writeFile(absolutePath, content, 'utf-8');
+    if (task) {
+      await task.sendUpdatedFilesUpdated();
+    }
   }
 
   async generateCommitMessage(baseDir: string, taskId: string): Promise<string> {

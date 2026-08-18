@@ -27,6 +27,9 @@ import { showInfoNotification } from '@/utils/notifications';
 import { useApi } from '@/contexts/ApiContext';
 import { URL_PARAMS, encodeBaseDir, decodeBaseDir, ROUTES } from '@/utils/routes';
 import { useBooleanState } from '@/hooks/useBooleanState';
+import { PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
+import { closeSettings, openSettingsPage, useSettingsNavigationStore } from '@/stores/settingsNavigationStore';
+import { registerAction, unregisterAction } from '@/stores/actionsStore';
 
 const UsageDashboard = lazy(() => import('@/components/usage/UsageDashboard').then((module) => ({ default: module.UsageDashboard })));
 const SettingsPage = lazy(() => import('@/components/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })));
@@ -34,23 +37,20 @@ const ModelLibrary = lazy(() => import('@/components/ModelLibrary').then((module
 
 let hasShownUpdateNotification = false;
 
-type ShowSettingsInfo = {
-  pageId: string;
-  options?: Record<string, unknown>;
-};
-
 export const Home = () => {
   const { t } = useTranslation();
   const { versions } = useVersions();
   const api = useApi();
   const os = useOS();
   const { PROJECT_HOTKEYS } = useConfiguredHotkeys();
+  const replaceItems = useCommandPaletteStore((state) => state.replaceItems);
+  const clearItems = useCommandPaletteStore((state) => state.clearItems);
   const [searchParams, setSearchParams] = useSearchParams();
   const [openProjects, setOpenProjects] = useState<ProjectData[]>([]);
   const [optimisticOpenProjects, setOptimisticOpenProjects] = useOptimistic(openProjects);
   const [previousProjectBaseDir, setPreviousProjectBaseDir] = useState<string | null>(null);
   const [isOpenProjectDialogVisible, setIsOpenProjectDialogVisible] = useState(false);
-  const [showSettingsInfo, setShowSettingsInfo] = useState<ShowSettingsInfo | null>(null);
+  const settingsPage = useSettingsNavigationStore((state) => state.settingsPage);
   const [releaseNotesContent, setReleaseNotesContent] = useState<string | null>(null);
   const [isUsageDashboardVisible, showUsageDashboard, hideUsageDashboard] = useBooleanState(false);
   const [isModelLibraryVisible, showModelLibrary, hideModelLibrary] = useBooleanState(false);
@@ -58,15 +58,14 @@ export const Home = () => {
   const [isCtrlTabbing, setIsCtrlTabbing] = useState(false);
   const [isProjectSwitching, startProjectTransition] = useTransition();
   const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [initialUrlNavigationDone, setInitialUrlNavigationDone] = useState(false);
   const [initialTaskId, setInitialTaskId] = useState<string | undefined>();
 
-  // Derive active project from URL parameter first, then fall back to store
+  // The URL parameter is the source of truth for the active project, falling back to the
+  // backend-tracked selection until the first navigation writes the parameter
   const projectParam = searchParams.get(URL_PARAMS.PROJECT);
   const urlProjectBaseDir = projectParam ? decodeBaseDir(projectParam) : null;
   const storeActiveProject = (optimisticOpenProjects.find((project) => project.active) || optimisticOpenProjects[0])?.baseDir;
   const activeProject = urlProjectBaseDir || storeActiveProject;
-  const [optimisticActiveProject, setOptimisticActiveProject] = useOptimistic(activeProject);
   const closingProjectRef = useRef<string | null>(null);
 
   const handleReorderProjects = useCallback(
@@ -111,12 +110,10 @@ export const Home = () => {
     const handleShowView = (viewId: string) => {
       if (viewId.startsWith('settings/')) {
         const pageName = viewId.split('/')[1];
-        setShowSettingsInfo({
-          pageId: pageName,
-        });
+        openSettingsPage(pageName);
         hideLogs();
       } else if (viewId === 'logs') {
-        setShowSettingsInfo(null);
+        closeSettings();
         showLogs();
       }
     };
@@ -141,16 +138,12 @@ export const Home = () => {
 
   const setActiveProject = useCallback(
     (baseDir: string) => {
-      startProjectTransition(async () => {
-        setOptimisticActiveProject(baseDir);
-        // Update URL parameter instead of global store
-        // This allows each window to have its own active project
-        setSearchParams({ [URL_PARAMS.PROJECT]: encodeBaseDir(baseDir) });
-        const projects = await api.setActiveProject(baseDir);
-        setOpenProjects(projects);
-      });
+      // The URL parameter allows each window to have its own active project;
+      // the backend call is a write-behind mirror
+      setSearchParams({ [URL_PARAMS.PROJECT]: encodeBaseDir(baseDir) });
+      void api.setActiveProject(baseDir).then(setOpenProjects);
     },
-    [api, setOptimisticActiveProject, setSearchParams],
+    [api, setSearchParams],
   );
 
   const handleCloseProject = useCallback(
@@ -162,7 +155,7 @@ export const Home = () => {
           const remaining = optimisticOpenProjects.filter((project) => project.baseDir !== projectBaseDir);
 
           // Only change selection if we're closing the currently active project
-          if (projectBaseDir === optimisticActiveProject && remaining.length > 0) {
+          if (projectBaseDir === activeProject && remaining.length > 0) {
             // Pick adjacent from remaining array (not original!) to avoid re-selecting the closed project
             const nextIndex = removedIndex >= remaining.length ? removedIndex - 1 : removedIndex;
             const nextProject = remaining[nextIndex];
@@ -180,7 +173,7 @@ export const Home = () => {
         }
       });
     },
-    [api, optimisticOpenProjects, optimisticActiveProject, setOptimisticOpenProjects, setSearchParams],
+    [api, optimisticOpenProjects, activeProject, setOptimisticOpenProjects, setSearchParams],
   );
 
   // Close current project tab
@@ -206,61 +199,33 @@ export const Home = () => {
     const taskId = searchParams.get(URL_PARAMS.TASK);
     const projectBaseDir = projectParam ? decodeBaseDir(projectParam) : null;
 
-    if (!projectBaseDir) {
+    // Propagate task deep links to the active project view
+    if (taskId && taskId !== initialTaskId) {
+      setInitialTaskId(taskId);
+    }
+
+    if (!projectBaseDir || closingProjectRef.current === projectBaseDir) {
       return;
     }
 
-    const handleUrlNavigation = async () => {
-      if (!initialUrlNavigationDone) {
-        setInitialUrlNavigationDone(true);
+    const existingProject = optimisticOpenProjects.find((p) => compareBaseDirs(p.baseDir, projectBaseDir, os ?? undefined));
+    if (existingProject) {
+      // Project is already open and activeProject is derived from the URL, nothing to do
+      return;
+    }
+
+    // Project is not open yet (deep link): add it
+    startProjectTransition(async () => {
+      try {
+        await api.addOpenProject(projectBaseDir);
+        const updatedProjects = await api.getOpenProjects();
+        setOpenProjects(updatedProjects);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to open project from URL:', error);
       }
-
-      if (closingProjectRef.current === projectBaseDir) {
-        return;
-      }
-
-      const existingProject = optimisticOpenProjects.find((p) => compareBaseDirs(p.baseDir, projectBaseDir, os ?? undefined));
-
-      // Only update initial task ID on first navigation or when task changes
-      if (taskId && (!initialUrlNavigationDone || taskId !== initialTaskId)) {
-        setInitialTaskId(taskId);
-      }
-      startProjectTransition(async () => {
-        if (existingProject) {
-          // Project exists, just update optimistic state (URL is already set)
-          if (!compareBaseDirs(activeProject, projectBaseDir, os ?? undefined)) {
-            setOptimisticActiveProject(projectBaseDir);
-          }
-        } else {
-          // Project doesn't exist, add it and update optimistic state
-          try {
-            await api.addOpenProject(projectBaseDir);
-            const updatedProjects = await api.getOpenProjects();
-            setOpenProjects(updatedProjects);
-            setOptimisticActiveProject(projectBaseDir);
-          } catch (error) {
-            // eslint-disable-next-line no-console
-            console.error('Failed to open project from URL:', error);
-          }
-        }
-      });
-    };
-
-    void handleUrlNavigation();
-  }, [
-    searchParams,
-    projectsLoaded,
-    setActiveProject,
-    initialUrlNavigationDone,
-    api,
-    activeProject,
-    initialTaskId,
-    setOptimisticActiveProject,
-    optimisticOpenProjects,
-    os,
-  ]);
-
-  // Note: We no longer sync activeProject to URL here because setActiveProject now updates the URL directly
+    });
+  }, [searchParams, projectsLoaded, api, initialTaskId, optimisticOpenProjects, os]);
 
   // Open new project dialog
   useHotkeys(
@@ -300,12 +265,10 @@ export const Home = () => {
     PROJECT_HOTKEYS.SETTINGS,
     (e) => {
       e.preventDefault();
-      setShowSettingsInfo({
-        pageId: 'general',
-      });
+      openSettingsPage('general');
     },
     { scopes: 'home', enableOnFormTags: true, enableOnContentEditable: true },
-    [PROJECT_HOTKEYS.SETTINGS, setShowSettingsInfo],
+    [PROJECT_HOTKEYS.SETTINGS],
   );
 
   // Close overlays on Escape
@@ -464,16 +427,59 @@ export const Home = () => {
     }
   }, [handleCloseProject, optimisticOpenProjects]);
 
-  const handleShowSettingsPage = useCallback((pageId?: string, options?: Record<string, unknown>) => {
-    if (pageId) {
-      setShowSettingsInfo({
-        pageId,
-        options,
-      });
-    } else {
-      setShowSettingsInfo(null);
+  const cycleProject = useCallback(
+    (offset: number) => {
+      if (optimisticOpenProjects.length <= 1) {
+        return;
+      }
+      const currentIndex = optimisticOpenProjects.findIndex((p) => p.baseDir === activeProject);
+      const nextIndex = (currentIndex + offset + optimisticOpenProjects.length) % optimisticOpenProjects.length;
+      void setActiveProject(optimisticOpenProjects[nextIndex].baseDir);
+    },
+    [optimisticOpenProjects, activeProject, setActiveProject],
+  );
+
+  useEffect(() => {
+    const actions: Record<string, () => void> = {
+      'project.close': () => {
+        if (activeProject) {
+          void handleCloseProject(activeProject);
+        }
+      },
+      'project.new': () => setIsOpenProjectDialogVisible(true),
+      'project.cycleNext': () => cycleProject(1),
+      'project.cyclePrev': () => cycleProject(-1),
+      'view.usageDashboard': () => showUsageDashboard(),
+      'view.modelLibrary': () => showModelLibrary(),
+      'view.showLogs': () => {
+        closeSettings();
+        showLogs();
+      },
+    };
+    for (const [id, handler] of Object.entries(actions)) {
+      registerAction(id, handler);
     }
-  }, []);
+    return () => {
+      for (const id of Object.keys(actions)) {
+        unregisterAction(id);
+      }
+    };
+  }, [activeProject, handleCloseProject, cycleProject, showUsageDashboard, showModelLibrary, showLogs]);
+
+  useEffect(() => {
+    const projects = optimisticOpenProjects.map((project) => ({
+      id: `project.switch.${project.baseDir}`,
+      label: project.baseDir.split(/[\\/]/).pop() || project.baseDir,
+      description: project.baseDir,
+      type: PaletteItemType.Project,
+      action: () => setActiveProject(project.baseDir),
+    }));
+
+    replaceItems('home', projects);
+    return () => {
+      clearItems('home');
+    };
+  }, [replaceItems, clearItems, optimisticOpenProjects, setActiveProject]);
 
   const renderProjectPanels = () =>
     optimisticOpenProjects.map((project) => (
@@ -487,7 +493,6 @@ export const Home = () => {
           <ProjectView
             projectDir={project.baseDir}
             isProjectActive={activeProject === project.baseDir}
-            showSettingsPage={handleShowSettingsPage}
             initialTaskId={activeProject === project.baseDir ? initialTaskId : undefined}
           />
         </div>
@@ -508,13 +513,11 @@ export const Home = () => {
   }, [showUsageDashboard]);
 
   const handleOpenGeneralSettings = useCallback(() => {
-    setShowSettingsInfo({
-      pageId: 'general',
-    });
+    openSettingsPage('general');
   }, []);
 
   const handleShowLogs = useCallback(() => {
-    setShowSettingsInfo(null);
+    closeSettings();
     showLogs();
   }, [showLogs]);
 
@@ -524,7 +527,7 @@ export const Home = () => {
         <div className="flex border-b-2 border-border-default justify-between bg-gradient-to-b from-bg-primary to-bg-primary-light">
           <ProjectTabs
             openProjects={optimisticOpenProjects}
-            activeProject={optimisticActiveProject}
+            activeProject={activeProject}
             onAddProject={handleOpenAddProjectDialog}
             onSetActiveProject={setActiveProject}
             onCloseProject={handleCloseProject}
@@ -557,12 +560,12 @@ export const Home = () => {
         {isOpenProjectDialogVisible && (
           <OpenProjectDialog onClose={() => setIsOpenProjectDialogVisible(false)} onAddProject={handleAddProject} openProjects={optimisticOpenProjects} />
         )}
-        <Activity mode={showSettingsInfo !== null ? 'visible' : 'hidden'} key={showSettingsInfo?.pageId || 'general'}>
+        <Activity mode={settingsPage !== null ? 'visible' : 'hidden'} key={settingsPage?.pageId || 'general'}>
           <Suspense fallback={null}>
             <SettingsPage
-              onClose={() => setShowSettingsInfo(null)}
-              initialPageId={showSettingsInfo?.pageId || 'general'}
-              initialOptions={showSettingsInfo?.options}
+              onClose={closeSettings}
+              initialPageId={settingsPage?.pageId || 'general'}
+              initialOptions={settingsPage?.options}
               openProjects={optimisticOpenProjects}
               onShowLogs={handleShowLogs}
             />

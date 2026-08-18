@@ -18,6 +18,7 @@ export const DEFAULT_HOTKEY_CONFIG: HotkeyConfig = {
     switchProject9: 'alt+9,meta+9',
     cycleNextProject: 'ctrl+tab',
     cyclePrevProject: 'ctrl+shift+tab',
+    openEditor: 'mod+e',
   },
   taskHotkeys: {
     switchTask1: 'ctrl+1',
@@ -35,6 +36,7 @@ export const DEFAULT_HOTKEY_CONFIG: HotkeyConfig = {
   },
   dialogHotkeys: {
     browseFolder: 'mod+b',
+    commandPalette: 'mod+shift+p',
   },
 };
 
@@ -72,6 +74,7 @@ export const getHotkeys = (config?: HotkeyConfig) => {
       SETTINGS: pj.settings || pjDef.settings,
       CYCLE_NEXT_PROJECT: pj.cycleNextProject || pjDef.cycleNextProject,
       CYCLE_PREV_PROJECT: pj.cyclePrevProject || pjDef.cyclePrevProject,
+      OPEN_EDITOR: pj.openEditor || pjDef.openEditor,
       SWITCH_PROJECT_1: pj.switchProject1 || pjDef.switchProject1,
       SWITCH_PROJECT_2: pj.switchProject2 || pjDef.switchProject2,
       SWITCH_PROJECT_3: pj.switchProject3 || pjDef.switchProject3,
@@ -98,6 +101,7 @@ export const getHotkeys = (config?: HotkeyConfig) => {
     },
     DIALOG_HOTKEYS: {
       BROWSE_FOLDER: dk.browseFolder || dkDef.browseFolder,
+      COMMAND_PALETTE: dk.commandPalette || dkDef.commandPalette,
     },
   };
 };

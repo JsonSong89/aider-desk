@@ -5,6 +5,40 @@
     "ru": "Русский",
     "ko": "한국어"
   },
+  "commandPalette": {
+    "title": "Палитра команд",
+    "placeholder": "Введите запрос...",
+    "noResults": "Подходящих результатов не найдено",
+    "scrollForMore": "Прокрутите, чтобы увидеть больше результатов",
+    "tabs": {
+      "all": "Все",
+      "file": "Файлы",
+      "action": "Действия",
+      "task": "Задачи",
+      "project": "Проекты"
+    }
+  },
+  "uiActions": {
+    "openModelSelector": "Открыть выбор модели",
+    "changeAgentProfile": "Сменить профиль агента",
+    "setAutonomyMode": "Переключить режим автономности",
+    "openSettingsPage": "Открыть страницу настроек",
+    "showLogs": "Показать логи",
+    "archiveTask": "Архивировать задачу",
+    "unarchiveTask": "Разархивировать задачу",
+    "deleteTask": "Удалить задачу",
+    "duplicateTask": "Дублировать задачу",
+    "exportTaskImage": "Экспортировать задачу как изображение",
+    "exportTaskMarkdown": "Экспортировать задачу как Markdown",
+    "copyTaskMarkdown": "Копировать задачу как Markdown",
+    "interruptResponse": "Прервать ответ",
+    "restartConnector": "Перезапустить коннектор Aider",
+    "togglePin": "Переключить закрепление",
+    "moveToTop": "Переместить наверх",
+    "switchToLocal": "Переключить на локальный режим",
+    "switchToWorktree": "Переключить на режим worktree",
+    "switchWorkingMode": "Переключить рабочий режим"
+  },
   "common": {
     "settings": "Настройки",
     "cancel": "Отмена",
@@ -449,7 +483,8 @@
       "extensions": "Расширения",
       "server": "Сервер",
       "network": "Сеть",
-      "about": "О приложении"
+      "about": "О приложении",
+      "mcpServers": "MCP-серверы"
     },
     "extensions": {
       "loading": "Загрузка расширений...",
@@ -543,6 +578,7 @@
       "newTask": "Новая задача",
       "closeTask": "Закрыть задачу",
       "browseFolder": "Просмотреть папку",
+      "commandPalette": "Палитра команд",
       "enterHotkey": "Введите горячую клавишу...",
       "resetToDefaults": "Сбросить до значений по умолчанию",
       "hotkeyFormat": "Формат горячей клавиши:",
@@ -558,7 +594,8 @@
       "recordShortcutDescription": "Нажмите кнопку записи ниже, а затем нажмите нужную комбинацию клавиш.",
       "pressKeysToRecord": "Нажмите клавиши для записи...",
       "startRecording": "Начать запись",
-      "stopRecording": "Остановить запись"
+      "stopRecording": "Остановить запись",
+      "openEditor": "Открыть редактор"
     },
     "gui": "Внешний вид",
     "voice": {
@@ -1096,9 +1133,23 @@
   "fileChip": {
     "removeFileTooltip": "Удалить файл"
   },
-  "filePreview": {
-    "title": "Просмотр файла",
-    "errorLoading": "Не удалось загрузить файл"
+  "fileEditor": {
+    "errorLoading": "Не удалось загрузить файл",
+    "requestChangeOnLine": "Запросить изменение этой строки",
+    "saved": "Файл сохранён",
+    "errorSaving": "Не удалось сохранить файл: {{error}}",
+    "errorSubmitting": "Не удалось отправить запросы на изменение: {{error}}",
+    "saveBeforeSubmitting": "Сохраните файл перед отправкой запросов на изменение.",
+    "unsavedChanges": "Есть несохранённые изменения",
+    "saveShortcut": "Сохранить (Ctrl+S)",
+    "saveAll": "Сохранить все",
+    "saveAllTooltip": "Сохранить все открытые файлы",
+    "savedAll": "Сохранено файлов: {{count}}",
+    "closeTab": "Закрыть вкладку {{file}}",
+    "discardTitle": "Отменить несохранённые изменения?",
+    "discard": "Отменить",
+    "discardMessage": "Несохранённые изменения файла будут потеряны.",
+    "title": "Редактор"
   },
   "contextFiles": {
     "workspaceTitle": "Рабочая область",
@@ -1151,6 +1202,7 @@
     "useGitEnabled": "Git включён — нажмите для использования файловой системы",
     "useGitDisabled": "Файловая система включена — нажмите для использования Git",
     "revertFile": "Отменить изменения",
+    "addFileToGit": "Добавить файл в Git",
     "fileHasConflicts": "Файл содержит конфликты слияния",
     "confirmRevertTitle": "Отменить изменения файла?",
     "confirmRevertMessage": "Это отменит все изменения в этом файле. Данное действие нельзя отменить.",
