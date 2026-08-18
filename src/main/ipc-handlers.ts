@@ -561,12 +561,20 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     await eventsHandler.revertLastMerge(baseDir, taskId);
   });
 
+  ipcMain.handle('add-file-to-git', async (_, baseDir: string, taskId: string, filePath: string) => {
+    await eventsHandler.addFileToGit(baseDir, taskId, filePath);
+  });
+
   ipcMain.handle('restore-file', async (_, baseDir: string, taskId: string, filePath: string) => {
     await eventsHandler.restoreFile(baseDir, taskId, filePath);
   });
 
   ipcMain.handle('read-file', async (_, baseDir: string, taskId: string, filePath: string) => {
     return await eventsHandler.readFile(baseDir, taskId, filePath);
+  });
+
+  ipcMain.handle('save-file', async (_, baseDir: string, taskId: string, filePath: string, content: string) => {
+    await eventsHandler.saveFile(baseDir, taskId, filePath, content);
   });
 
   ipcMain.handle('generate-commit-message', async (_, baseDir: string, taskId: string) => {

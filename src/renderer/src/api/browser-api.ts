@@ -1144,6 +1144,14 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
+  addFileToGit(baseDir: string, taskId: string, filePath: string): Promise<void> {
+    return this.post('/project/worktree/add-file-to-git', {
+      projectDir: baseDir,
+      taskId,
+      filePath,
+    });
+  }
+
   restoreFile(baseDir: string, taskId: string, filePath: string): Promise<void> {
     return this.post('/project/worktree/restore-file', {
       projectDir: baseDir,
@@ -1159,6 +1167,15 @@ export class BrowserApi implements ApplicationAPI {
       filePath,
     });
     return response.content;
+  }
+
+  async saveFile(baseDir: string, taskId: string, filePath: string, content: string): Promise<void> {
+    await this.post('/project/save-file', {
+      projectDir: baseDir,
+      taskId,
+      filePath,
+      content,
+    });
   }
 
   listBranches(baseDir: string): Promise<Array<{ name: string; isCurrent: boolean; hasWorktree: boolean }>> {

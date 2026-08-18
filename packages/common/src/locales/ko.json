@@ -5,6 +5,40 @@
     "ru": "Русский",
     "ko": "한국어"
   },
+  "commandPalette": {
+    "title": "명령 팔레트",
+    "placeholder": "검색어를 입력하세요...",
+    "noResults": "일치하는 결과가 없습니다",
+    "scrollForMore": "더 많은 결과를 보려면 스크롤하세요",
+    "tabs": {
+      "all": "전체",
+      "file": "파일",
+      "action": "작업",
+      "task": "태스크",
+      "project": "프로젝트"
+    }
+  },
+  "uiActions": {
+    "openModelSelector": "모델 선택기 열기",
+    "changeAgentProfile": "에이전트 프로필 변경",
+    "setAutonomyMode": "자율 모드 전환",
+    "openSettingsPage": "설정 페이지 열기",
+    "showLogs": "로그 표시",
+    "archiveTask": "작업 보관",
+    "unarchiveTask": "작업 보관 해제",
+    "deleteTask": "작업 삭제",
+    "duplicateTask": "작업 복제",
+    "exportTaskImage": "작업을 이미지로 내보내기",
+    "exportTaskMarkdown": "작업을 Markdown으로 내보내기",
+    "copyTaskMarkdown": "작업을 Markdown으로 복사",
+    "interruptResponse": "응답 중단",
+    "restartConnector": "Aider 커넥터 재시작",
+    "togglePin": "고정 전환",
+    "moveToTop": "맨 위로 이동",
+    "switchToLocal": "로컬 모드로 전환",
+    "switchToWorktree": "워크트리 모드로 전환",
+    "switchWorkingMode": "작업 모드 전환"
+  },
   "common": {
     "settings": "설정",
     "cancel": "취소",
@@ -450,7 +484,8 @@
       "extensions": "확장",
       "server": "서버",
       "network": "네트워크",
-      "about": "정보"
+      "about": "정보",
+      "mcpServers": "MCP 서버"
     },
     "extensions": {
       "loading": "확장을 불러오는 중...",
@@ -540,6 +575,7 @@
       "newTask": "새 작업",
       "closeTask": "작업 닫기",
       "browseFolder": "폴더 찾아보기",
+      "commandPalette": "명령 팔레트",
       "enterHotkey": "단축키 입력...",
       "resetToDefaults": "기본값으로 재설정",
       "hotkeyFormat": "단축키 형식:",
@@ -555,7 +591,8 @@
       "recordShortcutDescription": "아래의 기록 버튼을 누른 다음 단축키로 사용할 키 조합을 누르세요.",
       "pressKeysToRecord": "기록할 키를 누르세요...",
       "startRecording": "기록 시작",
-      "stopRecording": "기록 중지"
+      "stopRecording": "기록 중지",
+      "openEditor": "에디터 열기"
     },
     "gui": "모양",
     "voice": {
@@ -1084,9 +1121,23 @@
   "fileChip": {
     "removeFileTooltip": "파일 제거"
   },
-  "filePreview": {
-    "title": "파일 뷰어",
-    "errorLoading": "파일을 불러오지 못했습니다"
+  "fileEditor": {
+    "errorLoading": "파일을 불러오지 못했습니다",
+    "requestChangeOnLine": "이 줄의 변경 요청",
+    "saved": "파일이 저장되었습니다",
+    "errorSaving": "파일을 저장하지 못했습니다: {{error}}",
+    "errorSubmitting": "변경 요청을 제출하지 못했습니다: {{error}}",
+    "saveBeforeSubmitting": "변경 요청을 제출하기 전에 파일을 저장하세요.",
+    "unsavedChanges": "저장되지 않은 변경 사항",
+    "saveShortcut": "저장 (Ctrl+S)",
+    "saveAll": "모두 저장",
+    "saveAllTooltip": "열려 있는 모든 파일 저장",
+    "savedAll": "{{count}}개 파일 저장됨",
+    "closeTab": "탭 닫기 {{file}}",
+    "discardTitle": "저장되지 않은 변경 사항을 취소하시겠습니까?",
+    "discard": "취소",
+    "discardMessage": "저장되지 않은 파일 변경 사항이 손실됩니다.",
+    "title": "에디터"
   },
   "contextFiles": {
     "workspaceTitle": "워크스페이스",
@@ -1139,6 +1190,7 @@
     "useGitEnabled": "Git 사용 중 - 클릭하면 파일 시스템 사용",
     "useGitDisabled": "파일 시스템 사용 중 - 클릭하면 Git 사용",
     "revertFile": "변경 사항 되돌리기",
+    "addFileToGit": "Git에 파일 추가",
     "fileHasConflicts": "파일에 병합 충돌이 있습니다",
     "confirmRevertTitle": "파일 변경 사항을 되돌리시겠습니까?",
     "confirmRevertMessage": "이 파일의 모든 변경 사항이 취소됩니다. 이 작업은 되돌릴 수 없습니다.",

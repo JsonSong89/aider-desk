@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.79.0]
+
+- optimized task state determination when 'proceed (y/n)' is present
+- added support for showing untracked files in Updated Files and add to git action
+- added CodeBlock and ExpandableMessageBlock components to extension UI components API
+- replaced File Viewer with File Editor
+- added Command Palette
+- focusing prompt field after closing overlay dialogs
+- bound tool outputs and stream large file reads to prevent memory exhaustion
+- optimized project and task switching time
+- added crimson theme
+- simplified active project selection by deriving it from the URL parameter
+
 ## [0.78.0]
 
 - correctly loading input history for all the opened projects not just active one
