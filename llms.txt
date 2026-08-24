@@ -100,6 +100,7 @@ src/
         invalid-syntax.ts
         prohibited-import.ts
         valid-extension.ts
+      disposable-store.ts
       extension-context.ts
       extension-fetcher.ts
       extension-library-loader.ts
@@ -137,6 +138,7 @@ src/
         ollama.ts
         openai-compatible.ts
         openai.ts
+        opencode-go.ts
         opencode.ts
         openrouter.ts
         requesty.ts
@@ -146,6 +148,7 @@ src/
       index.ts
       model-manager.ts
       types.ts
+      utils.ts
     project/
       index.ts
       migrations.ts
@@ -263,9 +266,9 @@ src/
     logger.ts
     managers.ts
     messages.ts
+    network-manager.ts
     paths.ts
     progress-window.ts
-    proxy-manager.ts
     python-dependencies-installer.ts
     start-up.ts
     window-manager.ts
@@ -449,6 +452,9 @@ src/
             OpenAiModelOverrides.tsx
             OpenAiParameters.tsx
             OpenCodeAdvancedSettings.tsx
+            OpenCodeGoAdvancedSettings.tsx
+            OpenCodeGoModelOverrides.tsx
+            OpenCodeGoParameters.tsx
             OpenCodeModelOverrides.tsx
             OpenCodeParameters.tsx
             OpenRouterAdvancedSettings.tsx
@@ -459,6 +465,7 @@ src/
             RequestyModelOverrides.tsx
             RequestyParameters.tsx
             SyntheticParameters.tsx
+            TlsSettings.tsx
             useArrayField.ts
             VertexAiAdvancedSettings.tsx
             VertexAiModelOverrides.tsx
@@ -714,6 +721,7 @@ src/
         OllamaIcon.tsx
         OpenAiCompatibleIcon.tsx
         OpenAiIcon.tsx
+        OpenCodeGoIcon.tsx
         OpenCodeIcon.tsx
         OpenRouterIcon.tsx
         requesty.png
@@ -803,6 +811,23 @@ Files
 File: resources/connector/connector.py
 ================
 #!/usr/bin/env python
+⋮----
+def apply_tls_overrides()
+⋮----
+"""Apply AiderDesk TLS settings before litellm/httpx create their SSL contexts.
+
+  Must run before `import litellm` so module-level HTTP clients pick up the patched
+  `ssl.create_default_context`. Re-applying later only affects newly created contexts.
+  """
+⋮----
+insecure = os.getenv("AIDER_DESK_INSECURE_TLS") == "1"
+ca_bundle = os.getenv("AIDER_DESK_CA_BUNDLE_PATH")
+⋮----
+original_create_default_context = ssl.create_default_context
+⋮----
+def patched_create_default_context(*args, **kwargs)
+⋮----
+context = original_create_default_context(*args, **kwargs)
 ⋮----
 THINKING_MARKER = re.compile(r'[-]{3,}\s*\n\s*►\s*\*\*THINKING\*\*\s*\n', re.IGNORECASE)
 ANSWER_MARKER = re.compile(r'[-]{3,}\s*\n\s*►\s*\*\*ANSWER\*\*\s*\n', re.IGNORECASE)
@@ -1366,6 +1391,8 @@ async def update_environment_variables(self, environment_variables)
 ⋮----
 """Update environment variables for the Aider process"""
 ⋮----
+tls_changed = any(
+⋮----
 # Update the environment variables in the current process
 ⋮----
 async def run_command(self, command, messages, files)
@@ -1745,7 +1772,7 @@ import { ChildProcess } from 'node:child_process';
 import treeKill from 'tree-kill';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { glob } from 'glob';
+import { globIterate } from 'glob';
 import { AgentProfile, BashToolSettings, FileWriteMode, PromptContext, ToolApprovalState } from '@common/types';
 import {
   POWER_TOOL_BASH as TOOL_BASH,
@@ -2329,7 +2356,14 @@ import { createMemoryToolset } from './tools/memory';
 import { createSkillsToolset } from './tools/skills';
 import { McpManager } from './mcp-manager';
 import { ApprovalManager } from './tools/approval-manager';
-import { estimateMessageTokens, extractPromptContextFromToolResult, findLastUserMessage, isNetworkError, readFileContent, safeJsonStringify } from './utils';
+import {
+  estimateMessageTokens,
+  extractPromptContextFromToolResult,
+  findLastUserMessage,
+  isNetworkError,
+  readFileContent,
+  safeStringifyToolOutput,
+} from './utils';
 import { extractReasoningMiddleware } from './middlewares/extract-reasoning-middleware';
 import { CompactionLevel, generateCompactedSummary, getReloadableMessages, getSubagentOldResultIds, smartCompactMessages } from './compaction';
 ⋮----
@@ -3091,8 +3125,8 @@ const optimizeSubagentMessages = (messages: ModelMessage[]): ModelMessage[] =>
  */
 export const convertImageToolResults = (messages: ModelMessage[]): ModelMessage[] =>
 ⋮----
-// Skip content-type outputs — they may already have file parts
-// from a provider that supports them natively
+// Handle content-type outputs — extract file/image parts into user messages
+// since not all providers support file parts in tool results natively
 ⋮----
 // If images were extracted, add a user message with the image parts
 ⋮----
@@ -3409,6 +3443,32 @@ const done = (): void =>
 export const stringifyWithBudget = (value: unknown, maxChars = TOOL_RESULT_MAX_JSON_CHARS):
 ⋮----
 export const safeJsonStringify = (value: unknown, maxChars = TOOL_RESULT_MAX_JSON_CHARS): string =>
+⋮----
+/**
+ * Checks if a content array (e.g. MCP tool result parts) contains any non-text parts
+ * (e.g. media, image, file). These parts carry binary data (base64) that must NOT be
+ * truncated — truncating them corrupts the data and causes the model to receive a
+ * broken text fragment instead of a proper multimodal attachment.
+ */
+export const contentArrayHasNonTextParts = (content: unknown): boolean =>
+⋮----
+/**
+ * Checks if a value contains non-text parts (e.g. media, image, file) in its content array.
+ * Handles multiple formats: direct arrays, { content: [...] }, and { type: 'content', value: [...] }.
+ */
+const hasNonTextContentParts = (value: unknown): boolean =>
+⋮----
+// { content: [...] } (MCP / extension tool result format)
+⋮----
+// { type: 'content', value: [...] } (wrapped ToolResultOutput)
+⋮----
+/**
+ * Safely serializes a tool result output to JSON for storage in context/IPC.
+ * When the output contains non-text parts (media, image, file), the full payload
+ * is preserved via JSON.stringify to avoid corrupting binary data. For text-only
+ * outputs, falls back to stringifyWithBudget for OOM protection.
+ */
+export const safeStringifyToolOutput = (value: unknown, maxChars = TOOL_RESULT_MAX_JSON_CHARS): string =>
 ⋮----
 /**
  * Reads a file and returns its content with optional line numbering and line range.
@@ -4015,11 +4075,35 @@ File: src/main/extensions/__fixtures__/valid-extension.ts
 
 
 ================
+File: src/main/extensions/disposable-store.ts
+================
+import logger from '@/logger';
+⋮----
+type CleanupFn = () => void | Promise<void>;
+⋮----
+export class DisposableStore
+⋮----
+constructor(private readonly extensionName: string)
+⋮----
+addExtensionDisposable(cleanup: CleanupFn): void
+⋮----
+addProjectDisposable(projectDir: string, cleanup: CleanupFn): void
+⋮----
+async disposeExtension(): Promise<void>
+⋮----
+async disposeProject(projectDir: string): Promise<void>
+⋮----
+hasProjectDisposables(projectDir: string): boolean
+⋮----
+private async disposeAllProjects(): Promise<void>
+
+================
 File: src/main/extensions/extension-context.ts
 ================
 import { ProjectContextImpl } from './project-context';
 import { TaskContextImpl } from './task-context';
 ⋮----
+import type { DisposableStore } from './disposable-store';
 import type { ElectronApp, ExtensionContext, MemoryContext, ProjectContext, TaskContext } from '@common/extensions';
 import type { McpServerConfig, Model, ProviderProfile, SettingsData } from '@common/types';
 import type { McpConfigManager } from '@/agent/mcp-config-manager';
@@ -4039,6 +4123,7 @@ export class ExtensionContextImpl implements ExtensionContext
 constructor(
     private readonly extensionId: string,
     private readonly extensionName: string,
+    disposableStore: DisposableStore,
     private readonly store?: Store,
     private readonly modelManager?: ModelManager,
     private readonly eventManager?: EventManager,
@@ -4047,6 +4132,8 @@ constructor(
     private readonly task?: Task,
     private readonly mcpConfigManager?: McpConfigManager,
 )
+⋮----
+addDisposable(setup: () => (() => void | Promise<void>) | void): void
 ⋮----
 log(message: string, type: 'info' | 'error' | 'warn' | 'debug' = 'info'): void
 ⋮----
@@ -4270,6 +4357,7 @@ import { DEFAULT_AGENT_PROFILE } from '@common/agent';
 import { ExtensionLoader } from './extension-loader';
 import { ExtensionRegistry, LoadedExtension } from './extension-registry';
 import { ExtensionContextImpl } from './extension-context';
+import { DisposableStore } from './disposable-store';
 import { ExtensionFetcher } from './extension-fetcher';
 import { ExtensionLibraryLoader } from './extension-library-loader';
 ⋮----
@@ -4330,7 +4418,7 @@ import { shouldUsePolling } from '@/utils/file-watch';
 import logger from '@/logger';
 import { AIDER_DESK_EXTENSIONS_DIR, AIDER_DESK_GLOBAL_EXTENSIONS_DIR } from '@/constants';
 import { ApprovalManager } from '@/agent/tools/approval-manager';
-import { stringifyWithBudget, truncateToolResult } from '@/agent/utils';
+import { contentArrayHasNonTextParts, stringifyWithBudget, truncateToolResult } from '@/agent/utils';
 import { Project } from '@/project';
 import { Task } from '@/task';
 ⋮----
@@ -4415,6 +4503,8 @@ export type ExtensionEventMap = {
   onInterrupted: InterruptedEvent;
 };
 ⋮----
+const hasNonTextContentParts = (value: unknown): boolean =>
+⋮----
 const boundExtensionToolResult = async (result: unknown): Promise<unknown> =>
 ⋮----
 export class ExtensionManager
@@ -4429,6 +4519,8 @@ constructor(
     private readonly registry: ExtensionRegistry = new ExtensionRegistry(),
 )
 ⋮----
+private isExtensionDisabled(filePath: string): boolean
+⋮----
 /**
    * Filter extensions based on disabled list from settings
    * @param extensions - All loaded extensions
@@ -4437,14 +4529,19 @@ constructor(
 private filterEnabledExtensions(extensions: LoadedExtension[]): LoadedExtension[]
 ⋮----
 /**
-   * Handle settings changes. Detects when extensions with UI components
-   * are enabled/disabled and triggers UI refresh accordingly.
+   * Handle settings changes. Detects when extensions are enabled/disabled
+   * and triggers lifecycle events accordingly.
    */
-settingsChanged(oldSettings: SettingsData, newSettings: SettingsData): void
+async settingsChanged(oldSettings: SettingsData, newSettings: SettingsData): Promise<void>
 ⋮----
 // Check for disabled extensions changes
 ⋮----
-// Find extensions that changed state
+// newlyEnabled: was disabled before, now enabled (removed from disabled list)
+// newlyDisabled: was enabled before, now disabled (added to disabled list)
+⋮----
+// Unload newly disabled extensions: disposables first, then onUnload
+⋮----
+// Re-initialize newly enabled extensions
 ⋮----
 // Check if any changed extensions have UI components
 ⋮----
@@ -4516,6 +4613,12 @@ async dispose(): Promise<void>
 async unloadExtension(filePath: string): Promise<void>
 ⋮----
 async reloadExtension(filePath: string, project?: Project): Promise<boolean>
+⋮----
+private getOrCreateDisposableStore(loaded: LoadedExtension): DisposableStore
+⋮----
+private findLoadedById(extensionId: string, projectDir?: string): LoadedExtension | undefined
+⋮----
+private createContext(extensionId: string, extensionName: string, project?: Project, task?: Task): ExtensionContextImpl
 ⋮----
 private findExtensionByPath(filePath: string): LoadedExtension | undefined
 ⋮----
@@ -4676,6 +4779,8 @@ private async installDependencies(extensionPath: string): Promise<void>
    */
 async uninstallExtension(extensionId: string, projectDir?: string): Promise<boolean>
 ⋮----
+// Unload (dispose + onUnload) before removing files
+⋮----
 /**
    * Update an extension from a repository, overwriting existing files
    * @param extensionId - Extension identifier (filePath of installed extension)
@@ -4735,6 +4840,9 @@ async dispatchEvent<K extends keyof ExtensionEventMap>(
 ⋮----
 // Skip if extension doesn't handle this event
 ⋮----
+// For onProjectStopped: dispose project-level disposables BEFORE calling the handler
+// (disposers first, then manual cleanup — consistent with onUnload pattern)
+⋮----
 // Create ExtensionContext for this extension
 ⋮----
 // Call the extension handler
@@ -4764,6 +4872,9 @@ import { promises as fs } from 'fs';
 ⋮----
 import { Extension, ExtensionMetadata } from '@common/extensions';
 ⋮----
+import type { Project } from '@/project';
+import type { DisposableStore } from './disposable-store';
+⋮----
 import logger from '@/logger';
 ⋮----
 export interface LoadedExtension {
@@ -4774,6 +4885,8 @@ export interface LoadedExtension {
   initialized: boolean;
   projectDir?: string;
   readmeContent?: string;
+  project?: Project;
+  disposableStore?: DisposableStore;
 }
 ⋮----
 export class ExtensionRegistry
@@ -4810,13 +4923,16 @@ File: src/main/extensions/project-context.ts
 ================
 import { TaskContextImpl } from './task-context';
 ⋮----
+import type { DisposableStore } from './disposable-store';
 import type { ProjectContext, TaskContext } from '@common/extensions';
 import type { AgentProfile, CommandsData, CreateTaskParams, ProjectSettings, TaskData } from '@common/types';
 import type { Project } from '@/project';
 ⋮----
 export class ProjectContextImpl implements ProjectContext
 ⋮----
-constructor(private readonly project: Project)
+constructor(
+⋮----
+addDisposable(setup: () => (() => void | Promise<void>) | void): void
 ⋮----
 get baseDir(): string
 ⋮----
@@ -5302,11 +5418,11 @@ const getAlibabaPlanProviderOptions = (llmProvider: LlmProvider, model: Model, r
 ================
 File: src/main/models/providers/anthropic-compatible.ts
 ================
-import { Model, ProviderProfile, Reasoning, SettingsData } from '@common/types';
+import { Model, ProviderProfile, Reasoning, SettingsData, TlsPolicyRegistrar } from '@common/types';
 import { isAnthropicCompatibleProvider, AnthropicCompatibleProvider, LlmProvider } from '@common/agent';
 import { createAnthropic } from '@ai-sdk/anthropic';
 ⋮----
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ToolSet } from 'ai';
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 ⋮----
 import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
@@ -5314,10 +5430,15 @@ import logger from '@/logger';
 import { getEffectiveEnvironmentVariable } from '@/utils';
 import { getAnthropicCacheControl } from '@/models/providers/anthropic';
 import { getDefaultUsageReport } from '@/models/providers/default';
+import { syncProviderTlsRule } from '@/models/utils';
 ⋮----
 const ensureV1Suffix = (baseUrl: string): string =>
 ⋮----
-const loadAnthropicCompatibleModels = async (profile: ProviderProfile, settings: SettingsData): Promise<LoadModelsResponse> =>
+const loadAnthropicCompatibleModels = async (
+  profile: ProviderProfile,
+  settings: SettingsData,
+  tlsRegistrar?: TlsPolicyRegistrar,
+): Promise<LoadModelsResponse> =>
 ⋮----
 const hasAnthropicCompatibleEnvVars = (settings: SettingsData): boolean =>
 ⋮----
@@ -5326,7 +5447,16 @@ const getAnthropicCompatibleAiderMapping = (provider: ProviderProfile, modelId: 
 // Use anthropic prefix for Anthropic-compatible providers
 ⋮----
 // === LLM Creation Functions ===
-const createAnthropicCompatibleLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel =>
+const createAnthropicCompatibleLlm = (
+  profile: ProviderProfile,
+  model: Model,
+  settings: SettingsData,
+  projectDir: string,
+  _toolSet?: ToolSet,
+  _systemPrompt?: string,
+  _providerMetadata?: unknown,
+  tlsRegistrar?: TlsPolicyRegistrar,
+): LanguageModel =>
 ⋮----
 // Use createAnthropic with custom baseURL to get a provider instance, then get the model.
 // The @ai-sdk/anthropic SDK only appends `/messages` to the baseURL, so it must include `/v1`.
@@ -6213,19 +6343,20 @@ let normalized = baseUrl.replace(/\/+$/, ''); // Remove all trailing slashes
 ================
 File: src/main/models/providers/openai-compatible.ts
 ================
-import { Model, ProviderProfile, ReasoningEffort, SettingsData, Reasoning } from '@common/types';
+import { Model, ProviderProfile, ReasoningEffort, SettingsData, Reasoning, TlsPolicyRegistrar } from '@common/types';
 import { isOpenAiCompatibleProvider, LlmProvider, OpenAiCompatibleProvider } from '@common/agent';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 ⋮----
 import type { JSONValue, SharedV4ProviderOptions } from '@ai-sdk/provider';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ToolSet } from 'ai';
 ⋮----
 import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
 import logger from '@/logger';
 import { getEffectiveEnvironmentVariable } from '@/utils';
 import { getDefaultUsageReport } from '@/models/providers/default';
+import { syncProviderTlsRule } from '@/models/utils';
 ⋮----
-const loadOpenaiCompatibleModels = async (profile: ProviderProfile, settings: SettingsData): Promise<LoadModelsResponse> =>
+const loadOpenaiCompatibleModels = async (profile: ProviderProfile, settings: SettingsData, tlsRegistrar?: TlsPolicyRegistrar): Promise<LoadModelsResponse> =>
 ⋮----
 const hasOpenAiCompatibleEnvVars = (settings: SettingsData): boolean =>
 ⋮----
@@ -6234,7 +6365,16 @@ const getOpenAiCompatibleAiderMapping = (provider: ProviderProfile, modelId: str
 // Use openai prefix for OpenAI-compatible providers
 ⋮----
 // === LLM Creation Functions ===
-const createOpenAiCompatibleLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel =>
+const createOpenAiCompatibleLlm = (
+  profile: ProviderProfile,
+  model: Model,
+  settings: SettingsData,
+  projectDir: string,
+  _toolSet?: ToolSet,
+  _systemPrompt?: string,
+  _providerMetadata?: unknown,
+  tlsRegistrar?: TlsPolicyRegistrar,
+): LanguageModel =>
 ⋮----
 // Use createOpenAICompatible to get a provider instance, then get the model
 ⋮----
@@ -6312,6 +6452,66 @@ const createOpenAIVoiceSession = async (profile: ProviderProfile, settings: Sett
 // Configuration helper functions
 ⋮----
 // Voice support
+
+================
+File: src/main/models/providers/opencode-go.ts
+================
+import { Model, ProviderProfile, SettingsData } from '@common/types';
+import { isOpenCodeGoProvider, LlmProvider, OpenCodeGoProvider } from '@common/agent';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { omit } from 'lodash';
+⋮----
+import { getDefaultModelInfo, getDefaultUsageReport } from './default';
+⋮----
+import type { LanguageModel, ModelMessage } from 'ai';
+⋮----
+import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
+import { getEffectiveEnvironmentVariable } from '@/utils';
+⋮----
+interface OpenCodeGoModel {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
+}
+⋮----
+interface OpenCodeGoModelsResponse {
+  object: string;
+  data: OpenCodeGoModel[];
+}
+⋮----
+type ModelEndpointType = 'openai-responses' | 'anthropic' | 'openai-compatible';
+⋮----
+// Based on the documented Go endpoints (https://opencode.ai/docs/go#endpoints). Model IDs for Go
+// don't follow a predictable naming scheme, so unlike the OpenCode Zen provider we map them explicitly.
+⋮----
+const getModelEndpointType = (modelId: string): ModelEndpointType =>
+⋮----
+// Fallback for models not yet in the documented list.
+⋮----
+const loadOpencodeGoModels = async (profile: ProviderProfile, settings: SettingsData): Promise<LoadModelsResponse> =>
+⋮----
+export const hasOpencodeGoEnvVars = (settings: SettingsData): boolean =>
+⋮----
+export const getOpencodeGoAiderMapping = (provider: ProviderProfile, modelId: string, settings: SettingsData, projectDir: string): AiderModelMapping =>
+⋮----
+// === LLM Creation Functions ===
+export const createOpencodeGoLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel =>
+⋮----
+// Grok's upstream rejects the `item_reference` input items that @ai-sdk/openai emits for
+// Responses history parts carrying OpenAI item IDs. Stripping that metadata makes the SDK
+// inline full content instead while keeping store (and thus caching behavior) at its default.
+const normalizeOpencodeGoMessages = (llmProvider: LlmProvider, model: Model, messages: ModelMessage[]): ModelMessage[] =>
+⋮----
+// === Complete Strategy Implementation ===
+⋮----
+// Core LLM functions
+⋮----
+// Model discovery functions
+⋮----
+// Message normalization
 
 ================
 File: src/main/models/providers/opencode.ts
@@ -6720,7 +6920,18 @@ import path from 'path';
 ⋮----
 import { AVAILABLE_PROVIDERS, getDefaultProviderParams, LlmProvider, LlmProviderName } from '@common/agent';
 import { ProviderDefinition } from '@common/extensions';
-import { Model, ModelInfo, ModelOverrides, ProviderModelsData, ProviderProfile, Reasoning, SettingsData, UsageReportData, VoiceSession } from '@common/types';
+import {
+  Model,
+  ModelInfo,
+  ModelOverrides,
+  ProviderModelsData,
+  ProviderProfile,
+  Reasoning,
+  SettingsData,
+  TlsPolicyRegistrar,
+  UsageReportData,
+  VoiceSession,
+} from '@common/types';
 import { extractProviderModel } from '@common/utils';
 ⋮----
 import { anthropicProviderStrategy } from './providers/anthropic';
@@ -6744,6 +6955,7 @@ import { ollamaProviderStrategy } from './providers/ollama';
 import { openaiProviderStrategy } from './providers/openai';
 import { openaiCompatibleProviderStrategy } from './providers/openai-compatible';
 import { opencodeProviderStrategy } from './providers/opencode';
+import { opencodeGoProviderStrategy } from './providers/opencode-go';
 import { openrouterProviderStrategy } from './providers/openrouter';
 import { requestyProviderStrategy } from './providers/requesty';
 import { syntheticProviderStrategy } from './providers/synthetic';
@@ -6798,6 +7010,7 @@ export class ModelManager
 constructor(
     private store: Store,
     private eventManager: EventManager,
+    private readonly tlsRegistrar?: TlsPolicyRegistrar,
 )
 ⋮----
 private async init(): Promise<void>
@@ -6958,7 +7171,7 @@ getExtensionProviderProfiles(): ProviderProfile[]
 ================
 File: src/main/models/types.ts
 ================
-import { Model, ModelInfo, ProviderProfile, Reasoning, SettingsData, UsageReportData, VoiceSession } from '@common/types';
+import { Model, ModelInfo, ProviderProfile, Reasoning, SettingsData, TlsPolicyRegistrar, UsageReportData, VoiceSession } from '@common/types';
 import { LlmProvider } from '@common/agent';
 ⋮----
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
@@ -7005,6 +7218,7 @@ export interface LlmProviderStrategy {
     toolSet?: ToolSet,
     systemPrompt?: string,
     providerMetadata?: unknown,
+    tlsRegistrar?: TlsPolicyRegistrar,
   ) => LanguageModel | Promise<LanguageModel>;
 
   /**
@@ -7016,7 +7230,7 @@ export interface LlmProviderStrategy {
   /**
    * Loads available models from the provider's API
    */
-  loadModels: (profile: ProviderProfile, settings: SettingsData) => Promise<LoadModelsResponse>;
+  loadModels: (profile: ProviderProfile, settings: SettingsData, tlsRegistrar?: TlsPolicyRegistrar) => Promise<LoadModelsResponse>;
 
   /**
    * Checks if required environment variables are available
@@ -7141,6 +7355,13 @@ export interface LlmProviderStrategy {
    */
 ⋮----
 export type LlmProviderRegistry = Record<string, LlmProviderStrategy>;
+
+================
+File: src/main/models/utils.ts
+================
+import type { TlsPolicyOptions, TlsPolicyRegistrar } from '@common/types';
+⋮----
+export const syncProviderTlsRule = (registrar: TlsPolicyRegistrar | undefined, baseUrl: string | undefined, sslVerify?: boolean, caCertPath?: string): void =>
 
 ================
 File: src/main/project/index.ts
@@ -7945,6 +8166,10 @@ registerRoutes(router: Router): void
 // Validate path
 ⋮----
 // Is project path
+⋮----
+// Clone project from repository
+⋮----
+// Cancel active project clone
 ⋮----
 // Get file path suggestions
 ⋮----
@@ -9042,7 +9267,7 @@ import { EventManager } from '@/events';
 import { getEnvironmentVariablesForAider } from '@/utils';
 import { Task } from '@/task/task';
 import { PythonDependenciesInstaller } from '@/python-dependencies-installer';
-import { getProxyEnvVars } from '@/proxy-manager';
+import { getNetworkEnvVars } from '@/network-manager';
 ⋮----
 export class AiderManager
 ⋮----
@@ -9496,7 +9721,7 @@ import { MemoryManager } from '@/memory/memory-manager';
 import { getElectronApp } from '@/app';
 import { PromptsManager } from '@/prompts';
 import { PythonDependenciesInstaller } from '@/python-dependencies-installer';
-import { getProxyEnvVars } from '@/proxy-manager';
+import { getNetworkEnvVars } from '@/network-manager';
 import { CompactionLevel, extractSummary, smartCompactMessages } from '@/agent/compaction';
 ⋮----
 const getTaskFinishedNotificationText = (task: TaskData) =>
@@ -10425,7 +10650,7 @@ import { AgentProfile, Mode, SettingsData, TaskData } from '@common/types';
 ⋮----
 import { Store } from '@/store';
 import logger from '@/logger';
-import { POSTHOG_PUBLIC_API_KEY, POSTHOG_HOST, APP_TYPE } from '@/constants';
+import { POSTHOG_PUBLIC_API_KEY, POSTHOG_HOST, APP_TYPE, PRODUCT_TELEMETRY_DISTINCT_ID } from '@/constants';
 import { getElectronApp } from '@/app';
 ⋮----
 export class TelemetryManager
@@ -10625,6 +10850,7 @@ import slugify from 'slugify';
 import { glob } from 'glob';
 ⋮----
 import logger from '@/logger';
+import { AIDER_DESK_PROJECTS_DIR } from '@/constants';
 // @ts-expect-error filenamify is not typed properly
 ⋮----
 export const getFilePathSuggestions = async (currentPath: string, directoriesOnly = false): Promise<string[]> =>
@@ -10640,6 +10866,12 @@ export const getFilePathSuggestions = async (currentPath: string, directoriesOnl
 // Filter entries based on type and search pattern
 ⋮----
 export const isProjectPath = async (path: string): Promise<boolean> =>
+⋮----
+const getRepoNameFromPath = (repoPath: string): string | null =>
+⋮----
+export const parseRepositoryUrl = (repositoryUrl: string):
+⋮----
+export const cloneProjectRepository = async (repositoryUrl: string, targetDir?: string, signal?: AbortSignal): Promise<string> =>
 ⋮----
 export const isValidPath = async (baseDir: string, filePath: string): Promise<boolean> =>
 ⋮----
@@ -12122,12 +12354,21 @@ import { TerminalManager } from '@/terminal/terminal-manager';
 import { ExtensionManager, LoadedExtension } from '@/extensions';
 import { PromptsManager } from '@/prompts';
 import logger, { eventTransport } from '@/logger';
-import { getDefaultProjectSettings, getEffectiveEnvironmentVariable, getFilePathSuggestions, isProjectPath, isValidPath, scrapeWeb, openUrl } from '@/utils';
+import {
+  cloneProjectRepository,
+  getDefaultProjectSettings,
+  getEffectiveEnvironmentVariable,
+  getFilePathSuggestions,
+  isProjectPath,
+  isValidPath,
+  scrapeWeb,
+  openUrl,
+} from '@/utils';
 import { expandTilde } from '@/agent/utils';
 import { AIDER_DESK_TMP_DIR, LOGS_DIR } from '@/constants';
 import { EventManager } from '@/events';
 import { isElectron } from '@/app';
-import { ProxyManager } from '@/proxy-manager';
+import { NetworkManager } from '@/network-manager';
 ⋮----
 export class EventsHandler
 ⋮----
@@ -12139,7 +12380,7 @@ getEventManager(): EventManager
 ⋮----
 async saveSettings(newSettings: SettingsData): Promise<SettingsData>
 ⋮----
-// Re-initialize proxy if settings changed
+// Re-initialize network settings (proxy/TLS rules) if changed
 ⋮----
 getProjectSettings(baseDir: string): ProjectSettings
 ⋮----
@@ -12416,6 +12657,10 @@ async openUrlExternally(url: string): Promise<void>
 async openUrlInWindow(url: string, title?: string): Promise<void>
 ⋮----
 async isProjectPath(path: string): Promise<boolean>
+⋮----
+async cloneProject(repositoryUrl: string, targetDir?: string): Promise<string>
+⋮----
+cancelCloneProject(): void
 ⋮----
 async isValidPath(baseDir: string, path: string): Promise<boolean>
 ⋮----
@@ -12709,7 +12954,7 @@ import { ExtensionManager } from '@/extensions/extension-manager';
 import { Store } from '@/store';
 import { SERVER_PORT } from '@/constants';
 import logger, { initEventLogging } from '@/logger';
-import { ProxyManager } from '@/proxy-manager';
+import { NetworkManager } from '@/network-manager';
 import { EventsHandler } from '@/events-handler';
 import { PromptsManager } from '@/prompts';
 import { PythonDependenciesInstaller } from '@/python-dependencies-installer';
@@ -12727,7 +12972,7 @@ export interface ManagersResult {
 ⋮----
 export const initManagers = async (store: Store, windowManager?: WindowManager): Promise<ManagersResult> =>
 ⋮----
-// Initialize proxy manager FIRST — must be before any network calls
+// Initialize network manager FIRST — must be before any network calls
 ⋮----
 // Initialize telemetry manager (non-blocking - analytics not critical for startup)
 ⋮----
@@ -13051,6 +13296,81 @@ export interface ReadonlyUnsubscribeEventsMessage extends Message {
 export const isReadonlyUnsubscribeEventsMessage = (message: Message): message is ReadonlyUnsubscribeEventsMessage =>
 
 ================
+File: src/main/network-manager.ts
+================
+import { readFileSync } from 'fs';
+⋮----
+import { setGlobalDispatcher, EnvHttpProxyAgent, Agent as UndiciAgent, Dispatcher } from 'undici';
+import { bootstrap } from 'global-agent';
+⋮----
+import type { ProviderProfile, SettingsData, TlsPolicyOptions, TlsPolicyRegistrar } from '@common/types';
+⋮----
+import logger from '@/logger';
+⋮----
+const HEADERS_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const BODY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const CONNECT_TIMEOUT_MS = 30 * 1000; // 30 seconds
+⋮----
+type TlsConnectOptions = {
+  rejectUnauthorized?: false;
+  ca?: string[];
+};
+⋮----
+class TlsRoutingDispatcher extends Dispatcher
+⋮----
+constructor(
+    private readonly resolveDispatcher: (origin: string | undefined) => Dispatcher,
+    private readonly getAllDispatchers: () => Dispatcher[],
+)
+⋮----
+dispatch(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean
+⋮----
+close(): Promise<void>
+⋮----
+destroy(): Promise<void>
+⋮----
+export const getProxyEnvVars = (settings: SettingsData): Record<string, string> =>
+⋮----
+export const getTlsEnvVars = (providers: ProviderProfile[]): Record<string, string> =>
+⋮----
+export const getNetworkEnvVars = (settings: SettingsData, providers: ProviderProfile[]): Record<string, string> => (
+⋮----
+export class NetworkManager implements TlsPolicyRegistrar
+⋮----
+/**
+   * Initialize network settings from settings. Called once during app startup (first in managers init).
+   */
+init(settings: SettingsData): void
+⋮----
+/**
+   * React to settings changes. Called on every saveSettings().
+   * Re-initializes the proxy if the proxy config changed.
+   */
+settingsChanged(oldSettings: SettingsData, newSettings: SettingsData): void
+⋮----
+setTlsPolicy(origin: string, options: TlsPolicyOptions): void
+⋮----
+hasTlsPolicy(origin: string): boolean
+⋮----
+clearTlsPolicy(origin: string): void
+⋮----
+private resolveDispatcher(origin: string | undefined): Dispatcher
+⋮----
+private getAllDispatchers(): Dispatcher[]
+⋮----
+private applyProxy(url: string, noProxy?: string): void
+⋮----
+// Cover Axios, Got, and legacy HTTP libs via global-agent
+⋮----
+private clearProxy(): void
+⋮----
+private rebuildDispatchers(): void
+⋮----
+private buildDispatcher(connectOptions?: TlsConnectOptions): Dispatcher
+⋮----
+// `connect` applies to plain Agents, `requestTls` to origins tunneled through ProxyAgent CONNECT
+
+================
 File: src/main/paths.ts
 ================
 import path from 'path';
@@ -13085,41 +13405,6 @@ setCompleted(): void
 addLog(message: string): void
 ⋮----
 close(): void
-
-================
-File: src/main/proxy-manager.ts
-================
-import { setGlobalDispatcher, EnvHttpProxyAgent, Agent as UndiciAgent } from 'undici';
-import { bootstrap } from 'global-agent';
-⋮----
-import type { SettingsData } from '@common/types';
-⋮----
-import logger from '@/logger';
-⋮----
-const HEADERS_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-const BODY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-const CONNECT_TIMEOUT_MS = 30 * 1000; // 30 seconds
-⋮----
-export const getProxyEnvVars = (settings: SettingsData): Record<string, string> =>
-⋮----
-export class ProxyManager
-⋮----
-/**
-   * Initialize proxy from settings. Called once during app startup (first in managers init).
-   */
-init(settings: SettingsData): void
-⋮----
-/**
-   * React to settings changes. Called on every saveSettings().
-   * Re-initializes the proxy if the config changed.
-   */
-settingsChanged(oldSettings: SettingsData, newSettings: SettingsData): void
-⋮----
-private applyProxy(url: string, noProxy?: string): void
-⋮----
-// Cover Axios, Got, and legacy HTTP libs via global-agent
-⋮----
-private clearProxy(): void
 
 ================
 File: src/main/python-dependencies-installer.ts
@@ -13697,6 +13982,8 @@ async cancelCommitChanges(baseDir: string, taskId: string): Promise<void>
 addFile(baseDir: string, taskId: string, filePath: string, readOnly?: boolean): void
 async isValidPath(baseDir: string, path: string): Promise<boolean>
 async isProjectPath(path: string): Promise<boolean>
+async cloneProject(repositoryUrl: string, targetDir?: string): Promise<string>
+async cancelCloneProject(): Promise<void>
 dropFile(baseDir: string, taskId: string, path: string): void
 runCommand(baseDir: string, taskId: string, command: string): void
 async pasteImage(baseDir: string, taskId: string, imageBuffer?: ArrayBuffer): Promise<void>
@@ -14747,7 +15034,7 @@ import { DiffViewer, UDiffViewer, CompactDiffViewer } from '@/components/common/
 import { useApi } from '@/contexts/ApiContext';
 import { useSaveSettings, useSettingsStore } from '@/stores/settingsStore';
 import { useResponsive } from '@/hooks/useResponsive';
-import { highlightWithLowlight, lowlight } from '@/utils/highlighter';
+import { highlightWithLowlight } from '@/utils/highlighter';
 ⋮----
 const isCustomDiffContent = (content: string): boolean =>
 ⋮----
@@ -16044,6 +16331,7 @@ import { CgSpinner } from 'react-icons/cg';
 import { MdKeyboardDoubleArrowDown } from 'react-icons/md';
 import { ToolMessage } from '@common/types';
 ⋮----
+import { CodeBlock } from '@/components/common/CodeBlock';
 import { CodeInline } from '@/components/common/CodeInline';
 import { ExpandableMessageBlock } from '@/components/message/ExpandableMessageBlock';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -17901,8 +18189,6 @@ const handleTouchMove = (e: TouchEvent) =>
 ⋮----
 const scrollToEndIfFollowing = () =>
 ⋮----
-// when content no longer overflows the container (e.g. messages cleared), unpause follow-scroll
-⋮----
 const exportToImage = async () =>
 ⋮----
 // eslint-disable-next-line no-console
@@ -17978,6 +18264,7 @@ import { useTranslation } from 'react-i18next';
 import { AnthropicCompatibleProvider } from '@common/agent';
 ⋮----
 import { Input } from '@/components/common/Input';
+import { TlsSettings } from '@/components/ModelLibrary/providers/TlsSettings';
 import { useEffectiveEnvironmentVariable } from '@/hooks/useEffectiveEnvironmentVariable';
 ⋮----
 type Props = {
@@ -18654,6 +18941,7 @@ import { useTranslation } from 'react-i18next';
 import { OpenAiCompatibleProvider } from '@common/agent';
 ⋮----
 import { OpenAiCompatibleAdvancedSettings } from './OpenAiCompatibleAdvancedSettings';
+import { TlsSettings } from './TlsSettings';
 ⋮----
 import { Input } from '@/components/common/Input';
 import { useEffectiveEnvironmentVariable } from '@/hooks/useEffectiveEnvironmentVariable';
@@ -18727,6 +19015,52 @@ label=
 File: src/renderer/src/components/ModelLibrary/providers/OpenCodeAdvancedSettings.tsx
 ================
 export const OpenCodeAdvancedSettings = () =>
+
+================
+File: src/renderer/src/components/ModelLibrary/providers/OpenCodeGoAdvancedSettings.tsx
+================
+export const OpenCodeGoAdvancedSettings = () =>
+
+================
+File: src/renderer/src/components/ModelLibrary/providers/OpenCodeGoModelOverrides.tsx
+================
+import { getDefaultProviderParams, LlmProvider } from '@common/agent';
+⋮----
+import { DisableStreaming } from '../DisableStreaming';
+import { DisableToolCallStreaming } from '../DisableToolCallStreaming';
+⋮----
+type Props = {
+  provider: LlmProvider;
+  overrides: Record<string, unknown>;
+  onChange: (overrides: Record<string, unknown>) => void;
+};
+⋮----
+export const OpenCodeGoModelOverrides = (
+⋮----
+const handleDisableStreamingChange = (disableStreaming: boolean) =>
+⋮----
+const handleDisableToolCallStreamingChange = (disableToolCallStreaming: boolean) =>
+
+================
+File: src/renderer/src/components/ModelLibrary/providers/OpenCodeGoParameters.tsx
+================
+import { ChangeEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import { OpenCodeGoProvider } from '@common/agent';
+⋮----
+import { Input } from '@/components/common/Input';
+import { useEffectiveEnvironmentVariable } from '@/hooks/useEffectiveEnvironmentVariable';
+⋮----
+type Props = {
+  provider: OpenCodeGoProvider;
+  onChange: (updated: OpenCodeGoProvider) => void;
+};
+⋮----
+export const OpenCodeGoParameters = (
+⋮----
+const handleApiKeyChange = (e: ChangeEvent<HTMLInputElement>) =>
+⋮----
+label=
 
 ================
 File: src/renderer/src/components/ModelLibrary/providers/OpenCodeModelOverrides.tsx
@@ -18987,6 +19321,33 @@ type Props = {
 export const SyntheticParameters = (
 ⋮----
 const handleApiKeyChange = (e: ChangeEvent<HTMLInputElement>) =>
+⋮----
+label=
+
+================
+File: src/renderer/src/components/ModelLibrary/providers/TlsSettings.tsx
+================
+import { ChangeEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import { LlmProviderBase } from '@common/agent';
+⋮----
+import { Input } from '@/components/common/Input';
+import { Checkbox } from '@/components/common/Checkbox';
+import { Accordion } from '@/components/common/Accordion';
+import { InfoIcon } from '@/components/common/InfoIcon';
+⋮----
+type TlsCapableProvider = LlmProviderBase & { sslVerify?: boolean; caCertPath?: string };
+⋮----
+type Props<T extends TlsCapableProvider> = {
+  provider: T;
+  onChange: (updated: T) => void;
+};
+⋮----
+const handleSslVerifyChange = (checked: boolean) =>
+⋮----
+const handleCaCertPathChange = (e: ChangeEvent<HTMLInputElement>) =>
+⋮----
+<span>
 ⋮----
 label=
 
@@ -19344,6 +19705,7 @@ import { GeminiModelOverrides } from './providers/GeminiModelOverrides';
 import { VertexAiModelOverrides } from './providers/VertexAiModelOverrides';
 import { OpenAiModelOverrides } from './providers/OpenAiModelOverrides';
 import { OpenCodeModelOverrides } from './providers/OpenCodeModelOverrides';
+import { OpenCodeGoModelOverrides } from './providers/OpenCodeGoModelOverrides';
 import { RequestyModelOverrides } from './providers/RequestyModelOverrides';
 import { AzureModelOverrides } from './providers/AzureModelOverrides';
 import { OpenAiCompatibleModelOverrides } from './providers/OpenAiCompatibleModelOverrides';
@@ -19504,6 +19866,7 @@ import {
   OpenAiCompatibleIcon,
   OpenAiIcon,
   OpenCodeIcon,
+  OpenCodeGoIcon,
   OpenRouterIcon,
   RequestyIcon,
   SyntheticIcon,
@@ -19610,6 +19973,7 @@ import {
   OpenAiCompatibleParameters,
   OpenAiParameters,
   OpenCodeParameters,
+  OpenCodeGoParameters,
   OpenRouterParameters,
   RequestyParameters,
   SyntheticParameters,
@@ -19703,6 +20067,7 @@ import {
   OpenAiCompatibleIcon,
   OpenAiIcon,
   OpenCodeIcon,
+  OpenCodeGoIcon,
   OpenRouterIcon,
   RequestyIcon,
   SyntheticIcon,
@@ -20366,7 +20731,8 @@ type Props = {
 ================
 File: src/renderer/src/components/project/OpenProjectDialog.tsx
 ================
-import { useCallback, useEffect, useState } from 'react';
+import { ChangeEvent, useCallback, useEffect, useState } from 'react';
+import { CgSpinner } from 'react-icons/cg';
 import { FaFolder } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
 import { ProjectData } from '@common/types';
@@ -20375,9 +20741,19 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
 import { AutocompletionInput } from '@/components/AutocompletionInput';
 import { Accordion } from '@/components/common/Accordion';
+import { BaseDialog } from '@/components/common/BaseDialog';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { IconButton } from '@/components/common/IconButton';
+import { Input } from '@/components/common/Input';
+import { Tabs } from '@/components/common/Tabs';
 import { useApi } from '@/contexts/ApiContext';
+⋮----
+enum OpenProjectMode {
+  Open = 'open',
+  Clone = 'clone',
+}
+⋮----
+const isValidRepositoryUrl = (url: string): boolean
 ⋮----
 type Props = {
   onClose: () => void;
@@ -20393,9 +20769,34 @@ const loadRecentProjects = async () =>
 ⋮----
 const updateSuggestions = async () =>
 ⋮----
+const updateDestinationSuggestions = async () =>
+⋮----
+// eslint-disable-next-line no-console
+⋮----
 const handleAddProject = () =>
 ⋮----
+const handleCloneProject = async () =>
+⋮----
+const handleCancelClone = () =>
+⋮----
+// eslint-disable-next-line no-console
+⋮----
+const handleRepositoryUrlChange = (e: ChangeEvent<HTMLInputElement>) =>
+⋮----
+const handleCloneDestinationChange = (value: string, isFromSuggestion: boolean) =>
+⋮----
+const handleConfirm = () =>
+⋮----
+const handleModeChange = (tabId: string) =>
+⋮----
+<BaseDialog title=
+⋮----
 title=
+⋮----
+setShowSuggestions(!isFromSuggestion);
+setProjectPath(value);
+⋮----
+placeholder=
 ⋮----
 onAddProject(path);
 onClose();
@@ -20425,6 +20826,7 @@ className=
 File: src/renderer/src/components/project/ProjectTabs.tsx
 ================
 import { ProjectData } from '@common/types';
+import { compareBaseDirs } from '@common/utils';
 import { CSS } from '@dnd-kit/utilities';
 import { MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Tab, TabGroup, TabList, Listbox, ListboxButton, ListboxOption, ListboxOptions, Transition } from '@headlessui/react';
@@ -20441,6 +20843,7 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import { MenuOption, useContextMenu } from '@/contexts/ContextMenuContext';
 import { useProjectProcessingState } from '@/stores/projectStore';
 import { useResponsive } from '@/hooks/useResponsive';
+import { useOS } from '@/hooks/useOS';
 import { ExtensionComponentWrapper } from '@/components/extensions/ExtensionComponentWrapper';
 import { getProjectTabClassName, ProjectTabContent } from '@/components/project/ProjectTabContent';
 import { useApi } from '@/contexts/ApiContext';
@@ -20507,7 +20910,7 @@ import { useOverlayFocusRestore } from '@/hooks/useOverlayFocusRestore';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useBooleanState } from '@/hooks/useBooleanState';
 import { showNotification } from '@/utils/browser-notifications';
-import { showInfoNotification } from '@/utils/notifications';
+import { showErrorNotification, showInfoNotification } from '@/utils/notifications';
 import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
 import { FloatingExtensionPanels } from '@/components/extensions/FloatingExtensionPanels';
 import { useFileEditorStore } from '@/stores/fileEditorStore';
@@ -20559,6 +20962,9 @@ const initProject = async () =>
 // Handle startup mode
 ⋮----
 // eslint-disable-next-line no-console
+⋮----
+// Self-healing fallback: if the project became active and finished loading but no task was ever
+// activated (e.g., lost startup race or a failed task creation), activate an existing task.
 ⋮----
 // Switch to specific task tabs (Ctrl + 1-9)
 ⋮----
@@ -21914,6 +22320,10 @@ import { BiReset, BiTrash } from 'react-icons/bi';
 import { closestCenter, DndContext, type DragEndEvent, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useTranslation } from 'react-i18next';
+import { AnimatePresence, motion } from 'framer-motion';
+import { clsx } from 'clsx';
+import { RiMenuUnfold4Line } from 'react-icons/ri';
+import { HiXMark } from 'react-icons/hi2';
 ⋮----
 import { SortableAgentProfileItem } from './SortableAgentProfileItem';
 import { ProfileGeneralSection } from './sections/ProfileGeneralSection';
@@ -21921,6 +22331,8 @@ import { ProfilePromptsSection } from './sections/ProfilePromptsSection';
 import { ProfileToolsSection } from './sections/ProfileToolsSection';
 import { ProfileSubagentsSection } from './sections/ProfileSubagentsSection';
 ⋮----
+import { useBooleanState } from '@/hooks/useBooleanState';
+import { useResponsive } from '@/hooks/useResponsive';
 import { useApi } from '@/contexts/ApiContext';
 import { useMcpServers } from '@/contexts/McpServersContext';
 import { getPathBasename } from '@/utils/path-utils';
@@ -22039,13 +22451,19 @@ const handleToolApprovalChange = (toolId: string, approval: ToolApprovalState) =
 ⋮----
 const handleTabChange = (tabId: string) =>
 ⋮----
-{/* Left List Pane */}
+const handleSelectProfile = (id: string) =>
 ⋮----
 {/* Profile Context Header */}
 ⋮----
 onClick=
 ⋮----
 onDelete=
+⋮----
+{/* Missing Default Profiles Section - Only shown in global context */}
+⋮----
+{/* Left List Pane */}
+⋮----
+{/* Mobile list drawer */}
 ⋮----
 {/* Right Details Pane */}
 ⋮----
@@ -22343,6 +22761,9 @@ import { McpServerConfig, McpServersData, McpTool, ProjectData } from '@common/t
 import { extractIpcErrorMessage } from '@common/utils';
 import { useTranslation } from 'react-i18next';
 import { FaChevronLeft, FaChevronRight, FaPencilAlt, FaPlus, FaSyncAlt } from 'react-icons/fa';
+import { AnimatePresence, motion } from 'framer-motion';
+import { RiMenuUnfold4Line } from 'react-icons/ri';
+import { HiXMark } from 'react-icons/hi2';
 ⋮----
 import { McpServer, McpServerForm } from './McpServerForm';
 import { McpServerSidebarItem } from './McpServerSidebarItem';
@@ -22350,6 +22771,8 @@ import { McpServerToolsPanel } from './McpServerToolsPanel';
 ⋮----
 import { useMcpServers } from '@/contexts/McpServersContext';
 import { useApi } from '@/contexts/ApiContext';
+import { useResponsive } from '@/hooks/useResponsive';
+import { useBooleanState } from '@/hooks/useBooleanState';
 import { getPathBasename } from '@/utils/path-utils';
 import { Button } from '@/components/common/Button';
 import { IconButton } from '@/components/common/IconButton';
@@ -22385,7 +22808,11 @@ const handleSave = (savedServers: Record<string, McpServerConfig>) =>
 ⋮----
 const handleCancel = () =>
 ⋮----
-{/* Left List Pane */}
+isEditingServersConfig
+? Object.entries(servers).map(([name, config]) => (
+⋮----
+setSelectedServerName(name);
+if (isMobile)
 ⋮----
 {/* Context switcher */}
 ⋮----
@@ -22399,9 +22826,11 @@ onEdit=
 ⋮----
 <Button onClick=
 ⋮----
-{/* Right Details Pane */}
+{/* Left List Pane */}
 ⋮----
-onRemove=
+{/* Mobile list drawer */}
+⋮----
+{/* Right Details Pane */}
 
 ================
 File: src/renderer/src/components/settings/mcp/McpToolCard.tsx
@@ -24803,6 +25232,7 @@ import { useState, useRef, useEffect, ReactNode, ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
+import { twMerge } from 'tailwind-merge';
 ⋮----
 import { KeyboardKeys } from '@/constants/keyboardKeys';
 ⋮----
@@ -24813,6 +25243,7 @@ type Props = {
   placeholder?: string;
   className?: string;
   inputClassName?: string;
+  label?: ReactNode;
   rightElement?: ReactNode;
   autoFocus?: boolean;
   onPaste?: (pastedText: string) => Promise<boolean>;
@@ -24828,8 +25259,6 @@ const handleOnPaste = async (e: ClipboardEvent<HTMLInputElement>) =>
 // If onPaste didn't handle the paste (returned false), manually insert the text
 ⋮----
 zIndex: 1000, // Ensure it's above other elements
-⋮----
-className=
 ⋮----
 placeholder=
 ⋮----
@@ -26565,6 +26994,35 @@ export const OpenAiIcon = ({ width = 64, height = 64, className }: Props) => (
 );
 
 ================
+File: src/renderer/src/icons/OpenCodeGoIcon.tsx
+================
+type Props = {
+  width?: number;
+  height?: number;
+  className?: string;
+};
+⋮----
+export const OpenCodeGoIcon = ({ width = 64, height = 64, className }: Props) => (
+  <div
+    aria-label="OpenCode Go"
+    className={`flex items-center justify-center rounded-md ${className || ''}`}
+    style={{
+      backgroundColor: '#131010',
+      color: 'rgb(255, 255, 255)',
+      height: `${height}px`,
+      width: `${width}px`,
+    }}
+  >
+    <svg width={width * 0.75} height={width * 0.75 * (30 / 54)} viewBox="0 0 54 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M24 30H0V0H24V6H6V24H18V18H12V12H24V30Z" fill="currentColor"></path>
+      <path d="M12 18H18V24H6V12H12V18Z" fill="currentColor" fillOpacity="0.2"></path>
+      <path d="M48 12V24H36V12H48Z" fill="currentColor" fillOpacity="0.2"></path>
+      <path d="M54 30H30V0H54V30ZM36 24H48V6H36V24Z" fill="currentColor"></path>
+    </svg>
+  </div>
+);
+
+================
 File: src/renderer/src/icons/OpenCodeIcon.tsx
 ================
 type Props = {
@@ -26852,13 +27310,9 @@ const handleKeyUp = (e: KeyboardEvent) =>
 ⋮----
 const handleAddProject = async (baseDir: string) =>
 ⋮----
-const renderProjectPanels = ()
-⋮----
-const getUpdateTooltip = () =>
+// Activate using the baseDir as stored by the backend so the strict comparisons stay consistent
 ⋮----
 return ''; // Should not happen if showUpdateIcon is true
-⋮----
-const handleCloseReleaseNotes = async () =>
 ⋮----
 tooltip=
 ⋮----
@@ -26964,6 +27418,7 @@ import { AgentProfile, Font, McpServersData, ProjectData, ProviderProfile, Setti
 import { Dispatch, ReactNode, SetStateAction, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { clsx } from 'clsx';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   FaBrain,
   FaChevronDown,
@@ -26979,7 +27434,11 @@ import {
 } from 'react-icons/fa';
 import { MdTerminal } from 'react-icons/md';
 import { LuClipboardList } from 'react-icons/lu';
+import { RiMenuUnfold4Line } from 'react-icons/ri';
+import { HiXMark } from 'react-icons/hi2';
 ⋮----
+import { useResponsive } from '@/hooks/useResponsive';
+import { useBooleanState } from '@/hooks/useBooleanState';
 import { getPathBasename } from '@/utils/path-utils';
 import { useApi } from '@/contexts/ApiContext';
 import { AiderSettings } from '@/components/settings/AiderSettings';
@@ -27062,8 +27521,6 @@ const handleChildClick = (pageId: PageId, sectionId: string) =>
 ⋮----
 const renderContent = () =>
 ⋮----
-{/* Sidebar */}
-⋮----
 className=
 ⋮----
 e.stopPropagation();
@@ -27071,6 +27528,10 @@ e.stopPropagation();
 {!item.children?.length && <span className="w-6" />} {/* Spacer for items without children */}
 ⋮----
 {/* Children */}
+⋮----
+{/* Sidebar */}
+⋮----
+{/* Mobile navigation drawer */}
 ⋮----
 {/* Content */}
 
@@ -30685,184 +31146,184 @@ File: package.json
     "@ai-sdk/otel": "1.0.60",
     "@ai-sdk/provider": "4.0.7",
     "@aiderdesk/extensions": "workspace:*",
-    "@aws-crypto/sha256-js": "^5.2.0",
-    "@aws-sdk/client-bedrock": "^3.1059.0",
-    "@aws-sdk/credential-provider-node": "^3.972.49",
-    "@aws-sdk/credential-providers": "^3.1059.0",
-    "@aws-sdk/types": "^3.973.10",
-    "@codemirror/autocomplete": "^6.18.7",
-    "@codemirror/language": "^6.12.2",
-    "@codemirror/language-data": "^6.5.2",
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
-    "@dotenvx/dotenvx": "^1.24.5",
-    "@electron-toolkit/preload": "^3.0.2",
-    "@electron-toolkit/utils": "^4.0.0",
-    "@google-cloud/aiplatform": "^5.7.0",
-    "@google/genai": "^1.30.0",
-    "@headlessui/react": "^2.2.0",
-    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
-    "@huggingface/transformers": "^3.8.1",
-    "@lancedb/lancedb": "^0.22.3",
-    "@legendapp/list": "^3.3.3",
+    "@aws-crypto/sha256-js": "5.2.0",
+    "@aws-sdk/client-bedrock": "3.1059.0",
+    "@aws-sdk/credential-provider-node": "3.972.49",
+    "@aws-sdk/credential-providers": "3.1059.0",
+    "@aws-sdk/types": "3.973.10",
+    "@codemirror/autocomplete": "6.20.0",
+    "@codemirror/language": "6.12.2",
+    "@codemirror/language-data": "6.5.2",
+    "@dnd-kit/core": "6.3.1",
+    "@dnd-kit/sortable": "10.0.0",
+    "@dotenvx/dotenvx": "1.52.0",
+    "@electron-toolkit/preload": "3.0.2",
+    "@electron-toolkit/utils": "4.0.0",
+    "@google-cloud/aiplatform": "5.14.0",
+    "@google/genai": "1.52.0",
+    "@headlessui/react": "2.2.9",
+    "@homebridge/node-pty-prebuilt-multiarch": "0.13.1",
+    "@huggingface/transformers": "3.8.1",
+    "@lancedb/lancedb": "0.22.3",
+    "@legendapp/list": "3.3.7",
     "@openrouter/ai-sdk-provider": "3.0.0",
-    "@opentelemetry/auto-instrumentations-node": "^0.79.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.219.0",
-    "@opentelemetry/sdk-node": "^0.221.0",
-    "@opentelemetry/sdk-trace-base": "^2.10.0",
-    "@pierre/diffs": "^1.2.12",
-    "@posthog/ai": "^8.3.0",
-    "@radix-ui/react-tooltip": "^1.2.8",
-    "@reactuses/core": "^6.0.6",
-    "@replit/codemirror-vim": "^6.3.0",
+    "@opentelemetry/auto-instrumentations-node": "0.79.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.219.0",
+    "@opentelemetry/sdk-node": "0.221.0",
+    "@opentelemetry/sdk-trace-base": "2.10.0",
+    "@pierre/diffs": "1.2.12",
+    "@posthog/ai": "8.4.0",
+    "@radix-ui/react-tooltip": "1.2.8",
+    "@reactuses/core": "6.1.11",
+    "@replit/codemirror-vim": "6.3.0",
     "@requesty/ai-sdk": "3.5.0",
-    "@smithy/eventstream-codec": "^2.0.0",
-    "@smithy/protocol-http": "^3.3.0",
-    "@smithy/signature-v4": "^2.0.0",
-    "@smithy/util-utf8": "^2.0.0",
+    "@smithy/eventstream-codec": "2.2.0",
+    "@smithy/protocol-http": "3.3.0",
+    "@smithy/signature-v4": "2.3.0",
+    "@smithy/util-utf8": "2.3.0",
     "@tanstack/react-virtual": "3.13.12",
-    "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.25",
-    "@types/hast": "^3.0.4",
-    "@uiw/codemirror-theme-github": "^4.23.12",
+    "@types/cors": "2.8.19",
+    "@types/express": "4.17.25",
+    "@types/hast": "3.0.4",
+    "@uiw/codemirror-theme-github": "4.25.4",
     "@uiw/react-codemirror": "4.25.1",
-    "@uiw/react-color-sketch": "^2.8.0",
+    "@uiw/react-color-sketch": "2.9.5",
     "ai": "7.0.60",
     "apache-arrow": "18.1.0",
-    "axios": "^1.8.3",
-    "babel-plugin-react-compiler": "^1.0.0",
-    "cheerio": "^1.0.0",
-    "chokidar": "^4.0.3",
-    "cloudflared": "^0.7.1",
-    "clsx": "^2.1.1",
-    "conf": "^15.0.2",
-    "cors": "^2.8.5",
-    "diff": "^8.0.4",
-    "electron-updater": "^6.8.3",
-    "env-paths": "^3.0.0",
-    "express": "^4.21.2",
-    "file-type": "^21.0.0",
-    "filenamify": "^7.0.1",
-    "focus-trap-react": "^11.0.3",
-    "framer-motion": "^11.18.2",
-    "ghostty-web": "^0.4.0",
-    "gitdiff-parser": "^0.3.1",
-    "glob": "^11.0.2",
+    "axios": "1.18.1",
+    "babel-plugin-react-compiler": "1.0.0",
+    "cheerio": "1.2.0",
+    "chokidar": "4.0.3",
+    "cloudflared": "0.7.1",
+    "clsx": "2.1.1",
+    "conf": "15.1.0",
+    "cors": "2.8.6",
+    "diff": "8.0.4",
+    "electron-updater": "6.8.9",
+    "env-paths": "3.0.0",
+    "express": "4.22.2",
+    "file-type": "21.3.4",
+    "filenamify": "7.0.1",
+    "focus-trap-react": "11.0.6",
+    "framer-motion": "11.18.2",
+    "ghostty-web": "0.4.0",
+    "gitdiff-parser": "0.3.1",
+    "glob": "11.1.0",
     "global-agent": "4.1.3",
-    "google-auth-library": "^10.6.2",
-    "gpt-tokenizer": "^2.9.0",
-    "handlebars": "^4.7.8",
-    "hast-util-to-jsx-runtime": "^2.3.6",
-    "html-to-image": "^1.11.13",
-    "i18next": "^24.2.3",
-    "i18next-browser-languagedetector": "^8.0.4",
-    "istextorbinary": "^9.5.0",
-    "jiti": "^2.6.1",
-    "langfuse-vercel": "^3.38.4",
-    "lodash": "^4.18.1",
-    "lowlight": "^3.3.0",
-    "mark.js": "^8.11.1",
-    "match-sorter": "^8.0.0",
-    "mermaid": "^11.14.0",
+    "google-auth-library": "10.6.2",
+    "gpt-tokenizer": "2.9.0",
+    "handlebars": "4.7.9",
+    "hast-util-to-jsx-runtime": "2.3.6",
+    "html-to-image": "1.11.13",
+    "i18next": "24.2.3",
+    "i18next-browser-languagedetector": "8.2.1",
+    "istextorbinary": "9.5.0",
+    "jiti": "2.6.1",
+    "langfuse-vercel": "3.38.6",
+    "lodash": "4.18.1",
+    "lowlight": "3.3.0",
+    "mark.js": "8.11.1",
+    "match-sorter": "8.2.0",
+    "mermaid": "11.16.1",
     "ollama-ai-provider-v2": "4.0.1",
-    "os-name": "^6.0.0",
-    "patch-package": "^8.0.0",
+    "os-name": "6.1.0",
+    "patch-package": "8.0.1",
     "posthog-node": "5.29.1",
-    "prismjs": "^1.30.0",
-    "react-complex-tree": "^2.4.5",
-    "react-country-flag": "^3.1.0",
-    "react-datepicker": "^8.4.0",
-    "react-diff-view": "^3.3.2",
-    "react-hotkeys-hook": "^4.6.2",
-    "react-i18next": "^15.4.1",
-    "react-icons": "^5.5.0",
-    "react-markdown": "^10.1.0",
-    "react-resizable": "^3.0.5",
-    "react-rnd": "^10.5.3",
-    "react-router-dom": "^7.0.1",
-    "react-toastify": "^10.0.6",
+    "prismjs": "1.30.0",
+    "react-complex-tree": "2.6.1",
+    "react-country-flag": "3.1.0",
+    "react-datepicker": "8.10.0",
+    "react-diff-view": "3.3.2",
+    "react-hotkeys-hook": "4.6.2",
+    "react-i18next": "15.7.4",
+    "react-icons": "5.5.0",
+    "react-markdown": "10.1.0",
+    "react-resizable": "3.1.3",
+    "react-rnd": "10.5.3",
+    "react-router-dom": "7.18.2",
+    "react-toastify": "10.0.6",
     "recharts": "3.0.2",
-    "refractor": "^5.0.0",
-    "remark-gfm": "^4.0.1",
-    "simple-git": "^3.27.0",
-    "slugify": "^1.6.6",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1",
-    "sucrase": "^3.35.1",
-    "tailwind-merge": "^3.3.1",
-    "tmp": "^0.2.3",
-    "tree-kill": "^1.2.2",
-    "turndown": "^7.2.1",
+    "refractor": "5.0.0",
+    "remark-gfm": "4.0.1",
+    "simple-git": "3.36.0",
+    "slugify": "1.6.6",
+    "socket.io": "4.8.3",
+    "socket.io-client": "4.8.3",
+    "sucrase": "3.35.1",
+    "tailwind-merge": "3.4.1",
+    "tmp": "0.2.7",
+    "tree-kill": "1.2.2",
+    "turndown": "7.2.2",
     "undici": "8.10.0",
-    "unidiff": "^1.0.4",
-    "unist-util-map": "^4.0.0",
-    "use-sync-external-store": "^1.6.0",
-    "uuid": "^14.0.0",
-    "winston": "^3.17.0",
-    "winston-daily-rotate-file": "^5.0.0",
-    "winston-transport": "^4.9.0",
-    "ws": "^8.18.0",
-    "yaml": "^2.8.0",
-    "yaml-front-matter": "^4.1.1",
-    "zod": "^4.1.11",
-    "zustand": "^5.0.9"
+    "unidiff": "1.0.4",
+    "unist-util-map": "4.0.0",
+    "use-sync-external-store": "1.6.0",
+    "uuid": "14.0.0",
+    "winston": "3.19.0",
+    "winston-daily-rotate-file": "5.0.0",
+    "winston-transport": "4.9.0",
+    "ws": "8.21.0",
+    "yaml": "2.8.3",
+    "yaml-front-matter": "4.1.1",
+    "zod": "4.3.6",
+    "zustand": "5.0.11"
   },
   "devDependencies": {
-    "@electron-toolkit/tsconfig": "^2.0.0",
-    "@electron/notarize": "^3.1.1",
-    "@eslint/js": "^9.33.0",
-    "@modelcontextprotocol/sdk": "^1.20.0",
-    "@playwright/test": "^1.60.0",
-    "@tailwindcss/typography": "^0.5.16",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@types/handlebars": "^4.0.40",
-    "@types/lodash": "^4.17.17",
-    "@types/node": "^22.16.5",
-    "@types/prismjs": "^1.26.5",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@types/react-resizable": "^3.0.8",
-    "@types/refractor": "^3.4.1",
-    "@types/socket.io": "^3.0.1",
-    "@types/tmp": "^0.2.6",
-    "@types/yaml-front-matter": "^4.1.3",
-    "@vitejs/plugin-react": "^5.0.4",
-    "@vitest/coverage-v8": "^4.1.8",
-    "@vitest/ui": "^4.1.8",
-    "adm-zip": "^0.6.0",
-    "autoprefixer": "^10.4.20",
-    "concurrently": "^10.0.4",
-    "dts-bundle-generator": "^9.5.1",
-    "electron": "^43.3.0",
-    "electron-builder": "^26.15.3",
-    "electron-vite": "^5.0.0",
-    "encoding": "^0.1.13",
-    "eslint": "^9.18.0",
-    "eslint-config-prettier": "^9.1.0",
-    "eslint-import-resolver-typescript": "^3.7.0",
-    "eslint-plugin-import": "^2.31.0",
-    "eslint-plugin-prettier": "^5.2.1",
-    "eslint-plugin-react": "^7.37.2",
-    "eslint-plugin-react-compiler": "^19.1.0-rc.2",
-    "eslint-plugin-react-hooks": "^7.0.0",
-    "globals": "^15.9.0",
-    "husky": "^9.1.7",
-    "jsdom": "^27.3.0",
-    "lint-staged": "^15.4.1",
-    "npm-run-all": "^4.1.5",
-    "prettier": "^3.3.2",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "sass-embedded": "^1.89.0",
-    "tailwind-scrollbar": "^3.1.0",
-    "tailwindcss": "^3.4.14",
-    "tar": "^7.5.22",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.1",
-    "vite": "^7.3.6",
-    "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.8"
+    "@electron-toolkit/tsconfig": "2.0.0",
+    "@electron/notarize": "3.1.1",
+    "@eslint/js": "9.39.5",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@playwright/test": "1.60.0",
+    "@tailwindcss/typography": "0.5.19",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@types/handlebars": "4.0.40",
+    "@types/lodash": "4.17.23",
+    "@types/node": "22.19.15",
+    "@types/prismjs": "1.26.6",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@types/react-resizable": "3.0.8",
+    "@types/refractor": "3.4.1",
+    "@types/socket.io": "3.0.1",
+    "@types/tmp": "0.2.6",
+    "@types/yaml-front-matter": "4.1.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "@vitest/coverage-v8": "4.1.8",
+    "@vitest/ui": "4.1.8",
+    "adm-zip": "0.6.0",
+    "autoprefixer": "10.4.24",
+    "concurrently": "10.0.4",
+    "dts-bundle-generator": "9.5.1",
+    "electron": "43.3.0",
+    "electron-builder": "26.15.7",
+    "electron-vite": "5.0.0",
+    "encoding": "0.1.13",
+    "eslint": "9.39.5",
+    "eslint-config-prettier": "9.1.2",
+    "eslint-import-resolver-typescript": "3.10.1",
+    "eslint-plugin-import": "2.32.0",
+    "eslint-plugin-prettier": "5.5.5",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-compiler": "19.1.0-rc.2",
+    "eslint-plugin-react-hooks": "7.0.1",
+    "globals": "15.15.0",
+    "husky": "9.1.7",
+    "jsdom": "27.4.0",
+    "lint-staged": "15.5.2",
+    "npm-run-all": "4.1.5",
+    "prettier": "3.8.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sass-embedded": "1.97.3",
+    "tailwind-scrollbar": "3.1.0",
+    "tailwindcss": "3.4.19",
+    "tar": "7.5.22",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.57.2",
+    "vite": "7.3.6",
+    "vite-tsconfig-paths": "5.1.4",
+    "vitest": "4.1.8"
   },
   "overrides": {
     "@ai-sdk/provider": "4.0.7",

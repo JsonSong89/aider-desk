@@ -71,6 +71,7 @@
     "retry": "Повторить",
     "open": "Открыть",
     "openProject": "Открыть проект",
+    "clone": "Клонировать",
     "lock": "Заблокировать",
     "default": "По умолчанию",
     "suffix.billion": "Млрд",
@@ -381,6 +382,9 @@
   "opencode": {
     "apiKey": "API-ключ"
   },
+  "opencodeGo": {
+    "apiKey": "API-ключ"
+  },
   "requesty": {
     "apiKey": "API-ключ",
     "modelPlaceholder": "например, claude-4-sonnet",
@@ -456,6 +460,7 @@
     "ollama": "Ollama",
     "openai": "OpenAI",
     "opencode": "OpenCode ZEN",
+    "opencode-go": "OpenCode Go",
     "openai-compatible": "Совместимый с OpenAI",
     "openrouter": "OpenRouter",
     "requesty": "Requesty",
@@ -472,6 +477,7 @@
     "title": "Настройки",
     "savedSuccessfully": "Настройки сохранены",
     "saveError": "Не удалось сохранить настройки",
+    "navigation": "Навигация",
     "tabs": {
       "general": "Общие",
       "aider": "Aider",
@@ -1094,7 +1100,15 @@
     "openButton": "Открыть",
     "browseFoldersTooltip": "Просмотр папок",
     "projectAlreadyOpenWarning": "Этот проект уже открыт.",
-    "cantOpenProject": "Этот проект не может быть открыт."
+    "cantOpenProject": "Этот проект не может быть открыт.",
+    "openLocalProject": "Открыть локальный",
+    "cloneFromGit": "Клонировать из Git",
+    "repositoryUrlPlaceholder": "Например, https://github.com/owner/repo.git",
+    "cloneDestinationPlaceholder": "По умолчанию: ~/.aider-desk/projects",
+    "repositoryUrlLabel": "URL репозитория",
+    "cloneDestinationLabel": "Папка назначения",
+    "cloningProject": "Клонирование репозитория...",
+    "cloneProjectFailed": "Не удалось клонировать проект"
   },
   "mode": {
     "code": "Код",
@@ -1991,5 +2005,13 @@
     "projectError": "Не удалось загрузить проект.",
     "projects": "Проекты",
     "openTasks": "Открыть задачи"
+  },
+  "providerTls": {
+    "title": "Настройки TLS",
+    "disableCertificateVerification": "Отключить проверку сертификата",
+    "disableCertificateVerificationInfo": "Пропустить проверку TLS-сертификата для эндпоинта этого провайдера. Используйте только для доверенных серверов с самоподписанными сертификатами (например, локальные серверы моделей).",
+    "caCertPath": "Путь к CA-сертификату",
+    "caCertPathInfo": "Абсолютный путь к файлу CA-сертификата (PEM) для проверки эндпоинта провайдера. Для самоподписанных или приватных CA-сертификатов предпочтительнее, чем отключение проверки.",
+    "caCertPathPlaceholder": "/path/to/ca.pem"
   }
 }

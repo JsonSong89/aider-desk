@@ -71,6 +71,7 @@
     "retry": "重试",
     "open": "打开",
     "openProject": "打开项目",
+    "clone": "克隆",
     "lock": "锁定",
     "default": "默认",
     "suffix.billion": "十亿",
@@ -427,6 +428,9 @@
   "opencode": {
     "apiKey": "API 密钥"
   },
+  "opencodeGo": {
+    "apiKey": "API 密钥"
+  },
   "requesty": {
     "apiKey": "API 密钥",
     "modelPlaceholder": "例如 claude-4-sonnet"
@@ -459,6 +463,7 @@
     "ollama": "Ollama",
     "openai": "OpenAI",
     "opencode": "OpenCode ZEN",
+    "opencode-go": "OpenCode Go",
     "openai-compatible": "OpenAI Compatible",
     "openrouter": "OpenRouter",
     "requesty": "Requesty",
@@ -476,6 +481,7 @@
     "title": "设置",
     "savedSuccessfully": "设置保存成功",
     "saveError": "设置保存失败",
+    "navigation": "导航",
     "tabs": {
       "general": "通用",
       "providers": "模型提供者",
@@ -1035,7 +1041,15 @@
     "openButton": "打开",
     "browseFoldersTooltip": "浏览文件夹",
     "projectAlreadyOpenWarning": "此项目已打开。",
-    "cantOpenProject": "无法打开此项目。"
+    "cantOpenProject": "无法打开此项目。",
+    "openLocalProject": "打开本地项目",
+    "cloneFromGit": "从 Git 克隆",
+    "repositoryUrlPlaceholder": "例如 https://github.com/owner/repo.git",
+    "cloneDestinationPlaceholder": "默认：~/.aider-desk/projects",
+    "repositoryUrlLabel": "仓库 URL",
+    "cloneDestinationLabel": "目标文件夹",
+    "cloningProject": "正在克隆仓库...",
+    "cloneProjectFailed": "克隆项目失败"
   },
   "mode": {
     "code": "代码",
@@ -2011,5 +2025,13 @@
     "projectError": "无法加载此项目。",
     "projects": "项目",
     "openTasks": "打开任务"
+  },
+  "providerTls": {
+    "title": "TLS 设置",
+    "disableCertificateVerification": "禁用证书验证",
+    "disableCertificateVerificationInfo": "跳过此提供商端点的 TLS 证书验证。仅用于使用自签名证书的可信服务器（例如本地模型服务器）。",
+    "caCertPath": "CA 证书路径",
+    "caCertPathInfo": "用于验证提供商端点的 CA 证书文件（PEM）的绝对路径。使用自签名或私有 CA 证书时，建议使用此项而非禁用验证。",
+    "caCertPathPlaceholder": "/path/to/ca.pem"
   }
 }

@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+- added extraction of images and safe serialization for non-text data
+- fixed occasional virtualizd messages not showing up
+- added TLS certificate settings for OpenAI and Anthropic Compatible provider endpoints
+- improved message presentation of the multiline bash tool command
+- added validator script for extension UI component to be used by extension-creator skill
+- added responsive design for Settings
+- fixed providers API not returning data after update and added runtime array checks for provider data
+- fixed task loading state not being reset on error
+- disabled router transitions to prevent UI issues
+- fixed syntax highlighting during tool message streaming
+- added result limits to glob tool to prevent excessive output
+- fixed excessive bottom padding causing empty space under messages in virtualized list
+- added disposable resource management for extensions with automatic cleanup on unload
+- fixed disabled/uninstalled extensions still running their resources; toggling enable/disable now properly calls onUnload/onLoad lifecycle hooks
+- added option to clone git project directly from Open project dialog
+- added OpenCode Go as direct provider
+- correctly handling the project tab selection on trailing '/'
+
 ## [0.79.0]
 
 - optimized task state determination when 'proceed (y/n)' is present
