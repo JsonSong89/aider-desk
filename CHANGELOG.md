@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [UNRELEASED]
+
+- added support for nested subtasks
+
+## [0.80.0]
 
 - added extraction of images and safe serialization for non-text data
 - fixed occasional virtualizd messages not showing up
