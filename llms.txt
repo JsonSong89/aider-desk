@@ -252,9 +252,6 @@ src/
     versions/
       index.ts
       versions-manager.ts
-    voice/
-      index.ts
-      VoiceService.ts
     worktrees/
       index.ts
       worktree-manager.ts
@@ -609,6 +606,7 @@ src/
           RulesSection.tsx
           SectionContent.tsx
           SectionHeader.tsx
+          SectionLoading.tsx
           SkillsSection.tsx
           TreeItemRenderer.tsx
           types.ts
@@ -685,6 +683,7 @@ src/
         useResponsive.ts
         useScrollingPaused.ts
         useSearchText.tsx
+        useSkills.ts
         useTaskActions.ts
         useTaskCommandHandlers.ts
         useTaskDataHandlers.ts
@@ -1970,12 +1969,11 @@ import {
   TASKS_TOOL_SEARCH_TASK,
   TOOL_GROUP_NAME_SEPARATOR,
 } from '@common/tools';
-import { AgentProfile, AutonomyMode, DefaultTaskState, PromptContext, SettingsData, TaskData, ToolApprovalState } from '@common/types';
+import { AgentProfile, AutonomyMode, DefaultTaskState, PromptContext, SettingsData, TaskData, TaskExecutionMode, ToolApprovalState } from '@common/types';
 import { fileExists, isUuid } from '@common/utils';
 ⋮----
 import { ApprovalManager } from './approval-manager';
 ⋮----
-import { coerceBoolean } from '@/agent/utils';
 import { AIDER_DESK_TASKS_DIR } from '@/constants';
 import { search } from '@/utils/probe';
 import logger from '@/logger';
@@ -2470,6 +2468,14 @@ async runAgent(
     skillsToActivate?: string[],
 ): Promise<ContextMessage[]>
 ⋮----
+// Register an abort controller for the duration of the onAgentStarted dispatch so that
+// agent runs driven by extensions (which return blocked: true) are visible via isRunning().
+// This way Task.isPromptRunning() reports busy while such a run is in progress and
+// prompts sent during it get queued instead of starting a concurrent run.
+⋮----
+// Reset the injected dispatch signal so the agent loop below creates its own abort
+// controller as usual, but keep a signal explicitly set by an extension.
+⋮----
 // Activate skills after the user message is persisted to context so the
 // agent sees: [history -> user message -> skill activation] and doesn't
 // re-activate them itself.
@@ -2509,6 +2515,10 @@ const getOptimizedMessages = async () =>
 const onStepEnd = async (stepResult: StepResult<typeof toolSet>) =>
 ⋮----
 // Reset retry count when we get a response
+⋮----
+// The AI SDK swallows errors thrown in onStepEnd callbacks, so
+// capture them here to stop the loop instead of silently re-sending
+// the same prompt on the next iteration
 ⋮----
 // @ts-expect-error checking keys in error
 ⋮----
@@ -2645,6 +2655,16 @@ private async compactMessagesIfNeeded(
 )
 ⋮----
 // subagent cannot use Handoff, so we fallback to Smart compaction
+⋮----
+// The usage report covers only up to (and including) the last model call. Tool
+// results appended after it are not in that report, yet they are part of the next
+// prompt — so a single large result (e.g. parallel file reads) can silently push
+// the request past the model's context limit. Add an estimate for the trailing
+// messages so the threshold reflects the real next-prompt size.
+⋮----
+// percentage disabled → auto-compact off (consistent whether or not the context size is known)
+⋮----
+// model context size unknown — fall back to the absolute token threshold
 ⋮----
 // reload messages after compacting
 ⋮----
@@ -4227,6 +4247,10 @@ private async scanForExtensions(extensionsPath: string, repoUrl: string): Promis
 ⋮----
 // README.md doesn't exist or can't be read, that's fine
 ⋮----
+private async mergeInstallCounts(extensions: AvailableExtension[], extensionsPath: string, repoDir: string): Promise<void>
+⋮----
+// Registry file missing or invalid at this location, try the next candidate
+⋮----
 private getRepoName(repoUrl: string): string
 ⋮----
 // fall through
@@ -4558,6 +4582,8 @@ async init(): Promise<void>
 ⋮----
 // Preload available extensions from repositories in background
 ⋮----
+// Mark as initialized even on failure so dispatchEvent doesn't block forever waiting for init
+⋮----
 /**
    * Preload available extensions from configured repositories.
    * This warms the fetcher cache so Settings page loads instantly.
@@ -4565,6 +4591,16 @@ async init(): Promise<void>
 private async preloadAvailableExtensions(): Promise<void>
 ⋮----
 private async initializeExtension(loaded: LoadedExtension, project?: Project): Promise<boolean>
+⋮----
+/**
+   * Delivers onProjectStarted to a freshly (re)initialized extension for projects that are
+   * already running — otherwise lifecycle events dispatched before this extension was
+   * loaded or reloaded would be silently lost.
+   */
+private async dispatchDelayedProjectStarted(loaded: LoadedExtension): Promise<void>
+⋮----
+// A project-bound extension initialized during Project.start() is not tracked as started yet;
+// its onProjectStarted arrives via the regular dispatchEvent call right after.
 ⋮----
 /**
    * Loads, registers, and initializes an extension from a file path.
@@ -4828,6 +4864,8 @@ async dispatchEvent<K extends keyof ExtensionEventMap>(
     project: Project,
     task?: Task,
 ): Promise<ExtensionEventMap[K]>
+⋮----
+// Wait for initialization so events are never delivered to a partially loaded extension set
 ⋮----
 // Get all extensions (global + project-specific)
 ⋮----
@@ -5858,6 +5896,9 @@ const normalizeGeminiMessages = (_provider: LlmProvider, _model: Model, messages
 const createGeminiVoiceSession = async (profile: ProviderProfile, settings: SettingsData): Promise<VoiceSession> =>
 ⋮----
 // Default to the model specified in requirements or fallback
+⋮----
+// The transcription-only live model streams text transcriptions instead of audio
+// and does not support system instructions or temperature.
 ⋮----
 // Create ephemeral token
 // The token is valid for 1 minute for session initiation, and 30 minutes for the session duration by default.
@@ -7118,7 +7159,8 @@ createLlm(
 ⋮----
 getUsageReport(task: Task, provider: ProviderProfile, model: string | Model, usage: LanguageModelUsage, providerMetadata?: unknown): UsageReportData
 ⋮----
-// Resolve Model object
+// Resolve Model object, falling back to a minimal object so usage reports
+// still work when provider models failed to load (e.g. network issues)
 ⋮----
 getCacheControl(provider: ProviderProfile, modelId: string): CacheControl | undefined
 ⋮----
@@ -9673,6 +9715,7 @@ import {
   extractTextContent,
   fileExists,
   parseCommandArgs,
+  parseSkillCommand,
   parseUsageReport,
 } from '@common/utils';
 import {
@@ -10521,9 +10564,6 @@ public async getWorktreeIntegrationStatus(targetBranch?: string)
 ⋮----
 public async rebaseWorktreeFromBranch(fromBranch?: string): Promise<void>
 ⋮----
-// Update baseCommit to the new HEAD after successful rebase
-// This ensures subsequent rebases only replay commits made after this point
-⋮----
 public async abortWorktreeRebase(): Promise<void>
 ⋮----
 public async renameWorktreeBranch(newBranchName: string): Promise<void>
@@ -10555,11 +10595,6 @@ public async resolveConflictsWithAgent(): Promise<void>
 // No conflicts found
 ⋮----
 public async continueWorktreeRebase(): Promise<void>
-⋮----
-// Update baseCommit to the new HEAD after successful rebase continuation
-// This ensures subsequent rebases only replay commits made after this point
-⋮----
-// Update baseBranch if we could determine it from the rebase state, otherwise keep existing
 ⋮----
 // Clear any remaining merge state after successful rebase continuation
 ⋮----
@@ -11584,16 +11619,6 @@ public async downloadLatestAiderDesk(): Promise<void>
 autoUpdater.autoDownload = false; // Ensure it's reset on error
 
 ================
-File: src/main/voice/index.ts
-================
-// Voice functionality is now handled directly by LlmProviderStrategy
-
-================
-File: src/main/voice/VoiceService.ts
-================
-// This file has been removed as voice functionality is now handled directly by LlmProviderStrategy
-
-================
 File: src/main/worktrees/index.ts
 ================
 
@@ -11653,17 +11678,17 @@ async createWorktree(projectPath: string, taskId: string, branch?: string, baseB
 ⋮----
 // Initialize git repository
 ⋮----
-// 2. Clean up any existing worktree directory first
+// 2. Clean up stale worktree registrations (e.g. the directory was deleted out-of-band)
 ⋮----
-// Ignore cleanup errors
+// 3. Clean up any existing worktree before recreating its directory
 ⋮----
-// 3. Ensure the repository has at least one commit
+// 4. Ensure the repository has at least one commit
 ⋮----
 // Repository has no commits yet, create initial commit
 ⋮----
 // Ignore add errors (no files to add)
 ⋮----
-// 4. Logic for creating the worktree
+// 5. Logic for creating the worktree
 ⋮----
 const baseRef = baseBranch; // Will be 'HEAD' if not provided
 ⋮----
@@ -11671,7 +11696,7 @@ const baseRef = baseBranch; // Will be 'HEAD' if not provided
 ⋮----
 // Check if it's an actual branch (not just a commit SHA)
 ⋮----
-// Branch doesn't exist
+// Branch doesn't exist, it will be created from baseRef
 ⋮----
 // A1. Use existing branch
 ⋮----
@@ -11707,7 +11732,7 @@ private async existsAndIsDirectory(path: string): Promise<boolean>
 ⋮----
 private async isFolderTrackedByGit(projectPath: string, folderName: string): Promise<boolean>
 ⋮----
-async removeWorktree(projectDir: string, worktree: Worktree): Promise<void>
+async removeWorktree(projectDir: string, worktree: Worktree, force = false): Promise<void>
 ⋮----
 // Clean up the branch if it's a task branch (starts with "task-" or looks like generated from task name)
 ⋮----
@@ -11742,6 +11767,8 @@ async detectMainBranch(projectPath: string): Promise<string>
 ⋮----
 // Deprecated: Use getProjectMainBranch instead
 async getEffectiveMainBranch(project:
+⋮----
+async getCommitHash(worktreePath: string, ref: string): Promise<string | undefined>
 ⋮----
 async getHeadCommit(worktreePath: string): Promise<string | undefined>
 ⋮----
@@ -11819,6 +11846,8 @@ async rebaseMainIntoWorktree(
     symlinkFolders: string[] = [],
 ): Promise<
 ⋮----
+// 0. Guard against starting a rebase while one is already in progress
+⋮----
 // 1. Check for uncommitted changes and create temporary commit if needed
 ⋮----
 // Stage all changes
@@ -11861,6 +11890,9 @@ private async squashAndMergeWorktreeToMain(
     baseCommit?: string,
 ): Promise<void>
 ⋮----
+// SAFETY CHECK 0: A rebase left in progress (e.g. awaiting conflict resolution in the UI)
+// would block our own rebase and must not be aborted by this operation
+⋮----
 // Get current branch name in worktree (for logging purposes)
 ⋮----
 // Check if there are any changes to merge (before rebase)
@@ -11871,7 +11903,8 @@ private async squashAndMergeWorktreeToMain(
 // SAFETY CHECK 1: Rebase worktree onto main FIRST before squashing
 // Use --onto with baseCommit to only replay worktree-specific commits
 ⋮----
-// If rebase fails, abort it in the worktree
+// Only abort a rebase that this operation started - never a pre-existing rebase
+// the user may still be resolving (e.g. started concurrently while we passed the guard)
 ⋮----
 // Ignore abort errors
 ⋮----
@@ -11887,11 +11920,16 @@ private async squashAndMergeWorktreeToMain(
 ⋮----
 // Commit the squashed changes with the provided message
 ⋮----
+// Preserve specific errors (e.g. rebase-in-progress guard, rebase conflict details)
+⋮----
 // Create detailed error with git command output
 ⋮----
 // Prioritize actual error messages over lastOutput (which may contain unrelated data like commit counts)
 ⋮----
 private async mergeWorktreeToMain(projectPath: string, worktreePath: string, mainBranch: string): Promise<void>
+⋮----
+// SAFETY CHECK 0: A rebase left in progress (e.g. awaiting conflict resolution in the UI)
+// would block our own rebase and must not be aborted by this operation
 ⋮----
 // Get current branch name in worktree (for logging purposes)
 ⋮----
@@ -11899,7 +11937,8 @@ private async mergeWorktreeToMain(projectPath: string, worktreePath: string, mai
 ⋮----
 // SAFETY CHECK 1: Rebase worktree onto main FIRST (resolves conflicts in worktree, not main)
 ⋮----
-// If rebase fails, abort it in the worktree
+// Only abort a rebase that this operation started - never a pre-existing rebase
+// the user may still be resolving (e.g. started concurrently while we passed the guard)
 ⋮----
 // Ignore abort errors
 ⋮----
@@ -11909,6 +11948,8 @@ private async mergeWorktreeToMain(projectPath: string, worktreePath: string, mai
 ⋮----
 // SAFETY CHECK 2: Use --ff-only merge to prevent history rewriting
 // This will fail if local main has diverged from the worktree branch
+⋮----
+// Preserve specific errors (e.g. rebase-in-progress guard, rebase conflict details)
 ⋮----
 // Create detailed error with git command output
 ⋮----
@@ -11942,6 +11983,8 @@ async getTaskWorktree(projectPath: string, taskId: string): Promise<Worktree | n
 ⋮----
 // Find worktree that matches our task's worktree path
 ⋮----
+// A prunable worktree has a missing or invalid directory (stale registration), treat it as absent
+⋮----
 // If no worktree exists for this task, return null
 ⋮----
 /**
@@ -11971,6 +12014,20 @@ async applyStash(path: string, stashId: string): Promise<void>
 // Find the stash entry that matches our identifier
 ⋮----
 // Extract stash reference (e.g., "stash@{0}")
+⋮----
+// A previous partial apply may have restored this stash's untracked files to disk,
+// which blocks re-applying the stash. Remove identical copies and retry once.
+⋮----
+/**
+   * Remove untracked files from the stash's untracked-files commit that already exist on disk
+   * with identical content (left behind by a partial stash apply), so the stash can be applied again.
+   * Tracked files and files with different content are never removed.
+   */
+private async removeIdenticalStashUntrackedFiles(dir: string, stashRef: string): Promise<void>
+⋮----
+// Never remove files that are tracked in the index
+⋮----
+// not in the index
 ⋮----
 /**
    * Drop a stash by its identifier
@@ -12016,6 +12073,8 @@ async mergeWorktreeToMainWithUncommitted(
 // Return merge state for potential revert
 ⋮----
 // Recovery: revert main repo to pre-merge state before restoring stashes
+// Only when the merge step actually ran - otherwise the main working tree may still
+// contain un-stashed changes that a hard reset would destroy
 ⋮----
 // Abort any in-progress merge (in case merge itself failed)
 ⋮----
@@ -12689,7 +12748,7 @@ async initProjectRulesFile(baseDir: string, taskId: string, args?: string): Prom
 ⋮----
 async getSkills(baseDir: string, taskId: string)
 ⋮----
-async activateSkill(baseDir: string, taskId: string, skillName: string): Promise<void>
+async activateSkill(baseDir: string, taskId: string, skillName: string): Promise<boolean>
 ⋮----
 async deactivateSkill(baseDir: string, taskId: string, skillName: string): Promise<void>
 ⋮----
@@ -13999,7 +14058,7 @@ async pasteImage(baseDir: string, taskId: string, imageBuffer?: ArrayBuffer): Pr
 scrapeWeb(baseDir: string, taskId: string, url: string, filePath?: string): Promise<void>
 initProjectRulesFile(baseDir: string, taskId: string, args?: string): Promise<void>
 getSkills(baseDir: string, taskId: string): Promise<SkillDefinition[]>
-activateSkill(baseDir: string, taskId: string, skillName: string): Promise<void>
+async activateSkill(baseDir: string, taskId: string, skillName: string): Promise<boolean>
 deactivateSkill(baseDir: string, taskId: string, skillName: string): Promise<void>
 getTodos(baseDir: string, taskId: string): Promise<TodoItem[]>
 addTodo(baseDir: string, taskId: string, name: string): Promise<TodoItem[]>
@@ -16456,7 +16515,7 @@ import { useTranslation } from 'react-i18next';
 import { RiCheckboxCircleFill, RiCloseCircleFill, RiErrorWarningFill } from 'react-icons/ri';
 import { CgSpinner } from 'react-icons/cg';
 import { MdAssignmentAdd } from 'react-icons/md';
-import { AutonomyMode, ToolMessage } from '@common/types';
+import { AutonomyMode, TaskExecutionMode, ToolMessage } from '@common/types';
 ⋮----
 import { CodeInline } from '@/components/common/CodeInline';
 import { ExpandableMessageBlock } from '@/components/message/ExpandableMessageBlock';
@@ -16470,6 +16529,8 @@ type Props = {
   onRemoveUpTo?: () => void;
   hideMessageBar?: boolean;
 };
+⋮----
+const getExecutionModeLabel = (mode: TaskExecutionMode) =>
 ⋮----
 {/* Task Details */}
 
@@ -20727,7 +20788,7 @@ enum OpenProjectMode {
   Clone = 'clone',
 }
 ⋮----
-const isValidRepositoryUrl = (url: string): boolean
+const isValidRepositoryUrl = (url: string): boolean =>
 ⋮----
 type Props = {
   onClose: () => void;
@@ -21345,7 +21406,7 @@ import { useDebounceFn } from '@reactuses/core';
 ⋮----
 import { useIndexedDB } from '@/hooks/useIndexedDB';
 ⋮----
-export const useSidebarWidth = (projectBaseDir: string, taskId: string) =>
+export const useSidebarWidth = (projectBaseDir: string) =>
 ⋮----
 // Sync immediate width with persisted width when it loads
 ⋮----
@@ -21709,6 +21770,7 @@ File: src/renderer/src/components/PromptField/PromptField.tsx
 import {
   acceptCompletion,
   autocompletion,
+  type Completion,
   CompletionContext,
   type CompletionResult,
   currentCompletions,
@@ -21727,7 +21789,7 @@ import { BiSend } from 'react-icons/bi';
 import { MdSave, MdStop, MdMic, MdMicOff, MdOutlineScheduleSend } from 'react-icons/md';
 import { AiOutlineClose } from 'react-icons/ai';
 import { clsx } from 'clsx';
-import { parseCommandArgs } from '@common/utils';
+import { parseCommandArgs, parseSkillCommand, SKILL_COMMAND_PREFIX } from '@common/utils';
 import { getSubagentId } from '@common/agent';
 ⋮----
 import { QueuedPromptsList } from './QueuedPromptsList';
@@ -21737,6 +21799,7 @@ import { useTaskQueuedPrompts } from '@/stores/taskStore';
 import { InputHistoryMenu } from '@/components/PromptField/InputHistoryMenu';
 import { showErrorNotification } from '@/utils/notifications';
 import { useCommands } from '@/hooks/useCommands';
+import { useSkills } from '@/hooks/useSkills';
 import { useApi } from '@/contexts/ApiContext';
 import { useAgents } from '@/contexts/AgentsContext';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -21813,7 +21876,11 @@ type Props = {
 ⋮----
 // Handle command suggestions
 ⋮----
+// Suggest skills after /skill:
+⋮----
 // Add custom and extension commands to the list
+⋮----
+// Re-open the completion menu to show skill names right after accepting /skill:
 ⋮----
 // Ensure cursor is at the end after setting text
 ⋮----
@@ -21856,7 +21923,7 @@ File: src/renderer/src/components/PromptField/QueuedPromptsList.tsx
 import { KeyboardEvent, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BiSend } from 'react-icons/bi';
-import { MdDragIndicator, MdEdit, MdPlaylistRemove, MdSave } from 'react-icons/md';
+import { MdDragIndicator, MdEdit, MdImage, MdPlaylistRemove, MdSave } from 'react-icons/md';
 import { closestCenter, DndContext, type DragEndEvent, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -23048,6 +23115,7 @@ import { IconButton } from '@/components/common/IconButton';
 import { Input } from '@/components/common/Input';
 import { showErrorNotification, showSuccessNotification } from '@/utils/notifications';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
+import { Select } from '@/components/common/Select';
 import { ExtensionCard } from '@/components/settings/ExtensionCard';
 ⋮----
 // Helper to format repository URL for display
@@ -23070,12 +23138,19 @@ enum Tab {
   Installed = 'installed',
 }
 ⋮----
+enum ExtensionSort {
+  MostInstalled = 'most-installed',
+  Name = 'name',
+}
+⋮----
 type Props = {
   settings: SettingsData;
   setSettings: (settings: SettingsData) => void;
   openProjects?: ProjectData[];
   selectedProjectContext?: 'global' | string;
 };
+⋮----
+const handleAvailableSortChange = (value: string) =>
 ⋮----
 // Track repositories that are currently being loaded
 ⋮----
@@ -24704,6 +24779,7 @@ import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
 ⋮----
 import { SectionHeader } from './SectionHeader';
+import { SectionLoading } from './SectionLoading';
 ⋮----
 import { Tooltip } from '@/components/ui/Tooltip';
 import { TriStateCheckbox } from '@/components/common/TriStateCheckbox';
@@ -24715,6 +24791,8 @@ const getFileName = (filePath: string) =>
 // eslint-disable-next-line no-console
 ⋮----
 className=
+⋮----
+<SectionLoading label=
 
 ================
 File: src/renderer/src/components/Workspace/SectionContent.tsx
@@ -24726,6 +24804,7 @@ import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 ⋮----
 import { TreeItemRenderer } from './TreeItemRenderer';
+import { SectionLoading } from './SectionLoading';
 ⋮----
 import type { SectionType, TreeItem } from './types';
 ⋮----
@@ -24740,6 +24819,7 @@ type Props = {
   os: OS | null;
   searchField?: ReactNode;
   emptyContent?: ReactNode;
+  isLoading?: boolean;
   disabledRuleFiles?: string[];
   onToggleRuleFile?: (filePaths: string[], disabled: boolean) => void;
   onFileDiffClick: (file: UpdatedFile) => void;
@@ -24750,6 +24830,8 @@ type Props = {
   onDropFile: (item: TreeItem) => (e: MouseEvent<HTMLButtonElement>) => void;
   onAddFile: (item: TreeItem) => (event: MouseEvent<HTMLButtonElement>) => void;
 };
+⋮----
+<SectionLoading label=
 
 ================
 File: src/renderer/src/components/Workspace/SectionHeader.tsx
@@ -24779,6 +24861,24 @@ type Props = {
 className=
 
 ================
+File: src/renderer/src/components/Workspace/SectionLoading.tsx
+================
+import { CgSpinner } from 'react-icons/cg';
+⋮----
+type Props = {
+  label: string;
+};
+⋮----
+export const SectionLoading = ({ label }: Props) => (
+  <div className="absolute inset-0 flex items-center justify-center">
+    <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
+      <CgSpinner className="w-4 h-4 text-text-muted animate-spin" />
+      {label}
+    </div>
+  </div>
+);
+
+================
 File: src/renderer/src/components/Workspace/SkillsSection.tsx
 ================
 import { SkillDefinition } from '@common/types';
@@ -24792,12 +24892,15 @@ import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
 ⋮----
 import { SectionHeader } from './SectionHeader';
+import { SectionLoading } from './SectionLoading';
 ⋮----
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useApi } from '@/contexts/ApiContext';
 import { useFileEditorStore } from '@/stores/fileEditorStore';
 ⋮----
 className=
+⋮----
+<SectionLoading label=
 ⋮----
 if (skill.dirPath)
 openFile(baseDir, `$
@@ -25003,6 +25106,7 @@ import { TbGitCommit, TbGitPullRequestDraft } from 'react-icons/tb';
 import { RiEyeLine, RiEyeOffLine } from 'react-icons/ri';
 ⋮----
 import { createFileTree } from './types';
+import { SectionLoading } from './SectionLoading';
 import { SectionContent } from './SectionContent';
 import { UpdatedFilesDiffModal } from './UpdatedFilesDiffModal';
 import { groupFilesByCommit, UNCOMMITTED_GROUP_ID } from './group-files';
@@ -25064,6 +25168,8 @@ className=
 {/* Outer section header */}
 ⋮----
 {/* Content area */}
+⋮----
+<SectionLoading label=
 ⋮----
 {renderCommitGroupHeader(group, isGroupExpanded)}
 
@@ -25170,6 +25276,7 @@ type Props = {
   actions?: ReactNode;
   searchField?: ReactNode;
   emptyContent?: ReactNode;
+  isLoading?: boolean;
   showBorderTop?: boolean;
   disabledRuleFiles?: string[];
   totalRuleCount?: number;
@@ -25201,6 +25308,7 @@ export const WorkspaceSection = ({
   actions,
   searchField,
   emptyContent,
+  isLoading,
   showBorderTop = false,
   disabledRuleFiles,
   totalRuleCount,
@@ -26231,6 +26339,20 @@ navigateToElement(0); // Navigate to the first result
 // eslint-disable-next-line
 ⋮----
 <div className=
+
+================
+File: src/renderer/src/hooks/useSkills.ts
+================
+import { SkillDefinition } from '@common/types';
+import { useEffect, useState } from 'react';
+⋮----
+import { useApi } from '@/contexts/ApiContext';
+⋮----
+export const useSkills = (baseDir: string, taskId?: string) =>
+⋮----
+// Load initial skills
+⋮----
+// Listen for skills updates
 
 ================
 File: src/renderer/src/hooks/useTaskActions.ts
@@ -30432,6 +30554,8 @@ const getMostRecentUpdatedAt = (task: TaskData, allTasks: TaskData[]): string | 
 ⋮----
 export const getSortedVisibleTasks = (tasks: TaskData[], selectedStates: Set<string>, showArchived: boolean = false, searchQuery: string = ''): TaskData[] =>
 ⋮----
+const isAnyAncestorArchived = (task: TaskData): boolean =>
+⋮----
 const sortFn = (a: TaskData, b: TaskData) =>
 ⋮----
 // Pinned tasks come first
@@ -30455,6 +30579,7 @@ const addTaskWithSubtasks = (task: TaskData, level: number) =>
 ================
 File: src/renderer/src/voice/gemini.ts
 ================
+import { GeminiVoiceModel } from '@common/agent';
 import { GoogleGenAI, LiveServerMessage, Modality, Session } from '@google/genai';
 ⋮----
 import { VoiceProvider, VoiceSession, VoiceSessionConfig, VoiceSessionState } from './types';
@@ -30470,6 +30595,8 @@ async startSession(config: VoiceSessionConfig): Promise<VoiceSession>
 // Setup audio processing once and keep it alive
 ⋮----
 private async createGeminiSession(config: VoiceSessionConfig): Promise<VoiceSession>
+⋮----
+// The transcription-only live model streams text transcriptions instead of audio.
 ⋮----
 // eslint-disable-next-line no-console
 ⋮----

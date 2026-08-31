@@ -569,43 +569,63 @@ export class Agent {
     };
 
     if (provider) {
-      const extensionResult = await this.extensionManager.dispatchEvent(
-        'onAgentStarted',
-        {
-          mode,
-          prompt,
-          agentProfile: profile,
-          providerProfile: provider,
-          model: modelName,
-          promptContext,
-          contextMessages,
-          contextFiles,
-          systemPrompt,
-          images,
-          skillsToActivate,
-          modelCallSettings,
-        },
-        task.project,
-        task,
-      );
-      if (extensionResult.blocked) {
-        logger.debug('Agent execution blocked by extension');
-        return [];
+      // Register an abort controller for the duration of the onAgentStarted dispatch so that
+      // agent runs driven by extensions (which return blocked: true) are visible via isRunning().
+      // This way Task.isPromptRunning() reports busy while such a run is in progress and
+      // prompts sent during it get queued instead of starting a concurrent run.
+      const dispatchAbortControllerId = uuidv4();
+      const dispatchAbortController = new AbortController();
+      if (!modelCallSettings.abortSignal) {
+        this.abortControllers.set(dispatchAbortControllerId, dispatchAbortController);
+        modelCallSettings.abortSignal = dispatchAbortController.signal;
       }
-      profile = extensionResult.agentProfile;
-      provider = extensionResult.providerProfile;
-      modelName = extensionResult.model;
-      prompt = extensionResult.prompt;
-      promptContext = extensionResult.promptContext;
-      contextMessages = extensionResult.contextMessages;
-      contextFiles = extensionResult.contextFiles;
-      systemPrompt = extensionResult.systemPrompt;
-      images = extensionResult.images ?? images;
-      skillsToActivate = extensionResult.skillsToActivate;
-      modelCallSettings = {
-        ...modelCallSettings,
-        ...extensionResult.modelCallSettings,
-      };
+
+      try {
+        const extensionResult = await this.extensionManager.dispatchEvent(
+          'onAgentStarted',
+          {
+            mode,
+            prompt,
+            agentProfile: profile,
+            providerProfile: provider,
+            model: modelName,
+            promptContext,
+            contextMessages,
+            contextFiles,
+            systemPrompt,
+            images,
+            skillsToActivate,
+            modelCallSettings,
+          },
+          task.project,
+          task,
+        );
+        if (extensionResult.blocked) {
+          logger.debug('Agent execution blocked by extension');
+          return [];
+        }
+        profile = extensionResult.agentProfile;
+        provider = extensionResult.providerProfile;
+        modelName = extensionResult.model;
+        prompt = extensionResult.prompt;
+        promptContext = extensionResult.promptContext;
+        contextMessages = extensionResult.contextMessages;
+        contextFiles = extensionResult.contextFiles;
+        systemPrompt = extensionResult.systemPrompt;
+        images = extensionResult.images ?? images;
+        skillsToActivate = extensionResult.skillsToActivate;
+        modelCallSettings = {
+          ...modelCallSettings,
+          ...extensionResult.modelCallSettings,
+        };
+        // Reset the injected dispatch signal so the agent loop below creates its own abort
+        // controller as usual, but keep a signal explicitly set by an extension.
+        if (!abortSignal && modelCallSettings.abortSignal === dispatchAbortController.signal) {
+          modelCallSettings.abortSignal = undefined;
+        }
+      } finally {
+        this.abortControllers.delete(dispatchAbortControllerId);
+      }
     }
 
     const userRequestMessage: ContextUserMessage | null = prompt
@@ -958,30 +978,45 @@ export class Agent {
             return;
           }
 
-          currentStepMessages = await this.processStep(currentResponseId, stepResult, task, provider, modelName, promptContext, effectiveAbortSignal);
-          const extensionResult = await this.extensionManager.dispatchEvent(
-            'onAgentStepFinished',
-            {
-              mode,
-              agentProfile: profile,
-              currentResponseId,
-              stepResult,
-              finishReason,
-              responseMessages: currentStepMessages,
-            },
-            task.project,
-            task,
-          );
-          currentStepMessages = extensionResult.responseMessages;
-          finishReason = extensionResult.finishReason;
+          try {
+            currentStepMessages = await this.processStep(currentResponseId, stepResult, task, provider, modelName, promptContext, effectiveAbortSignal);
+            const extensionResult = await this.extensionManager.dispatchEvent(
+              'onAgentStepFinished',
+              {
+                mode,
+                agentProfile: profile,
+                currentResponseId,
+                stepResult,
+                finishReason,
+                responseMessages: currentStepMessages,
+              },
+              task.project,
+              task,
+            );
+            currentStepMessages = extensionResult.responseMessages;
+            finishReason = extensionResult.finishReason;
 
-          currentResponseId = uuidv4();
-          responseMessageIndex = 0;
-          streamingMessageIds.clear();
+            currentResponseId = uuidv4();
+            responseMessageIndex = 0;
+            streamingMessageIds.clear();
 
-          if (currentStepMessages.length > 0) {
-            // Reset retry count when we get a response
-            retryCount = 0;
+            if (currentStepMessages.length > 0) {
+              // Reset retry count when we get a response
+              retryCount = 0;
+            }
+          } catch (error) {
+            // The AI SDK swallows errors thrown in onStepEnd callbacks, so
+            // capture them here to stop the loop instead of silently re-sending
+            // the same prompt on the next iteration
+            logger.error('Error processing step result:', error);
+            iterationError = error;
+            if (typeof error === 'string') {
+              task.addLogMessage('error', error, false, promptContext);
+            } else if (error instanceof Error) {
+              task.addLogMessage('error', error.message, false, promptContext);
+            } else {
+              task.addLogMessage('error', JSON.stringify(error), false, promptContext);
+            }
           }
         };
 
@@ -1959,15 +1994,27 @@ export class Agent {
     const usageReport = lastUsageReportMessage?.usageReport;
     const maxTokens = this.modelManager.getModelSettings(provider.id, model)?.maxInputTokens;
 
-    if (!usageReport || !maxTokens) {
-      logger.debug('No usageReport or maxTokens', {
+    if (!usageReport) {
+      logger.debug('No usageReport', {
         usageReport,
         maxTokens,
       });
       return true;
     }
 
-    const totalTokens = usageReport.sentTokens + usageReport.receivedTokens + (usageReport.cacheReadTokens ?? 0);
+    let totalTokens = usageReport.sentTokens + usageReport.receivedTokens + (usageReport.cacheReadTokens ?? 0);
+
+    // The usage report covers only up to (and including) the last model call. Tool
+    // results appended after it are not in that report, yet they are part of the next
+    // prompt — so a single large result (e.g. parallel file reads) can silently push
+    // the request past the model's context limit. Add an estimate for the trailing
+    // messages so the threshold reflects the real next-prompt size.
+    const lastReportIndex = resultMessages.indexOf(lastUsageReportMessage);
+    if (lastReportIndex >= 0 && lastReportIndex < resultMessages.length - 1) {
+      const trailingTokens = estimateMessageTokens(resultMessages.slice(lastReportIndex + 1));
+      totalTokens += trailingTokens;
+      logger.debug('Added trailing (post-usage-report) tokens to context total', { trailingTokens, totalTokens });
+    }
 
     let effectiveThreshold: number;
     let thresholdDescription: string;
@@ -1975,10 +2022,10 @@ export class Agent {
     if (taskTokensOverride !== undefined && taskTokensOverride > 0) {
       effectiveThreshold = taskTokensOverride;
       thresholdDescription = `task override: ${taskTokensOverride}`;
-    } else {
-      if (thresholdConfig.percentage === 0) {
-        return true;
-      }
+    } else if (thresholdConfig.percentage === 0) {
+      // percentage disabled → auto-compact off (consistent whether or not the context size is known)
+      return true;
+    } else if (maxTokens) {
       const percentageThreshold = (maxTokens * thresholdConfig.percentage) / 100;
       const tokenThreshold = thresholdConfig.tokens;
       if (tokenThreshold > 0) {
@@ -1987,6 +2034,16 @@ export class Agent {
         effectiveThreshold = percentageThreshold;
       }
       thresholdDescription = `percentage: ${percentageThreshold}, tokens: ${tokenThreshold}`;
+    } else if (thresholdConfig.tokens > 0) {
+      // model context size unknown — fall back to the absolute token threshold
+      effectiveThreshold = thresholdConfig.tokens;
+      thresholdDescription = `tokens: ${thresholdConfig.tokens}`;
+    } else {
+      logger.debug('No maxTokens or usable token threshold', {
+        maxTokens,
+        thresholdConfig,
+      });
+      return true;
     }
 
     logger.debug('Checking total tokens vs effective threshold', {

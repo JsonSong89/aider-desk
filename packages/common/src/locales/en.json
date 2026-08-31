@@ -83,6 +83,7 @@
     "expand": "Expand",
     "enabled": "Enabled",
     "noFiles": "No files",
+      "loadingFiles": "Loading files...",
     "clickToRefresh": "Click to refresh",
     "closeTasks": "Close Tasks",
     "toggleTasks": "Toggle Tasks",
@@ -547,11 +548,17 @@
         "remove": "Remove repository",
         "default": "Default repository"
       },
+      "sort": {
+        "label": "Sort by",
+        "mostInstalled": "Most installed",
+        "name": "Name"
+      },
       "by": "by",
       "enabled": "Enabled",
       "active": "Active",
       "disabled": "Disabled",
       "projectSpecific": "Project",
+      "totalInstalls": "Total installs",
       "hasDependencies": "Has dependencies",
       "osNotSupported": "Not supported",
       "osNotSupportedTooltip": "This extension might not work on your operating system. Check the extension details for more information.",
@@ -1131,7 +1138,7 @@
     "cantOpenProject": "This project can not be opened.",
     "openLocalProject": "Open Local",
     "cloneFromGit": "Clone from Git",
-    "repositoryUrlPlaceholder": "e.g. https://github.com/owner/repo.git",
+    "repositoryUrlPlaceholder": "e.g. https://github.com/owner/repo.git or git@github.com:owner/repo.git",
     "cloneDestinationPlaceholder": "default: ~/.aider-desk/projects",
     "repositoryUrlLabel": "Repository URL",
     "cloneDestinationLabel": "Destination folder",
@@ -1433,6 +1440,10 @@
       "autonomyMode": "Autonomy mode",
       "worktree": "Worktree",
       "executeAndWait": "Execute and Wait",
+      "executionMode": "Execution Mode",
+      "createOnly": "Create Only",
+      "waitForFinish": "Wait for Finish",
+      "runInBackground": "Run in Background",
       "yes": "Yes",
       "no": "No",
       "taskId": "Task ID",
@@ -1641,6 +1652,7 @@
     "editQueuedPrompt": "Edit",
     "saveQueuedPrompt": "Save",
     "cancelEditQueuedPrompt": "Cancel",
+    "queuedPromptImages": "{{count}} image(s) attached",
     "answers": {
       "yes": "(Y)es",
       "no": "(N)o",
@@ -1648,6 +1660,7 @@
       "dontAsk": "(D)on't ask again"
     },
     "invalidCommand": "Invalid command",
+    "skillNotFound": "Skill '{{skill}}' not found",
     "stopResponse": "Stop response",
     "sendMessage": "Send message (Enter)",
     "clearChat": "Clear chat",
@@ -1762,7 +1775,8 @@
     "web": "Scrape a webpage and save it to a file. Use /web url [file] with optional [file].",
     "handoff": "Handoff conversation to new task with focus",
     "subtask": "Create a new subtask of the current task and switch to it",
-    "subagent": "Run a prompt in a specific subagent. Use /subagent <subagent-id> <prompt>"
+    "subagent": "Run a prompt in a specific subagent. Use /subagent <subagent-id> <prompt>",
+    "skill": "Activate a skill. Any text after the skill name is used as a prompt"
   },
   "telemetry": {
     "title": "Telemetry Information",
@@ -1939,7 +1953,9 @@
     "abortRebase": "Abort rebase",
     "continueRebase": "Continue rebase",
     "rebaseConflictsDescription": "Rebase conflicts detected in the following files. Resolve them manually and continue, or use the AI agent to help.",
+    "rebasePausedDueToConflicts": "Rebase paused due to conflicts. Resolve them and continue the rebase, or abort it to restore the worktree.",
     "rebaseConflictsResolvedDescription": "Conflicts have been resolved and staged. You can now continue the rebase.",
+    "switchToLocalRebaseInProgress": "Cannot switch to local mode while a rebase is in progress. Continue or abort the rebase first.",
     "confirmRebaseTitle": "Rebase worktree",
     "confirmRebaseMessage": "This will rebase your worktree onto the selected branch. If there are conflicts, you will need to resolve them.",
     "confirmAbortRebaseTitle": "Abort rebase",
