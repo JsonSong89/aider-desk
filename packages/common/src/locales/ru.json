@@ -71,6 +71,7 @@
     "retry": "Повторить",
     "open": "Открыть",
     "openProject": "Открыть проект",
+    "clone": "Клонировать",
     "lock": "Заблокировать",
     "default": "По умолчанию",
     "suffix.billion": "Млрд",
@@ -82,6 +83,7 @@
     "expand": "Развернуть",
     "enabled": "Включено",
     "noFiles": "Нет файлов",
+      "loadingFiles": "Загрузка файлов...",
     "clickToRefresh": "Нажмите для обновления",
     "closeTasks": "Закрыть задачи",
     "toggleTasks": "Переключить задачи",
@@ -221,6 +223,12 @@
       "deleteMemoryDialogText": "Вы уверены, что хотите удалить эту память?"
     }
   },
+  "mermaid": {
+    "renderFailed": "Не удалось отобразить диаграмму:"
+  },
+  "neuralwatt": {
+    "getApiKeyLink": "Получить API-ключ Neuralwatt"
+  },
   "modelLibrary": {
     "enableVoiceControl": "Включить голосовое управление",
     "enableVoiceControlOnlyOneInfo": "Одновременно может быть включён только один провайдер.",
@@ -310,6 +318,7 @@
     "providerDisabled": "Этот провайдер отключён. Его модели будут недоступны."
   },
   "openai": {
+    "getApiKeyLink": "Получить API-ключ OpenAI",
     "apiKey": "API-ключ",
     "baseUrl": "Базовый URL",
     "modelName": "Название модели",
@@ -327,9 +336,11 @@
     "baseUrlPlaceholder": "например, https://api.anthropic.com"
   },
   "minimax": {
+    "getApiKeyLink": "Получить API-ключ MiniMax",
     "apiKey": "API-ключ"
   },
   "gemini": {
+    "getApiKeyLink": "Получить API-ключ Gemini",
     "apiKey": "API-ключ",
     "customBaseUrl": "Пользовательский базовый URL",
     "thinkingBudget": "Бюджет на рассуждение (токены)",
@@ -339,16 +350,20 @@
     "useSearchGroundingTooltip": "Когда включено, модель будет использовать результаты поиска для обоснования своих ответов, повышая точность и релевантность."
   },
   "groq": {
+    "getApiKeyLink": "Получить API-ключ Groq",
     "apiKey": "API-ключ",
     "modelPlaceholder": "например, moonshotai/kimi-k2-instruct"
   },
   "mistral": {
+    "getApiKeyLink": "Получить API-ключ Mistral",
     "apiKey": "API-ключ"
   },
   "kimiPlan": {
+    "getApiKeyLink": "Получить API-ключ Kimi Coding Plan",
     "apiKey": "API-ключ"
   },
   "alibabaPlan": {
+    "getApiKeyLink": "Получить API-ключ Alibaba Coding Plan",
     "apiKey": "API-ключ",
     "thinkingEnabled": "Режим рассуждений",
     "thinkingEnabledTooltip": "Включает режим рассуждений для расширенных возможностей логического вывода",
@@ -372,16 +387,24 @@
     "sessionTokenTooltip": "Необязательный токен сессии для временных учётных данных."
   },
   "cerebras": {
+    "getApiKeyLink": "Получить API-ключ Cerebras",
     "apiKey": "API-ключ"
   },
   "openRouter": {
+    "getApiKeyLink": "Получить API-ключ OpenRouter",
     "apiKey": "API-ключ",
     "modelPlaceholder": "например, anthropic/claude-3.7-sonnet"
   },
   "opencode": {
+    "getApiKeyLink": "Получить API-ключ OpenCode ZEN",
+    "apiKey": "API-ключ"
+  },
+  "opencodeGo": {
+    "getApiKeyLink": "Получить API-ключ OpenCode Go",
     "apiKey": "API-ключ"
   },
   "requesty": {
+    "getApiKeyLink": "Получить API-ключ Requesty",
     "apiKey": "API-ключ",
     "modelPlaceholder": "например, claude-4-sonnet",
     "autoCacheLabel": "Использовать авто-кэш",
@@ -398,9 +421,11 @@
     "apiKey": "API-ключ"
   },
   "synthetic": {
+    "getApiKeyLink": "Получить API-ключ Synthetic",
     "apiKey": "API-ключ"
   },
   "zaiPlan": {
+    "getApiKeyLink": "Получить API-ключ Z.AI",
     "apiKey": "API-ключ",
     "mcp": {
       "title": "MCP-серверы",
@@ -436,6 +461,7 @@
     "addCustomModelInfo": "Модели не могут быть загружены автоматически для провайдера Azure. Вам нужно добавить их вручную с помощью «+ Добавить модель», убедившись, что имя модели соответствует имени развёртывания."
   },
   "clinepass": {
+    "getApiKeyLink": "Получить API-ключ ClinePass",
     "apiKey": "API-ключ"
   },
   "providers": {
@@ -456,6 +482,7 @@
     "ollama": "Ollama",
     "openai": "OpenAI",
     "opencode": "OpenCode ZEN",
+    "opencode-go": "OpenCode Go",
     "openai-compatible": "Совместимый с OpenAI",
     "openrouter": "OpenRouter",
     "requesty": "Requesty",
@@ -472,6 +499,7 @@
     "title": "Настройки",
     "savedSuccessfully": "Настройки сохранены",
     "saveError": "Не удалось сохранить настройки",
+    "navigation": "Навигация",
     "tabs": {
       "general": "Общие",
       "aider": "Aider",
@@ -487,6 +515,7 @@
       "mcpServers": "MCP-серверы"
     },
     "extensions": {
+      "uiErrorIn": "Ошибка в {{component}}",
       "loading": "Загрузка расширений...",
       "tabs": {
         "installed": "Установленные",
@@ -515,11 +544,17 @@
         "remove": "Удалить репозиторий",
         "default": "Репозиторий по умолчанию"
       },
+      "sort": {
+        "label": "Сортировка",
+        "mostInstalled": "Самые установленные",
+        "name": "По названию"
+      },
       "by": "от",
       "enabled": "Включено",
       "active": "Активно",
       "disabled": "Отключено",
       "projectSpecific": "Проектное",
+      "totalInstalls": "Всего установок",
       "hasDependencies": "Имеет зависимости",
       "osNotSupported": "Не поддерживается",
       "osNotSupportedTooltip": "Это расширение может не работать в вашей операционной системе. Проверьте детали расширения для дополнительной информации.",
@@ -1094,7 +1129,15 @@
     "openButton": "Открыть",
     "browseFoldersTooltip": "Просмотр папок",
     "projectAlreadyOpenWarning": "Этот проект уже открыт.",
-    "cantOpenProject": "Этот проект не может быть открыт."
+    "cantOpenProject": "Этот проект не может быть открыт.",
+    "openLocalProject": "Открыть локальный",
+    "cloneFromGit": "Клонировать из Git",
+    "repositoryUrlPlaceholder": "Например, https://github.com/owner/repo.git или git@github.com:owner/repo.git",
+    "cloneDestinationPlaceholder": "По умолчанию: ~/.aider-desk/projects",
+    "repositoryUrlLabel": "URL репозитория",
+    "cloneDestinationLabel": "Папка назначения",
+    "cloningProject": "Клонирование репозитория...",
+    "cloneProjectFailed": "Не удалось клонировать проект"
   },
   "mode": {
     "code": "Код",
@@ -1389,6 +1432,10 @@
       "autonomyMode": "Режим автономности",
       "worktree": "Рабочее дерево",
       "executeAndWait": "Выполнить и подождать",
+      "executionMode": "Режим выполнения",
+      "createOnly": "Только создать",
+      "waitForFinish": "Дождаться завершения",
+      "runInBackground": "Запустить в фоне",
       "yes": "Да",
       "no": "Нет",
       "taskId": "Идентификатор задачи",
@@ -1537,6 +1584,10 @@
     "revertChanges": "Отменить изменения"
   },
   "diffViewer": {
+    "oldValue": "Старое значение",
+    "newValue": "Новое значение",
+    "error": "Ошибка: {{message}}",
+    "reportIssue": "Пожалуйста, сообщите о проблеме на https://github.com/hotovo/aider-desk/issues.",
     "sideBySide": "Бок о бок",
     "unified": "Унифицированный",
     "compact": "Компактный",
@@ -1592,6 +1643,7 @@
     "editQueuedPrompt": "Редактировать",
     "saveQueuedPrompt": "Сохранить",
     "cancelEditQueuedPrompt": "Отмена",
+    "queuedPromptImages": "Прикреплено изображений: {{count}}",
     "answers": {
       "yes": "(Д)а",
       "no": "(Н)ет",
@@ -1599,6 +1651,7 @@
       "dontAsk": "(Н)е спрашивать снова"
     },
     "invalidCommand": "Недопустимая команда",
+    "skillNotFound": "Навык «{{skill}}» не найден",
     "stopResponse": "Остановить ответ",
     "sendMessage": "Отправить сообщение (Enter)",
     "clearChat": "Очистить чат",
@@ -1712,7 +1765,8 @@
     "web": "Скопировать веб-страницу и сохранить в файл. Используйте /web url [файл] с необязательным [файл].",
     "handoff": "Передать разговор в новую задачу с фокусом",
     "subtask": "Создать подзадачу текущей задачи и переключиться на неё",
-    "subagent": "Запустить промпт в указанном субагенте. Используйте /subagent <id-субагента> <промпт>"
+    "subagent": "Запустить промпт в указанном субагенте. Используйте /subagent <id-субагента> <промпт>",
+    "skill": "Активировать навык. Любой текст после названия навыка используется как промпт"
   },
   "telemetry": {
     "title": "Информация о телеметрии",
@@ -1748,6 +1802,7 @@
       "charts": "Графики"
     },
     "charts": {
+      "andMore": "(+ещё {{count}})",
       "tokenUsageTrend": "Динамика использования токенов",
       "costBreakdown": "Детализация затрат",
       "messageBreakdown": "Детализация сообщений",
@@ -1783,6 +1838,8 @@
     }
   },
   "terminal": {
+    "connecting": "Подключение к терминалу...",
+    "tabLabel": "Терминал",
     "copyOutput": "Скопировать вывод терминала в запрос",
     "minimize": "Свернуть терминал",
     "addTerminal": "Добавить терминал"
@@ -1886,7 +1943,9 @@
     "abortRebase": "Прервать перебазирование",
     "continueRebase": "Продолжить перебазирование",
     "rebaseConflictsDescription": "Обнаружены конфликты перебазирования в следующих файлах. Разрешите их вручную и продолжите, или используйте AI-агента для помощи.",
+    "rebasePausedDueToConflicts": "Перебазирование приостановлено из-за конфликтов. Разрешите их и продолжите перебазирование или прервите его, чтобы восстановить рабочее дерево.",
     "rebaseConflictsResolvedDescription": "Конфликты решены и проиндексированы. Теперь можно продолжить перебазирование.",
+    "switchToLocalRebaseInProgress": "Нельзя переключиться в локальный режим во время перебазирования. Сначала продолжите или прервите перебазирование.",
     "confirmRebaseTitle": "Перебазировать рабочее дерево",
     "confirmRebaseMessage": "Это перебазирует рабочее дерево на выбранную ветку. При наличии конфликтов их нужно будет разрешить.",
     "confirmAbortRebaseTitle": "Прервать перебазирование",
@@ -1991,5 +2050,13 @@
     "projectError": "Не удалось загрузить проект.",
     "projects": "Проекты",
     "openTasks": "Открыть задачи"
+  },
+  "providerTls": {
+    "title": "Настройки TLS",
+    "disableCertificateVerification": "Отключить проверку сертификата",
+    "disableCertificateVerificationInfo": "Пропустить проверку TLS-сертификата для эндпоинта этого провайдера. Используйте только для доверенных серверов с самоподписанными сертификатами (например, локальные серверы моделей).",
+    "caCertPath": "Путь к CA-сертификату",
+    "caCertPathInfo": "Абсолютный путь к файлу CA-сертификата (PEM) для проверки эндпоинта провайдера. Для самоподписанных или приватных CA-сертификатов предпочтительнее, чем отключение проверки.",
+    "caCertPathPlaceholder": "/path/to/ca.pem"
   }
 }

@@ -82,6 +82,7 @@
     "expand": "펼치기",
     "enabled": "사용",
     "noFiles": "파일 없음",
+      "loadingFiles": "파일 로드 중...",
     "clickToRefresh": "클릭하여 새로고침",
     "closeTasks": "작업 닫기",
     "toggleTasks": "작업 토글",
@@ -220,6 +221,12 @@
       "deleteMemoryDialogText": "이 메모리를 삭제하시겠습니까?"
     }
   },
+  "mermaid": {
+    "renderFailed": "다이어그램 렌더링 실패:"
+  },
+  "clinepass": {
+    "getApiKeyLink": "ClinePass API 키 받기"
+  },
   "modelLibrary": {
     "enableVoiceControl": "음성 제어 사용",
     "enableVoiceControlOnlyOneInfo": "한 번에 하나의 공급자만 사용할 수 있습니다.",
@@ -311,6 +318,7 @@
     "providerDisabled": "이 공급자는 비활성화되어 있습니다. 해당 모델을 사용할 수 없습니다."
   },
   "openai": {
+    "getApiKeyLink": "OpenAI API 키 받기",
     "apiKey": "API 키",
     "baseUrl": "기본 URL",
     "modelName": "모델 이름",
@@ -328,9 +336,11 @@
     "baseUrlPlaceholder": "예: https://api.anthropic.com"
   },
   "minimax": {
+    "getApiKeyLink": "MiniMax API 키 받기",
     "apiKey": "API 키"
   },
   "gemini": {
+    "getApiKeyLink": "Gemini API 키 받기",
     "apiKey": "API 키",
     "customBaseUrl": "사용자 지정 기본 URL",
     "thinkingBudget": "사고 예산 (토큰)",
@@ -340,16 +350,20 @@
     "useSearchGroundingTooltip": "활성화하면 모델이 검색 결과를 바탕으로 응답 근거를 마련하여 정확성과 관련성을 높입니다."
   },
   "groq": {
+    "getApiKeyLink": "Groq API 키 받기",
     "apiKey": "API 키",
     "modelPlaceholder": "예: moonshotai/kimi-k2-instruct"
   },
   "mistral": {
+    "getApiKeyLink": "Mistral API 키 받기",
     "apiKey": "API 키"
   },
   "kimiPlan": {
+    "getApiKeyLink": "Kimi Coding Plan API 키 받기",
     "apiKey": "API 키"
   },
   "alibabaPlan": {
+    "getApiKeyLink": "Alibaba Coding Plan API 키 받기",
     "apiKey": "API 키",
     "thinkingEnabled": "사고 모드 사용",
     "thinkingEnabledTooltip": "향상된 추론 능력을 위해 사고 모드를 활성화합니다",
@@ -373,19 +387,28 @@
     "sessionTokenTooltip": "임시 자격 증명을 위한 선택적 세션 토큰입니다."
   },
   "cerebras": {
+    "getApiKeyLink": "Cerebras API 키 받기",
     "apiKey": "API 키"
   },
   "neuralwatt": {
+    "getApiKeyLink": "Neuralwatt API 키 받기",
     "apiKey": "API 키"
   },
   "openRouter": {
+    "getApiKeyLink": "OpenRouter API 키 받기",
     "apiKey": "API 키",
     "modelPlaceholder": "예: anthropic/claude-3.7-sonnet"
   },
   "opencode": {
+    "getApiKeyLink": "OpenCode ZEN API 키 받기",
+    "apiKey": "API 키"
+  },
+  "opencodeGo": {
+    "getApiKeyLink": "OpenCode Go API 키 받기",
     "apiKey": "API 키"
   },
   "requesty": {
+    "getApiKeyLink": "Requesty API 키 받기",
     "apiKey": "API 키",
     "modelPlaceholder": "예: claude-4-sonnet",
     "autoCacheLabel": "자동 캐시 사용",
@@ -402,9 +425,11 @@
     "apiKey": "API 키"
   },
   "synthetic": {
+    "getApiKeyLink": "Synthetic API 키 받기",
     "apiKey": "API 키"
   },
   "zaiPlan": {
+    "getApiKeyLink": "Z.AI API 키 받기",
     "apiKey": "API 키",
     "mcp": {
       "title": "MCP 서버",
@@ -458,6 +483,7 @@
     "ollama": "Ollama",
     "openai": "OpenAI",
     "opencode": "OpenCode ZEN",
+    "opencode-go": "OpenCode Go",
     "openai-compatible": "OpenAI 호환",
     "openrouter": "OpenRouter",
     "requesty": "Requesty",
@@ -488,6 +514,7 @@
       "mcpServers": "MCP 서버"
     },
     "extensions": {
+      "uiErrorIn": "{{component}}에서 오류 발생",
       "loading": "확장을 불러오는 중...",
       "tabs": {
         "installed": "설치됨",
@@ -516,11 +543,17 @@
         "remove": "저장소 제거",
         "default": "기본 저장소"
       },
+      "sort": {
+        "label": "정렬 기준",
+        "mostInstalled": "설치 많은 순",
+        "name": "이름순"
+      },
       "by": "제작자",
       "enabled": "사용",
       "active": "활성",
       "disabled": "비활성",
       "projectSpecific": "프로젝트",
+      "totalInstalls": "총 설치 수",
       "hasDependencies": "종속성 있음",
       "osNotSupported": "지원되지 않음",
       "osNotSupportedTooltip": "이 확장은 현재 운영체제에서 작동하지 않을 수 있습니다. 자세한 내용은 확장 세부 정보를 확인하세요.",
@@ -1378,6 +1411,10 @@
       "autonomyMode": "자율성 모드",
       "worktree": "워크트리",
       "executeAndWait": "실행 후 대기",
+      "executionMode": "실행 모드",
+      "createOnly": "생성만",
+      "waitForFinish": "완료 대기",
+      "runInBackground": "백그라운드 실행",
       "yes": "예",
       "no": "아니요",
       "taskId": "작업 ID",
@@ -1526,6 +1563,10 @@
     "revertChanges": "변경 사항 되돌리기"
   },
   "diffViewer": {
+    "oldValue": "이전 값",
+    "newValue": "새 값",
+    "error": "오류: {{message}}",
+    "reportIssue": "https://github.com/hotovo/aider-desk/issues에서 문제를 보고해 주세요.",
     "sideBySide": "나란히 보기",
     "unified": "통합 보기",
     "compact": "간략히",
@@ -1581,6 +1622,7 @@
     "editQueuedPrompt": "편집",
     "saveQueuedPrompt": "저장",
     "cancelEditQueuedPrompt": "취소",
+    "queuedPromptImages": "첨부된 이미지 {{count}}개",
     "answers": {
       "yes": "(Y)예",
       "no": "(N)아니요",
@@ -1588,6 +1630,7 @@
       "dontAsk": "(D)다시 묻지 않기"
     },
     "invalidCommand": "잘못된 명령",
+    "skillNotFound": "'{{skill}}' 스킬을 찾을 수 없습니다",
     "stopResponse": "응답 중지",
     "sendMessage": "메시지 전송 (Enter)",
     "clearChat": "채팅 지우기",
@@ -1701,7 +1744,8 @@
     "undo": "Aider가 수행한 것이라면 마지막 git 커밋 실행 취소",
     "web": "웹 페이지를 스크랩하여 파일에 저장합니다. [file]은 선택 사항이며 /web url [file]과 같이 사용하세요.",
     "handoff": "포커스를 지정하여 대화를 새 작업으로 핸드오프",
-    "subtask": "현재 작업의 새 하위 작업을 만들고 전환"
+    "subtask": "현재 작업의 새 하위 작업을 만들고 전환",
+    "skill": "스킬을 활성화합니다. 스킬 이름 뒤의 텍스트는 프롬프트로 사용됩니다"
   },
   "telemetry": {
     "title": "텔레메트리 정보",
@@ -1737,6 +1781,7 @@
       "charts": "차트 보기"
     },
     "charts": {
+      "andMore": "(+{{count}} 더 보기)",
       "tokenUsageTrend": "토큰 사용량 추이",
       "costBreakdown": "비용 분석",
       "messageBreakdown": "메시지 분석",
@@ -1772,6 +1817,8 @@
     }
   },
   "terminal": {
+    "connecting": "터미널에 연결 중...",
+    "tabLabel": "터미널",
     "copyOutput": "터미널 출력을 프롬프트로 복사",
     "minimize": "터미널 최소화",
     "addTerminal": "새 터미널 추가"
@@ -1872,7 +1919,9 @@
     "abortRebase": "리베이스 중단",
     "continueRebase": "리베이스 계속",
     "rebaseConflictsDescription": "다음 파일에서 리베이스 충돌이 감지되었습니다. 직접 해결하고 계속하거나 AI 에이전트의 도움을 받으세요.",
+    "rebasePausedDueToConflicts": "충돌로 인해 리베이스가 일시 중지되었습니다. 충돌을 해결하고 리베이스를 계속하거나 중단하여 워크트리를 복원하세요.",
     "rebaseConflictsResolvedDescription": "충돌이 해결되어 스테이징되었습니다. 이제 리베이스를 계속할 수 있습니다.",
+    "switchToLocalRebaseInProgress": "리베이스가 진행 중일 때는 로컬 모드로 전환할 수 없습니다. 먼저 리베이스를 계속하거나 중단하세요.",
     "confirmRebaseTitle": "워크트리 리베이스",
     "confirmRebaseMessage": "워크트리가 선택한 브랜치를 기준으로 리베이스됩니다. 충돌이 있으면 직접 해결해야 합니다.",
     "confirmAbortRebaseTitle": "리베이스 중단",

@@ -1,10 +1,11 @@
 import { ContextFile, OS, TokensCost, UpdatedFile } from '@common/types';
-import React, { useCallback } from 'react';
+import { Dispatch, MouseEvent, ReactNode, SetStateAction, useCallback } from 'react';
 import { ControlledTreeEnvironment, Tree } from 'react-complex-tree';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 
 import { TreeItemRenderer } from './TreeItemRenderer';
+import { SectionLoading } from './SectionLoading';
 
 import type { SectionType, TreeItem } from './types';
 
@@ -12,13 +13,14 @@ type Props = {
   section: SectionType;
   treeData: Record<string, TreeItem>;
   expandedItems: string[];
-  setExpandedItems: React.Dispatch<React.SetStateAction<string[]>>;
+  setExpandedItems: Dispatch<SetStateAction<string[]>>;
   contextFilesMap: Map<string, ContextFile>;
   updatedFiles: UpdatedFile[];
   fileTokensInfo?: Record<string, TokensCost> | null;
   os: OS | null;
-  searchField?: React.ReactNode;
-  emptyContent?: React.ReactNode;
+  searchField?: ReactNode;
+  emptyContent?: ReactNode;
+  isLoading?: boolean;
   disabledRuleFiles?: string[];
   onToggleRuleFile?: (filePaths: string[], disabled: boolean) => void;
   onFileDiffClick: (file: UpdatedFile) => void;
@@ -26,8 +28,8 @@ type Props = {
   onAddFileToGit?: (filePath: string) => void;
   addingFilesToGit?: Set<string>;
   onRevertFile: (filePath: string) => void;
-  onDropFile: (item: TreeItem) => (e: React.MouseEvent<HTMLButtonElement>) => void;
-  onAddFile: (item: TreeItem) => (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onDropFile: (item: TreeItem) => (e: MouseEvent<HTMLButtonElement>) => void;
+  onAddFile: (item: TreeItem) => (event: MouseEvent<HTMLButtonElement>) => void;
 };
 
 export const SectionContent = ({
@@ -41,6 +43,7 @@ export const SectionContent = ({
   os,
   searchField,
   emptyContent,
+  isLoading,
   disabledRuleFiles,
   onToggleRuleFile,
   onFileDiffClick,
@@ -55,7 +58,7 @@ export const SectionContent = ({
   const treeId = `tree-${section}`;
 
   const renderItem = useCallback(
-    (props: { item: TreeItem; title: React.ReactNode; children: React.ReactNode; context: unknown }) => (
+    (props: { item: TreeItem; title: ReactNode; children: ReactNode; context: unknown }) => (
       <TreeItemRenderer
         item={props.item}
         title={props.title}
@@ -125,7 +128,9 @@ export const SectionContent = ({
         exit={{ opacity: 0, height: 0 }}
         transition={{ duration: 0.3, ease: 'easeInOut' }}
       >
-        {hasContent ? (
+        {isLoading ? (
+          <SectionLoading label={t('common.loadingFiles')} />
+        ) : hasContent ? (
           <ControlledTreeEnvironment
             items={treeData}
             getItemTitle={(item) => item.data}

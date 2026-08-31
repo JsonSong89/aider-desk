@@ -569,6 +569,13 @@ export class BrowserApi implements ApplicationAPI {
     const res = await this.post<{ path: string }, { isProject: boolean }>('/project/is-project-path', { path });
     return res.isProject;
   }
+  async cloneProject(repositoryUrl: string, targetDir?: string): Promise<string> {
+    const res = await this.post<{ repositoryUrl: string; targetDir?: string }, { path: string }>('/project/clone', { repositoryUrl, targetDir });
+    return res.path;
+  }
+  async cancelCloneProject(): Promise<void> {
+    await this.post('/project/clone/cancel', {});
+  }
   dropFile(baseDir: string, taskId: string, path: string): void {
     this.post('/drop-context-file', { projectDir: baseDir, taskId, path });
   }
@@ -604,8 +611,13 @@ export class BrowserApi implements ApplicationAPI {
   getSkills(baseDir: string, taskId: string): Promise<SkillDefinition[]> {
     return this.get('/skills', { projectDir: baseDir, taskId });
   }
-  activateSkill(baseDir: string, taskId: string, skillName: string): Promise<void> {
-    return this.post('/skills/activate', { projectDir: baseDir, taskId, skillName });
+  async activateSkill(baseDir: string, taskId: string, skillName: string): Promise<boolean> {
+    const res = await this.post<{ projectDir: string; taskId: string; skillName: string }, { success: boolean }>('/skills/activate', {
+      projectDir: baseDir,
+      taskId,
+      skillName,
+    });
+    return res.success;
   }
   deactivateSkill(baseDir: string, taskId: string, skillName: string): Promise<void> {
     return this.post('/skills/deactivate', { projectDir: baseDir, taskId, skillName });
@@ -1279,8 +1291,8 @@ export class BrowserApi implements ApplicationAPI {
     return false;
   }
 
-  async openUrlInWindow(_url: string, _title?: string): Promise<void> {
-    window.open(_url, '_blank');
+  async openUrlInWindow(url: string): Promise<void> {
+    window.open(url, '_blank');
   }
 
   async openUrlExternally(url: string): Promise<void> {

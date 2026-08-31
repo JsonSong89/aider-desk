@@ -11,6 +11,7 @@ import {
   OpenAiCompatibleProvider,
   OpenAiProvider,
   OpenCodeProvider,
+  OpenCodeGoProvider,
   OpenRouterProvider,
   RequestyProvider,
   VertexAiProvider,
@@ -111,6 +112,12 @@ export enum AutonomyMode {
 }
 
 export const DEFAULT_AUTONOMY_MODE = AutonomyMode.Guided;
+
+export enum TaskExecutionMode {
+  CreateOnly = 'create_only',
+  WaitForFinish = 'wait_for_finish',
+  RunInBackground = 'run_in_background',
+}
 
 export interface AiderRunOptions {
   autoApprove?: boolean;
@@ -370,6 +377,7 @@ export interface QueuedPromptData {
   text: string;
   mode: Mode;
   timestamp: number;
+  images?: string[];
 }
 
 export interface QueuedPromptsUpdatedData {
@@ -770,6 +778,7 @@ export interface SettingsData {
     minimax?: MinimaxProvider;
     'openai-compatible'?: OpenAiCompatibleProvider;
     opencode?: OpenCodeProvider;
+    'opencode-go'?: OpenCodeGoProvider;
     openrouter?: OpenRouterProvider;
     requesty?: RequestyProvider;
     synthetic?: SyntheticProvider;
@@ -1216,6 +1225,7 @@ export interface AvailableExtension {
   repositoryUrl: string;
   hasDependencies?: boolean;
   readmeContent?: string;
+  installCount?: number;
 }
 
 export interface ExtensionOperationResult {

@@ -60,12 +60,21 @@ import { TerminalManager } from '@/terminal/terminal-manager';
 import { ExtensionManager, LoadedExtension } from '@/extensions';
 import { PromptsManager } from '@/prompts';
 import logger, { eventTransport } from '@/logger';
-import { getDefaultProjectSettings, getEffectiveEnvironmentVariable, getFilePathSuggestions, isProjectPath, isValidPath, scrapeWeb, openUrl } from '@/utils';
+import {
+  cloneProjectRepository,
+  getDefaultProjectSettings,
+  getEffectiveEnvironmentVariable,
+  getFilePathSuggestions,
+  isProjectPath,
+  isValidPath,
+  scrapeWeb,
+  openUrl,
+} from '@/utils';
 import { expandTilde } from '@/agent/utils';
 import { AIDER_DESK_TMP_DIR, LOGS_DIR } from '@/constants';
 import { EventManager } from '@/events';
 import { isElectron } from '@/app';
-import { ProxyManager } from '@/proxy-manager';
+import { NetworkManager } from '@/network-manager';
 
 export class EventsHandler {
   constructor(
@@ -83,10 +92,12 @@ export class EventsHandler {
     private readonly agentProfileManager: AgentProfileManager,
     private readonly memoryManager: MemoryManager,
     private readonly extensionManager: ExtensionManager,
-    private readonly proxyManager: ProxyManager,
+    private readonly networkManager: NetworkManager,
     private readonly promptsManager: PromptsManager,
     private readonly windowManager?: WindowManager,
   ) {}
+
+  private cloneAbortController: AbortController | null = null;
 
   loadSettings(): SettingsData {
     return this.store.getSettings();
@@ -100,13 +111,13 @@ export class EventsHandler {
     const oldSettings = this.store.getSettings();
     this.store.saveSettings(newSettings);
 
-    // Re-initialize proxy if settings changed
-    this.proxyManager.settingsChanged(oldSettings, newSettings);
+    // Re-initialize network settings (proxy/TLS rules) if changed
+    this.networkManager.settingsChanged(oldSettings, newSettings);
 
     void this.projectManager.settingsChanged(oldSettings, newSettings);
     this.telemetryManager.settingsChanged(oldSettings, newSettings);
     void this.memoryManager.settingsChanged(oldSettings, newSettings);
-    this.extensionManager.settingsChanged(oldSettings, newSettings);
+    void this.extensionManager.settingsChanged(oldSettings, newSettings);
     void this.agentProfileManager.settingsChanged(oldSettings, newSettings);
     void this.mcpConfigManager.settingsChanged(oldSettings, newSettings);
     void this.promptsManager.settingsChanged(oldSettings, newSettings);
@@ -930,9 +941,14 @@ export class EventsHandler {
   }
 
   async updateTask(baseDir: string, id: string, updates: Partial<TaskData>): Promise<TaskData | undefined> {
-    const task = this.projectManager.getProject(baseDir).getTask(id);
+    const project = this.projectManager.getProject(baseDir);
+    const task = project.getTask(id);
     if (!task) {
       return undefined;
+    }
+
+    if (updates.parentId) {
+      project.validateParentAssignment(id, updates.parentId);
     }
 
     // Delegate to Task.updateTask method which handles worktree logic
@@ -1175,6 +1191,19 @@ export class EventsHandler {
     return await isProjectPath(path);
   }
 
+  async cloneProject(repositoryUrl: string, targetDir?: string): Promise<string> {
+    this.cloneAbortController = new AbortController();
+    try {
+      return await cloneProjectRepository(repositoryUrl, targetDir, this.cloneAbortController.signal);
+    } finally {
+      this.cloneAbortController = null;
+    }
+  }
+
+  cancelCloneProject(): void {
+    this.cloneAbortController?.abort();
+  }
+
   async isValidPath(baseDir: string, path: string): Promise<boolean> {
     return await isValidPath(baseDir, path);
   }
@@ -1211,9 +1240,25 @@ export class EventsHandler {
     return (await this.projectManager.getProject(baseDir).getTask(taskId)?.getSkills()) || [];
   }
 
-  async activateSkill(baseDir: string, taskId: string, skillName: string): Promise<void> {
-    await this.projectManager.getProject(baseDir).getTask(taskId)?.activateSkill(skillName);
-    void this.projectManager.getProject(baseDir).getTask(taskId)?.sendSkillsUpdated();
+  async activateSkill(baseDir: string, taskId: string, skillName: string): Promise<boolean> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (!task) {
+      return false;
+    }
+
+    const skills = await task.getSkills();
+    if (!skills.some((skill) => skill.name === skillName)) {
+      return false;
+    }
+
+    try {
+      await task.activateSkill(skillName);
+      void task.sendSkillsUpdated();
+      return true;
+    } catch (error) {
+      logger.warn(`Failed to activate skill '${skillName}':`, error);
+      return false;
+    }
   }
 
   async deactivateSkill(baseDir: string, taskId: string, skillName: string): Promise<void> {

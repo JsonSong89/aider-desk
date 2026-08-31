@@ -111,17 +111,19 @@ export const createMockApi = (overrides: Partial<ApplicationAPI> = {}): MockedOb
     addFile: vi.fn((): void => undefined),
     isValidPath: vi.fn((): Promise<boolean> => Promise.resolve(true)),
     isProjectPath: vi.fn((): Promise<boolean> => Promise.resolve(true)),
+    cloneProject: vi.fn((): Promise<string> => Promise.resolve('/cloned/project')),
+    cancelCloneProject: vi.fn((): Promise<void> => Promise.resolve()),
     dropFile: vi.fn((): void => undefined),
     runCommand: vi.fn((): void => undefined),
     pasteImage: vi.fn((): void => undefined),
     scrapeWeb: vi.fn((): Promise<void> => Promise.resolve()),
-    initProjectRulesFile: vi.fn((_baseDir?: string, _taskId?: string, _args?: string): Promise<void> => Promise.resolve()),
+    initProjectRulesFile: vi.fn((): Promise<void> => Promise.resolve()),
     readFile: vi.fn((): Promise<string> => Promise.resolve('')),
     saveFile: vi.fn((): Promise<void> => Promise.resolve()),
 
     // Skills operations
     getSkills: vi.fn((): Promise<never[]> => Promise.resolve([])),
-    activateSkill: vi.fn((): Promise<void> => Promise.resolve()),
+    activateSkill: vi.fn((): Promise<boolean> => Promise.resolve(true)),
     deactivateSkill: vi.fn((): Promise<void> => Promise.resolve()),
 
     // Todo operations

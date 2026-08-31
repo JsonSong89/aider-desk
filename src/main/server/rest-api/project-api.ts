@@ -67,6 +67,7 @@ const ReorderQueuedPromptsSchema = z.object({
       text: z.string(),
       mode: z.string(),
       timestamp: z.number(),
+      images: z.array(z.string()).optional(),
     }),
   ),
 });
@@ -150,6 +151,11 @@ const IsValidPathSchema = z.object({
 
 const IsProjectPathSchema = z.object({
   path: z.string().min(1, 'Path is required'),
+});
+
+const CloneProjectSchema = z.object({
+  repositoryUrl: z.string().min(1, 'Repository URL is required'),
+  targetDir: z.string().optional(),
 });
 
 const GetFilePathSuggestionsSchema = z.object({
@@ -498,6 +504,30 @@ export class ProjectApi extends BaseApi {
         const { path } = parsed;
         const isProject = await this.eventsHandler.isProjectPath(path);
         res.status(200).json({ isProject });
+      }),
+    );
+
+    // Clone project from repository
+    router.post(
+      '/project/clone',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(CloneProjectSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { repositoryUrl, targetDir } = parsed;
+        const path = await this.eventsHandler.cloneProject(repositoryUrl, targetDir);
+        res.status(200).json({ path });
+      }),
+    );
+
+    // Cancel active project clone
+    router.post(
+      '/project/clone/cancel',
+      this.handleRequest(async (_req, res) => {
+        this.eventsHandler.cancelCloneProject();
+        res.status(200).json({ message: 'Clone cancellation requested' });
       }),
     );
 

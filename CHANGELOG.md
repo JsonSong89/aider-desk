@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.81.0]
+
+- added support for nested subtasks
+- improved worktree pruning
+- workspace sidebar size is now stored on project level instead of task level
+- fixed MCP servers initialization loading message shown without prompt context
+- added /skill: command to activate skills from the prompt field with autocomplete and optional follow-up prompt
+- fixed queued prompts for extension custom agent runs
+- fixed extensions losing project started events on startup race or hot reload, now re-delivered to re-initialized extensions
+- added loading indicators for workspace sections
+- updated task creation tool with more clear create only, wait for finish, and run in background modes
+- added highlighted background for task sidebar filter and search icons when active
+- fixed agent loop silently re-sending the same prompt when step processing failed
+- fixed usage reports failing when provider models failed to load
+- added support for the gemini-3.5-transcribe-live transcription voice model, now the default for Gemini voice
+- fixed worktree merge failing on in-progress rebase and untracked stash files
+- fixed auto-compaction not triggering for models with unknown context window, now falls back to the configured token threshold
+- fixed context size undercounting that skipped compaction when tool results were appended after the last usage report
+- added reading context window from Ollama models' reported context_length, enabling the token usage bar and percentage-based auto-compaction
+- added image support for queued prompts, now shown with an image indicator in the queued prompts list
+- added install counts for available extensions with sorting by most installed or name
+- added support for cloning repositories over SSH
+- fixed conflicted worktree rebases silently orphaning commits when switching to local mode
+
+## [0.80.0]
+
+- added extraction of images and safe serialization for non-text data
+- fixed occasional virtualizd messages not showing up
+- added TLS certificate settings for OpenAI and Anthropic Compatible provider endpoints
+- improved message presentation of the multiline bash tool command
+- added validator script for extension UI component to be used by extension-creator skill
+- added responsive design for Settings
+- fixed providers API not returning data after update and added runtime array checks for provider data
+- fixed task loading state not being reset on error
+- disabled router transitions to prevent UI issues
+- fixed syntax highlighting during tool message streaming
+- added result limits to glob tool to prevent excessive output
+- fixed excessive bottom padding causing empty space under messages in virtualized list
+- added disposable resource management for extensions with automatic cleanup on unload
+- fixed disabled/uninstalled extensions still running their resources; toggling enable/disable now properly calls onUnload/onLoad lifecycle hooks
+- added option to clone git project directly from Open project dialog
+- added OpenCode Go as direct provider
+- correctly handling the project tab selection on trailing '/'
+
 ## [0.79.0]
 
 - optimized task state determination when 'proceed (y/n)' is present
