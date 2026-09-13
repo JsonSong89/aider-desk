@@ -27,6 +27,7 @@ export const WorktreeSchema = z.object({
   baseBranch: z.string().optional(),
   baseCommit: z.string().optional(),
   branch: z.string().optional(),
+  pendingRebaseFromBranch: z.string().optional(),
   prunable: z.boolean().optional(),
 });
 
@@ -38,6 +39,7 @@ export const MergeStateSchema = z.object({
   worktreeBranchCommitHash: z.string(),
   mainOriginalStashId: z.string().optional(),
   targetBranch: z.string().optional(),
+  checkoutless: z.boolean().optional(),
   timestamp: z.number(),
 });
 
@@ -46,6 +48,11 @@ export type MergeState = z.infer<typeof MergeStateSchema>;
 export interface WorktreeAheadCommits {
   count: number;
   commits: string[];
+}
+
+export interface GitSyncCommits {
+  outgoing: WorktreeAheadCommits;
+  incoming: WorktreeAheadCommits;
 }
 
 export interface WorktreeUncommittedFiles {
@@ -378,6 +385,10 @@ export interface QueuedPromptData {
   mode: Mode;
   timestamp: number;
   images?: string[];
+  customCommand?: {
+    name: string;
+    args: string[];
+  };
 }
 
 export interface QueuedPromptsUpdatedData {
@@ -674,6 +685,20 @@ export interface HotkeyConfig {
     focusPrompt: string;
     newTask: string;
     closeTask: string;
+  };
+  gitHotkeys: {
+    pull: string;
+    push: string;
+    branches: string;
+    newBranch: string;
+    renameBranch: string;
+    worktreeMerge: string;
+    worktreeSquash: string;
+    worktreeApplyUncommitted: string;
+    worktreeRebase: string;
+    worktreeAbortRebase: string;
+    worktreeContinueRebase: string;
+    worktreeResolveConflicts: string;
   };
   dialogHotkeys: {
     browseFolder: string;
@@ -1179,6 +1204,10 @@ export interface BranchInfo {
   name: string;
   isCurrent: boolean;
   hasWorktree: boolean;
+  isRemote?: boolean;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
 }
 export interface NotificationData {
   baseDir: string;
@@ -1288,6 +1317,23 @@ export interface ContextMenuParams {
 
 export interface ModalOverlayUrlData {
   url: string;
+}
+
+export type InputPromptType = 'password' | 'text' | 'confirmation';
+
+export interface InputPromptData {
+  id: string;
+  title?: string;
+  titleParams?: Record<string, string | number>;
+  message: string;
+  messageParams?: Record<string, string | number>;
+  type?: InputPromptType;
+  placeholder?: string;
+  defaultValue?: string;
+  allowRememberSession?: boolean;
+  rememberSessionLabel?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
 }
 
 export type AiderConnectorStatus =

@@ -68,6 +68,12 @@ const ReorderQueuedPromptsSchema = z.object({
       mode: z.string(),
       timestamp: z.number(),
       images: z.array(z.string()).optional(),
+      customCommand: z
+        .object({
+          name: z.string(),
+          args: z.array(z.string()),
+        })
+        .optional(),
     }),
   ),
 });
@@ -328,7 +334,6 @@ const LocalUncommittedFilesSchema = z.object({
 const ApplyUncommittedChangesSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
   taskId: z.string().min(1, 'Task id is required'),
-  targetBranch: z.string().optional(),
 });
 
 const RevertLastMergeSchema = z.object({
@@ -364,6 +369,7 @@ const SaveFileSchema = z.object({
 const GenerateCommitMessageSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
   taskId: z.string().min(1, 'Task id is required'),
+  filePaths: z.array(z.string()).optional(),
 });
 
 const CommitChangesSchema = z
@@ -372,6 +378,7 @@ const CommitChangesSchema = z
     taskId: z.string().min(1, 'Task id is required'),
     message: z.string(),
     amend: z.boolean(),
+    filePaths: z.array(z.string()).optional(),
   })
   .refine((data) => data.amend || data.message.trim().length > 0, { message: 'Commit message is required', path: ['message'] });
 
@@ -382,6 +389,78 @@ const CancelCommitChangesSchema = z.object({
 
 const ListBranchesSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
+});
+
+// Git branch operations
+const ListGitBranchesSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  includeRemote: z.string().optional(),
+});
+
+const GetSyncCommitsSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  targetBranch: z.string().optional(),
+});
+
+const CreateGitBranchSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  name: z.string().min(1, 'Branch name is required'),
+  startPoint: z.string().optional(),
+  checkout: z.boolean().optional(),
+});
+
+const CheckoutGitBranchSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  branch: z.string().min(1, 'Branch name is required'),
+  createTracking: z.boolean().optional(),
+  takeOver: z.boolean().optional(),
+});
+
+const DeleteGitBranchSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  branch: z.string().min(1, 'Branch name is required'),
+  force: z.boolean().optional(),
+});
+
+const MergeIntoCurrentBranchSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  branch: z.string().min(1, 'Branch name is required'),
+});
+
+const RebaseOntoBranchSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  branch: z.string().min(1, 'Branch name is required'),
+});
+
+const GitPullSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  rebase: z.boolean().optional(),
+});
+
+const UpdateGitBranchSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  branchName: z.string().min(1, 'Branch name is required'),
+});
+
+const GitPushSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
+  force: z.boolean().optional(),
+  setUpstream: z.boolean().optional(),
+});
+
+const ResolveGitErrorSchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
 });
 
 const WorktreeStatusSchema = z.object({
@@ -411,11 +490,13 @@ const ResolveWorktreeConflictsWithAgentSchema = z.object({
   taskId: z.string().min(1, 'Task id is required'),
 });
 
-const RenameWorktreeBranchSchema = z.object({
+const RenameGitBranchSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
   taskId: z.string().min(1, 'Task id is required'),
   newBranchName: z.string().min(1, 'New branch name is required'),
 });
+
+const RenameWorktreeBranchSchema = RenameGitBranchSchema;
 
 export class ProjectApi extends BaseApi {
   constructor(private readonly eventsHandler: EventsHandler) {
@@ -1010,8 +1091,8 @@ export class ProjectApi extends BaseApi {
           return;
         }
 
-        const { projectDir, taskId, targetBranch } = parsed;
-        await this.eventsHandler.applyUncommittedChanges(projectDir, taskId, targetBranch);
+        const { projectDir, taskId } = parsed;
+        await this.eventsHandler.applyUncommittedChanges(projectDir, taskId);
         res.status(200).json({ message: 'Uncommitted changes applied' });
       }),
     );
@@ -1099,8 +1180,8 @@ export class ProjectApi extends BaseApi {
           return;
         }
 
-        const { projectDir, taskId } = parsed;
-        const message = await this.eventsHandler.generateCommitMessage(projectDir, taskId);
+        const { projectDir, taskId, filePaths } = parsed;
+        const message = await this.eventsHandler.generateCommitMessage(projectDir, taskId, filePaths);
         res.status(200).json({ message });
       }),
     );
@@ -1114,8 +1195,8 @@ export class ProjectApi extends BaseApi {
           return;
         }
 
-        const { projectDir, taskId, message, amend } = parsed;
-        await this.eventsHandler.commitChanges(projectDir, taskId, message, amend);
+        const { projectDir, taskId, message, amend, filePaths } = parsed;
+        await this.eventsHandler.commitChanges(projectDir, taskId, message, amend, filePaths);
         res.status(200).json({ message: 'Changes committed' });
       }),
     );
@@ -1147,6 +1228,157 @@ export class ProjectApi extends BaseApi {
         const { projectDir } = parsed;
         const branches = await this.eventsHandler.listBranches(projectDir);
         res.status(200).json(branches);
+      }),
+    );
+
+    // Git branch operations
+    // List git branches
+    router.get(
+      '/project/git/branches',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(ListGitBranchesSchema, req.query, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, includeRemote } = parsed;
+        const branches = await this.eventsHandler.listGitBranches(projectDir, taskId, includeRemote === 'true');
+        res.status(200).json(branches);
+      }),
+    );
+
+    // Get outgoing and incoming commits relative to the target branch or upstream
+    router.get(
+      '/project/git/sync-commits',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(GetSyncCommitsSchema, req.query, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, targetBranch } = parsed;
+        const syncCommits = await this.eventsHandler.getSyncCommits(projectDir, taskId, targetBranch);
+        res.status(200).json(syncCommits);
+      }),
+    );
+
+    // Create git branch
+    router.post(
+      '/project/git/branch/create',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(CreateGitBranchSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, name, startPoint, checkout } = parsed;
+        await this.eventsHandler.createGitBranch(projectDir, taskId, name, startPoint, checkout);
+        res.status(200).json({ message: 'Branch created' });
+      }),
+    );
+
+    // Checkout git branch
+    router.post(
+      '/project/git/branch/checkout',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(CheckoutGitBranchSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, branch, createTracking, takeOver } = parsed;
+        await this.eventsHandler.checkoutGitBranch(projectDir, taskId, branch, createTracking, takeOver);
+        res.status(200).json({ message: 'Branch checked out' });
+      }),
+    );
+
+    // Delete git branch
+    router.post(
+      '/project/git/branch/delete',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(DeleteGitBranchSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, branch, force } = parsed;
+        await this.eventsHandler.deleteGitBranch(projectDir, taskId, branch, force);
+        res.status(200).json({ message: 'Branch deleted' });
+      }),
+    );
+
+    // Merge branch into current branch
+    router.post(
+      '/project/git/merge',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(MergeIntoCurrentBranchSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, branch } = parsed;
+        const result = await this.eventsHandler.mergeIntoCurrentBranch(projectDir, taskId, branch);
+        res.status(200).json(result);
+      }),
+    );
+
+    // Rebase current branch onto another branch
+    router.post(
+      '/project/git/rebase',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(RebaseOntoBranchSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, branch } = parsed;
+        const result = await this.eventsHandler.rebaseOntoBranch(projectDir, taskId, branch);
+        res.status(200).json(result);
+      }),
+    );
+
+    // Update branch from remote
+    router.post(
+      '/project/git/branch/update',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(UpdateGitBranchSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, branchName } = parsed;
+        const result = await this.eventsHandler.updateGitBranch(projectDir, taskId, branchName);
+        res.status(200).json(result);
+      }),
+    );
+
+    // Git pull
+    router.post(
+      '/project/git/pull',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(GitPullSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, rebase } = parsed;
+        const result = await this.eventsHandler.gitPull(projectDir, taskId, rebase);
+        res.status(200).json(result);
+      }),
+    );
+
+    // Git push
+    router.post(
+      '/project/git/push',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(GitPushSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, force, setUpstream } = parsed;
+        const result = await this.eventsHandler.gitPush(projectDir, taskId, force, setUpstream);
+        res.status(200).json(result);
       }),
     );
 
@@ -1225,7 +1457,37 @@ export class ProjectApi extends BaseApi {
       }),
     );
 
-    // Rename worktree branch
+    // Resolve git error with agent
+    router.post(
+      '/project/git/resolve-error-with-agent',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(ResolveGitErrorSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId } = parsed;
+        await this.eventsHandler.resolveGitErrorWithAgent(projectDir, taskId);
+        res.status(200).json({ message: 'Git error resolution started' });
+      }),
+    );
+
+    // Rename branch (local or worktree)
+    router.post(
+      '/project/git/branch/rename',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(RenameGitBranchSchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId, newBranchName } = parsed;
+        await this.eventsHandler.renameGitBranch(projectDir, taskId, newBranchName);
+        res.status(200).json({ message: 'Branch renamed' });
+      }),
+    );
+
+    // Rename worktree branch (deprecated alias for /project/git/branch/rename)
     router.post(
       '/project/worktree/rename-branch',
       this.handleRequest(async (req, res) => {
@@ -1235,7 +1497,7 @@ export class ProjectApi extends BaseApi {
         }
 
         const { projectDir, taskId, newBranchName } = parsed;
-        await this.eventsHandler.renameWorktreeBranch(projectDir, taskId, newBranchName);
+        await this.eventsHandler.renameGitBranch(projectDir, taskId, newBranchName);
         res.status(200).json({ message: 'Branch renamed' });
       }),
     );

@@ -15,7 +15,7 @@ vi.mock('@/telemetry');
 vi.mock('@/data-manager');
 vi.mock('@/events');
 vi.mock('@/models');
-vi.mock('@/worktrees');
+vi.mock('@/git');
 vi.mock('@/memory/memory-manager');
 vi.mock('@/prompts');
 vi.mock('@/extensions/extension-manager');
@@ -35,7 +35,7 @@ describe('Project Inheritance', () => {
   let project: Project;
   let mockStore: any;
   let mockModelManager: any;
-  let mockWorktreeManager: any;
+  let mockGitManager: any;
   let mockEventManager: any;
 
   beforeEach(() => {
@@ -56,7 +56,7 @@ describe('Project Inheritance', () => {
       getProviderModels: vi.fn().mockResolvedValue({ models: [] }),
     };
 
-    mockWorktreeManager = {
+    mockGitManager = {
       getTaskWorktree: vi.fn().mockResolvedValue(null),
     };
 
@@ -82,7 +82,7 @@ describe('Project Inheritance', () => {
       {} as any,
       mockEventManager as any,
       mockModelManager as any,
-      mockWorktreeManager as any,
+      mockGitManager as any,
       { initializeForProject: vi.fn() } as any,
       {} as any,
       { watchProject: vi.fn() } as any,
@@ -146,6 +146,36 @@ describe('Project Inheritance', () => {
     expect(subtask.workingMode).toBe('worktree');
     expect(subtask.worktree).toEqual(parentWorktree);
     expect(subtask.mainModel).toBe('parent-model');
+  });
+
+  it('should clear inherited worktree when workingMode is overridden to local', async () => {
+    const parentWorktree: Worktree = { path: '/path/to/worktree', branch: 'main' };
+    const parentTask = {
+      task: {
+        id: 'parent-id',
+        workingMode: 'worktree',
+        worktree: parentWorktree,
+        mainModel: 'parent-model',
+      } as TaskData,
+      saveTask: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const internalTask = (project as any).getTask(INTERNAL_TASK_ID);
+    (project as any).getTask = vi.fn((id) => {
+      if (id === 'parent-id') {
+        return parentTask;
+      }
+      if (id === INTERNAL_TASK_ID) {
+        return internalTask;
+      }
+      return null;
+    });
+
+    const subtask = await project.createNewTask({ parentId: 'parent-id', workingMode: 'local' });
+
+    expect(subtask.parentId).toBe('parent-id');
+    expect(subtask.workingMode).toBe('local');
+    expect(subtask.worktree).toBeUndefined();
   });
 
   it('should handle empty string parentId as null', async () => {

@@ -12,7 +12,7 @@ import { DataManager } from '@/data-manager';
 import { TerminalManager } from '@/terminal';
 import { VersionsManager } from '@/versions';
 import { TelemetryManager } from '@/telemetry';
-import { WorktreeManager } from '@/worktrees';
+import { GitManager, GitAskpassManager } from '@/git';
 import { MemoryManager } from '@/memory/memory-manager';
 import { ExtensionManager } from '@/extensions/extension-manager';
 import { Store } from '@/store';
@@ -35,6 +35,11 @@ export interface ManagersResult {
 }
 
 export const initManagers = async (store: Store, windowManager?: WindowManager): Promise<ManagersResult> => {
+  // Prevent unhandled promise rejections from crashing the process
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled promise rejection:', reason);
+  });
+
   // Initialize network manager FIRST — must be before any network calls
   const networkManager = new NetworkManager();
   networkManager.init(store.getSettings());
@@ -91,7 +96,12 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
     logger.error('[Prompts] Prompts system initialization failed:', error);
   });
 
-  const worktreeManager = new WorktreeManager();
+  const gitAskpassManager = new GitAskpassManager(eventManager);
+  await gitAskpassManager.init().catch((error) => {
+    logger.error('[GitAskpass] Git askpass manager initialization failed:', error);
+  });
+
+  const gitManager = new GitManager(gitAskpassManager);
 
   // Initialize agent profile manager with extension manager for unified profile access
   const agentProfileManager = new AgentProfileManager(eventManager, extensionManager, store);
@@ -108,7 +118,7 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
     dataManager,
     eventManager,
     modelManager,
-    worktreeManager,
+    gitManager,
     agentProfileManager,
     memoryManager,
     promptsManager,
@@ -147,13 +157,14 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
     networkManager,
     promptsManager,
     windowManager,
+    gitAskpassManager,
   );
 
   // Create and initialize REST API controller with the server
   const serverController = new ServerController(httpServer, projectManager, eventsHandler, store, pythonInstaller);
 
   // Initialize connector manager with the server
-  const connectorManager = new ConnectorManager(httpServer, projectManager, eventManager, store);
+  const connectorManager = new ConnectorManager(httpServer, projectManager, eventManager, store, eventsHandler);
 
   // Start listening
   httpServer.listen(SERVER_PORT);
@@ -181,6 +192,7 @@ export const initManagers = async (store: Store, windowManager?: WindowManager):
         agentProfileManager.dispose(),
         promptsManager.dispose(),
         extensionManager.dispose(),
+        gitAskpassManager.close(),
       ]);
     } catch (error) {
       logger.error('Error during cleanup:', {

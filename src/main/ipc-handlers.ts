@@ -16,7 +16,7 @@ import {
   AgentProfile,
   ChangeRequestItem,
 } from '@common/types';
-import { ipcMain, clipboard } from 'electron';
+import { ipcMain, clipboard, nativeImage } from 'electron';
 
 import { EventsHandler } from './events-handler';
 
@@ -51,6 +51,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.on('answer-question', (_, baseDir: string, taskId: string, answer: string) => {
     void eventsHandler.answerQuestion(baseDir, taskId, answer);
+  });
+
+  ipcMain.handle('respond-input-prompt', (_, id: string, value: string | null, rememberSession?: boolean) => {
+    eventsHandler.respondInputPrompt(id, value, rememberSession);
   });
 
   ipcMain.on('remove-queued-prompt', (_, baseDir: string, taskId: string, promptId: string) => {
@@ -535,6 +539,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     return eventsHandler.closeTerminal(terminalId);
   });
 
+  ipcMain.handle('terminal-get-buffer', async (_, terminalId: string) => {
+    return eventsHandler.getTerminalBuffer(terminalId);
+  });
+
   ipcMain.handle('terminal-get-for-task', async (_, taskId: string) => {
     return eventsHandler.getTerminalForTask(taskId);
   });
@@ -566,8 +574,8 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     return await eventsHandler.getLocalUncommittedFiles(baseDir, taskId);
   });
 
-  ipcMain.handle('apply-uncommitted-changes', async (_, baseDir: string, taskId: string, targetBranch?: string) => {
-    await eventsHandler.applyUncommittedChanges(baseDir, taskId, targetBranch);
+  ipcMain.handle('apply-uncommitted-changes', async (_, baseDir: string, taskId: string) => {
+    await eventsHandler.applyUncommittedChanges(baseDir, taskId);
   });
 
   ipcMain.handle('revert-last-merge', async (_, baseDir: string, taskId: string) => {
@@ -590,12 +598,12 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     await eventsHandler.saveFile(baseDir, taskId, filePath, content);
   });
 
-  ipcMain.handle('generate-commit-message', async (_, baseDir: string, taskId: string) => {
-    return await eventsHandler.generateCommitMessage(baseDir, taskId);
+  ipcMain.handle('generate-commit-message', async (_, baseDir: string, taskId: string, filePaths?: string[]) => {
+    return await eventsHandler.generateCommitMessage(baseDir, taskId, filePaths);
   });
 
-  ipcMain.handle('commit-changes', async (_, baseDir: string, taskId: string, message: string, amend: boolean) => {
-    await eventsHandler.commitChanges(baseDir, taskId, message, amend);
+  ipcMain.handle('commit-changes', async (_, baseDir: string, taskId: string, message: string, amend: boolean, filePaths?: string[]) => {
+    await eventsHandler.commitChanges(baseDir, taskId, message, amend, filePaths);
   });
 
   ipcMain.handle('cancel-commit-changes', async (_, baseDir: string, taskId: string) => {
@@ -604,6 +612,51 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle('list-branches', async (_, baseDir: string) => {
     return await eventsHandler.listBranches(baseDir);
+  });
+
+  // Git branch operations
+  ipcMain.handle('list-git-branches', async (_, baseDir: string, taskId: string, includeRemote?: boolean) => {
+    return await eventsHandler.listGitBranches(baseDir, taskId, includeRemote);
+  });
+
+  ipcMain.handle('get-sync-commits', async (_, baseDir: string, taskId: string, targetBranch?: string) => {
+    return await eventsHandler.getSyncCommits(baseDir, taskId, targetBranch);
+  });
+
+  ipcMain.handle('create-git-branch', async (_, baseDir: string, taskId: string, name: string, startPoint?: string, checkout?: boolean) => {
+    await eventsHandler.createGitBranch(baseDir, taskId, name, startPoint, checkout);
+  });
+
+  ipcMain.handle('checkout-git-branch', async (_, baseDir: string, taskId: string, branch: string, createTracking?: boolean, takeOver?: boolean) => {
+    await eventsHandler.checkoutGitBranch(baseDir, taskId, branch, createTracking, takeOver);
+  });
+
+  ipcMain.handle('delete-git-branch', async (_, baseDir: string, taskId: string, branch: string, force?: boolean) => {
+    await eventsHandler.deleteGitBranch(baseDir, taskId, branch, force);
+  });
+
+  ipcMain.handle('merge-into-current-branch', async (_, baseDir: string, taskId: string, branch: string) => {
+    return await eventsHandler.mergeIntoCurrentBranch(baseDir, taskId, branch);
+  });
+
+  ipcMain.handle('rebase-onto-branch', async (_, baseDir: string, taskId: string, branch: string) => {
+    return await eventsHandler.rebaseOntoBranch(baseDir, taskId, branch);
+  });
+
+  ipcMain.handle('update-git-branch', async (_, baseDir: string, taskId: string, branchName: string) => {
+    return await eventsHandler.updateGitBranch(baseDir, taskId, branchName);
+  });
+
+  ipcMain.handle('git-pull', async (_, baseDir: string, taskId: string, rebase?: boolean) => {
+    return await eventsHandler.gitPull(baseDir, taskId, rebase);
+  });
+
+  ipcMain.handle('git-push', async (_, baseDir: string, taskId: string, force?: boolean, setUpstream?: boolean) => {
+    return await eventsHandler.gitPush(baseDir, taskId, force, setUpstream);
+  });
+
+  ipcMain.handle('resolve-git-error-with-agent', async (_, baseDir: string, taskId: string) => {
+    await eventsHandler.resolveGitErrorWithAgent(baseDir, taskId);
   });
 
   ipcMain.handle('get-worktree-integration-status', async (_, baseDir: string, taskId: string, targetBranch?: string) => {
@@ -626,8 +679,12 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     await eventsHandler.resolveConflictsWithAgent(baseDir, taskId);
   });
 
+  ipcMain.handle('rename-git-branch', async (_, baseDir: string, taskId: string, newBranchName: string) => {
+    await eventsHandler.renameGitBranch(baseDir, taskId, newBranchName);
+  });
+
   ipcMain.handle('rename-worktree-branch', async (_, baseDir: string, taskId: string, newBranchName: string) => {
-    await eventsHandler.renameWorktreeBranch(baseDir, taskId, newBranchName);
+    await eventsHandler.renameGitBranch(baseDir, taskId, newBranchName);
   });
 
   // Server control handlers
@@ -728,6 +785,10 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle('clipboard-write-text', async (_, text: string) => {
     clipboard.writeText(text);
+  });
+
+  ipcMain.handle('clipboard-write-image', async (_, dataUrl: string) => {
+    clipboard.writeImage(nativeImage.createFromDataURL(dataUrl));
   });
 
   // System logs handlers

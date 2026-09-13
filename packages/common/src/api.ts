@@ -14,6 +14,7 @@ import {
   CommandsData,
   EditFormat,
   EnvironmentVariable,
+  GitSyncCommits,
   FileEdit,
   InputHistoryData,
   LogData,
@@ -74,6 +75,7 @@ import {
   ExtensionUIComponent,
   ExtensionUIRefreshData,
   ModalOverlayUrlData,
+  InputPromptData,
   AiderConnectorStatus,
   ChangeRequestItem,
   SkillDefinition,
@@ -138,8 +140,8 @@ export interface ApplicationAPI {
   restoreFile: (baseDir: string, taskId: string, filePath: string) => Promise<void>;
   readFile: (baseDir: string, taskId: string, filePath: string) => Promise<string>;
   saveFile: (baseDir: string, taskId: string, filePath: string, content: string) => Promise<void>;
-  generateCommitMessage: (baseDir: string, taskId: string) => Promise<string>;
-  commitChanges: (baseDir: string, taskId: string, message: string, amend: boolean) => Promise<void>;
+  generateCommitMessage: (baseDir: string, taskId: string, filePaths?: string[]) => Promise<string>;
+  commitChanges: (baseDir: string, taskId: string, message: string, amend: boolean, filePaths?: string[]) => Promise<void>;
   cancelCommitChanges: (baseDir: string, taskId: string) => Promise<void>;
   addFile: (baseDir: string, taskId: string, filePath: string, readOnly?: boolean) => void;
   isValidPath: (baseDir: string, path: string) => Promise<boolean>;
@@ -202,6 +204,8 @@ export interface ApplicationAPI {
   saveExtensionConfig: (extensionId: string, configData: unknown, projectDir?: string) => Promise<unknown>;
   onExtensionUIRefresh: (callback: (data: ExtensionUIRefreshData) => void) => () => void;
   onModalOverlayUrl: (callback: (data: ModalOverlayUrlData) => void) => () => void;
+  onInputPrompt: (callback: (data: InputPromptData) => void) => () => void;
+  respondInputPrompt: (id: string, value: string | null, rememberSession?: boolean) => Promise<void>;
   isWebViewSupported: () => boolean;
   loadExtensionLibrary: (librarySpec: string) => Promise<string>;
 
@@ -303,14 +307,15 @@ export interface ApplicationAPI {
   resizeTerminal: (terminalId: string, cols: number, rows: number) => Promise<boolean>;
   closeTerminal: (terminalId: string) => Promise<boolean>;
   getTerminalForTask: (taskId: string) => Promise<string | null>;
-  getAllTerminalsForTask: (taskId: string) => Promise<Array<{ id: string; taskId: string; cols: number; rows: number }>>;
+  getAllTerminalsForTask: (taskId: string) => Promise<Array<{ id: string; taskId: string; baseDir: string; cols: number; rows: number }>>;
+  getTerminalBuffer: (terminalId: string) => Promise<{ exists: boolean; data: string }>;
 
   // Worktree merge operations
   mergeWorktreeToMain: (baseDir: string, taskId: string, squash: boolean, targetBranch?: string, commitMessage?: string) => Promise<void>;
   switchToLocalWorkingMode: (baseDir: string, taskId: string, options?: SwitchToLocalOptions) => Promise<void>;
   switchToWorktreeWorkingMode: (baseDir: string, taskId: string, options?: SwitchToWorktreeOptions) => Promise<void>;
   getLocalUncommittedFiles: (baseDir: string, taskId: string) => Promise<WorktreeUncommittedFiles>;
-  applyUncommittedChanges: (baseDir: string, taskId: string, targetBranch?: string) => Promise<void>;
+  applyUncommittedChanges: (baseDir: string, taskId: string) => Promise<void>;
   revertLastMerge: (baseDir: string, taskId: string) => Promise<void>;
   listBranches: (baseDir: string) => Promise<BranchInfo[]>;
   getWorktreeIntegrationStatus: (baseDir: string, taskId: string, targetBranch?: string) => Promise<WorktreeIntegrationStatus | null>;
@@ -319,6 +324,20 @@ export interface ApplicationAPI {
   continueWorktreeRebase: (baseDir: string, taskId: string) => Promise<void>;
   resolveWorktreeConflictsWithAgent: (baseDir: string, taskId: string) => Promise<void>;
   renameWorktreeBranch: (baseDir: string, taskId: string, newBranchName: string) => Promise<void>;
+  renameGitBranch: (baseDir: string, taskId: string, newBranchName: string) => Promise<void>;
+
+  // Git branch operations
+  listGitBranches: (baseDir: string, taskId: string, includeRemote?: boolean) => Promise<BranchInfo[]>;
+  getSyncCommits: (baseDir: string, taskId: string, targetBranch?: string) => Promise<GitSyncCommits>;
+  createGitBranch: (baseDir: string, taskId: string, name: string, startPoint?: string, checkout?: boolean) => Promise<void>;
+  checkoutGitBranch: (baseDir: string, taskId: string, branch: string, createTracking?: boolean, takeOver?: boolean) => Promise<void>;
+  deleteGitBranch: (baseDir: string, taskId: string, branch: string, force?: boolean) => Promise<void>;
+  mergeIntoCurrentBranch: (baseDir: string, taskId: string, branch: string) => Promise<{ conflictedFiles?: string[] }>;
+  rebaseOntoBranch: (baseDir: string, taskId: string, branch: string) => Promise<{ conflictedFiles?: string[] }>;
+  updateGitBranch: (baseDir: string, taskId: string, branchName: string) => Promise<{ output: string }>;
+  gitPull: (baseDir: string, taskId: string, rebase?: boolean) => Promise<{ output: string }>;
+  gitPush: (baseDir: string, taskId: string, force?: boolean, setUpstream?: boolean) => Promise<{ output: string }>;
+  resolveGitErrorWithAgent: (baseDir: string, taskId: string) => Promise<void>;
 
   // Agent profile operations
   getAllAgentProfiles: () => Promise<AgentProfile[]>;
@@ -335,6 +354,7 @@ export interface ApplicationAPI {
 
   // Clipboard operations
   writeToClipboard: (text: string) => Promise<void>;
+  writeImageToClipboard: (dataUrl: string) => Promise<void>;
   openPath: (path: string) => Promise<boolean>;
   openUrlInWindow: (url: string, title?: string) => Promise<void>;
   openUrlExternally: (url: string) => Promise<void>;

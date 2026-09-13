@@ -71,6 +71,7 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
   const [isAllFilesView, setIsAllFilesView] = useLocalStorage('diff-modal-all-files-view', false);
   const [pendingComments, setPendingComments] = useState<PendingComment[]>([]);
   const [createNewTask, setCreateNewTask] = useState(false);
+  const [deselectedFilePaths, setDeselectedFilePaths] = useState<Set<string>>(new Set());
   const [editCommentActiveLineInfo, setEditCommentActiveLineInfo] = useState<{
     commentId: string;
     viewportRect: { top: number; left: number };
@@ -85,6 +86,45 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
   const flatFiles = useMemo(() => {
     return groups.flatMap((group) => group.files);
   }, [groups]);
+
+  // Files eligible for commit: only uncommitted files (committed files are shown for reference only)
+  const committableFiles = useMemo(() => groups.filter((g) => !g.commitHash).flatMap((g) => g.files), [groups]);
+
+  // Files selected for commit: all committable files minus explicitly deselected ones
+  const selectedFiles = useMemo(() => committableFiles.filter((f) => !deselectedFilePaths.has(f.path)), [committableFiles, deselectedFilePaths]);
+  const selectedFilePaths = useMemo(() => new Set(selectedFiles.map((f) => f.path)), [selectedFiles]);
+
+  // Reset selection to all files whenever the committable file list changes (e.g. after a commit)
+  const committableFilePathsKey = useMemo(() => committableFiles.map((f) => f.path).join('\n'), [committableFiles]);
+  useEffect(() => {
+    setDeselectedFilePaths(new Set());
+  }, [committableFilePathsKey]);
+
+  const handleToggleFileSelection = useCallback((filePath: string, selected: boolean) => {
+    setDeselectedFilePaths((prev) => {
+      const next = new Set(prev);
+      if (selected) {
+        next.delete(filePath);
+      } else {
+        next.add(filePath);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleFolderSelection = useCallback((filePaths: string[], selected: boolean) => {
+    setDeselectedFilePaths((prev) => {
+      const next = new Set(prev);
+      for (const filePath of filePaths) {
+        if (selected) {
+          next.delete(filePath);
+        } else {
+          next.add(filePath);
+        }
+      }
+      return next;
+    });
+  }, []);
 
   // Cumulative file counts per group for rendering offsets in all-files view
   const groupFileOffsets = useMemo(() => {
@@ -272,7 +312,11 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
   const handleGenerateMessage = useCallback(async () => {
     setIsGeneratingMessage(true);
     try {
-      const message = await api.generateCommitMessage(baseDir, taskId);
+      const message = await api.generateCommitMessage(
+        baseDir,
+        taskId,
+        selectedFiles.map((f) => f.path),
+      );
       setCommitMessage(message);
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -280,7 +324,7 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
     } finally {
       setIsGeneratingMessage(false);
     }
-  }, [api, baseDir, taskId]);
+  }, [api, baseDir, taskId, selectedFiles]);
 
   const handleCommit = useCallback(async () => {
     // Allow empty message only when amending
@@ -290,7 +334,11 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
 
     setCommitError(null);
     try {
-      await commit(commitMessage, amend);
+      await commit(
+        commitMessage,
+        amend,
+        selectedFiles.map((f) => f.path),
+      );
       setCommitMessage('');
       setAmend(false);
       onClose();
@@ -299,7 +347,7 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
       console.error('Failed to commit changes:', error);
       setCommitError(error instanceof Error ? error.message : String(error));
     }
-  }, [commit, commitMessage, amend, onClose]);
+  }, [commit, commitMessage, amend, onClose, selectedFiles]);
 
   const handleCancelCommit = useCallback(() => {
     cancelCommit();
@@ -574,7 +622,16 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
       </div>
       {/* Main content area: file sidebar on left, diff viewer center, comments panel right */}
       <div className="flex-1 flex overflow-hidden">
-        {flatFiles.length > 1 && <DiffFilesSidebar groups={groups} currentFile={currentFile} onFileSelect={handleFileSelect} />}
+        {flatFiles.length > 1 && (
+          <DiffFilesSidebar
+            groups={groups}
+            currentFile={currentFile}
+            onFileSelect={handleFileSelect}
+            selectedFilePaths={selectedFilePaths}
+            onToggleFileSelection={handleToggleFileSelection}
+            onToggleFolderSelection={handleToggleFolderSelection}
+          />
+        )}
 
         {/* Diff viewer with its own scroll - scrollbar right next to the file */}
         <div
@@ -658,6 +715,12 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
             </div>
           )}
 
+          {selectedFiles.length < committableFiles.length && (
+            <div className="text-xs text-text-secondary">
+              {t('contextFiles.selectedFilesToCommit', { count: selectedFiles.length, total: committableFiles.length })}
+            </div>
+          )}
+
           <div className="flex items-center justify-between w-full gap-4">
             <div className="flex-1 min-w-0 relative">
               <TextArea
@@ -695,7 +758,7 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
               <Checkbox checked={amend} onChange={setAmend} label={t('contextFiles.amend')} tooltip={t('contextFiles.amendTooltip')} size="xs" />
               <Button
                 onClick={handleCommit}
-                disabled={(!commitMessage.trim() && !amend) || isCommitting || isGeneratingMessage}
+                disabled={(!commitMessage.trim() && !amend) || isCommitting || isGeneratingMessage || (selectedFiles.length === 0 && !amend)}
                 variant="contained"
                 color="primary"
                 size="sm"

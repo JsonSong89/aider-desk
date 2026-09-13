@@ -110,6 +110,10 @@ src/
       index.ts
       project-context.ts
       task-context.ts
+    git/
+      git-askpass-manager.ts
+      git-manager.ts
+      index.ts
     logger/
       event-transport.ts
       log-buffer.ts
@@ -249,12 +253,10 @@ src/
       ripgrep.ts
       shell.ts
       web-scrapper.ts
+      window-load-retry.ts
     versions/
       index.ts
       versions-manager.ts
-    worktrees/
-      index.ts
-      worktree-manager.ts
     app.ts
     constants.ts
     events-handler.ts
@@ -321,6 +323,8 @@ src/
           InfoIcon.tsx
           InlineEditPanel.tsx
           Input.tsx
+          InputPromptDialog.tsx
+          InputPromptModal.tsx
           ItemSelector.tsx
           LoadingOverlay.tsx
           LoadingText.tsx
@@ -331,6 +335,7 @@ src/
           ModelSelectorWrapper.tsx
           MultiSelect.tsx
           RadioButton.tsx
+          SearchableSelect.tsx
           Section.tsx
           Select.tsx
           Slider.tsx
@@ -498,7 +503,12 @@ src/
           AddFileDialog.tsx
           FileFinder.tsx
           FilesContextInfoContent.tsx
+          GitBranchesButton.tsx
+          GitBranchesPopup.tsx
+          GitBranchesTooltipContent.tsx
+          GitStatusBadges.tsx
           MobileSidebar.tsx
+          MountedTaskView.tsx
           NoProjectsOpen.tsx
           OpenProjectDialog.tsx
           ProjectTabContent.tsx
@@ -512,9 +522,7 @@ src/
           useSidebarWidth.ts
           WelcomeMessage.tsx
           WorktreeActionDialog.tsx
-          WorktreeMergeButton.tsx
           WorktreeRevertButton.tsx
-          WorktreeStatusBadges.tsx
         PromptField/
           AudioAnalyzer.tsx
           AutoApprove.tsx
@@ -748,6 +756,7 @@ src/
         settingsStore.ts
         taskFilesStore.ts
         taskStore.ts
+        terminalStore.ts
       themes/
         theme-aurora.scss
         theme-botanical-garden-dark.scss
@@ -854,6 +863,12 @@ max_input_tokens = model.info.get('max_input_tokens') if model.info else None
 max_output_tokens = model.info.get('max_output_tokens') if model.info else None
 ⋮----
 temperature = info.get('temperature')
+⋮----
+task_id = os.environ.get("TASK_ID")
+openai_base = os.environ.get("OPENAI_API_BASE", "")
+anthropic_base = os.environ.get("ANTHROPIC_BASE_URL", "")
+⋮----
+extra_headers = model.extra_params.setdefault("extra_headers", {})
 ⋮----
 def wait_for_async(connector, coroutine)
 ⋮----
@@ -2591,6 +2606,7 @@ async generateText(
     messages: ContextMessage[] = [],
     abortable = true,
     abortSignal?: AbortSignal,
+    sessionId?: string,
 ): Promise<string | undefined>
 ⋮----
 async generateObject<T>(
@@ -2602,6 +2618,7 @@ async generateObject<T>(
     messages: ContextMessage[] = [],
     abortable = true,
     abortSignal?: AbortSignal,
+    sessionId?: string,
 ): Promise<T | undefined>
 ⋮----
 async estimateTokens(task: Task, profile: AgentProfile): Promise<number>
@@ -2702,6 +2719,7 @@ export const generateCompactedSummary = async (
     messages: ContextMessage[],
     abortable: boolean,
     abortSignal?: AbortSignal,
+    sessionId?: string,
   ) => Promise<string | undefined> = async () => undefined,
 ): Promise<ContextMessage[]> =>
 
@@ -3582,12 +3600,14 @@ import {
   isAddMessageMessage,
   isSubscribeEventsMessage,
   isUnsubscribeEventsMessage,
+  isWriteToTerminalMessage,
   isReadonlySubscribeEventsMessage,
   isReadonlyUnsubscribeEventsMessage,
 } from '@/messages';
 import { Connector } from '@/connector/connector';
 import { ProjectManager } from '@/project';
 import { EventManager } from '@/events';
+import { EventsHandler } from '@/events-handler';
 import { Store } from '@/store';
 import { createCorsOriginValidator } from '@/server/cors';
 import { READONLY_MODE } from '@/constants';
@@ -3600,6 +3620,7 @@ constructor(
     private readonly projectManager: ProjectManager,
     private readonly eventManager: EventManager,
     private readonly store: Store,
+    private readonly eventsHandler: EventsHandler,
 )
 ⋮----
 private get isReadonlyMode(): boolean
@@ -3905,6 +3926,7 @@ import {
   CommandsData,
   ExtensionUIRefreshData,
   ModalOverlayUrlData,
+  InputPromptData,
   ContextInfoData,
 } from '@common/types';
 ⋮----
@@ -3950,6 +3972,8 @@ sendResponseChunk(data: ResponseChunkData): void
 sendResponseCompleted(data: ResponseCompletedData): void
 ⋮----
 // Question events
+sendInputPrompt(data: InputPromptData): void
+⋮----
 sendAskQuestion(questionData: QuestionData): void
 ⋮----
 sendQuestionAnswered(baseDir: string, taskId: string, question: QuestionData, answer: string, userInput?: string): void
@@ -4042,6 +4066,9 @@ unsubscribe(socket: Socket, log = true): void
 private sendToWindows(eventType: string, data: unknown): void
 ⋮----
 // Send event to all open windows
+⋮----
+// Sending to a disposed/crashed render frame can throw synchronously; skip it
+// without breaking delivery to other windows or the code that triggered the event
 ⋮----
 private broadcastToEventConnectors(eventType: string, data: unknown, log = true): void
 ⋮----
@@ -4259,7 +4286,7 @@ private async fileExists(filePath: string): Promise<boolean>
 ⋮----
 private async extractMetadataFromLocalFile(filePath: string): Promise<ExtensionMetadata | null>
 ⋮----
-private getStaticMetadata(filePath: string): ExtensionMetadata | null
+private async getStaticMetadata(filePath: string): Promise<ExtensionMetadata | null>
 ⋮----
 const visitor = (node: ts.Node) =>
 ⋮----
@@ -5182,11 +5209,856 @@ async switchToLocalWorkingMode(options?: SwitchToLocalOptions): Promise<void>
 ⋮----
 async getLocalUncommittedFiles(): Promise<WorktreeUncommittedFiles>
 ⋮----
-async applyUncommittedChanges(targetBranch?: string): Promise<void>
+async applyUncommittedChanges(): Promise<void>
 ⋮----
 async mergeWorktreeToWorktree(targetWorktreeDir: string, includeUncommitted?: boolean): Promise<void>
 ⋮----
 async resumeTask(): Promise<void>
+
+================
+File: src/main/git/git-askpass-manager.ts
+================
+import { createServer, Server, IncomingMessage, ServerResponse } from 'http';
+import { AddressInfo } from 'net';
+⋮----
+import { randomUUID } from 'crypto';
+⋮----
+import { InputPromptData } from '@common/types';
+⋮----
+import { EventManager } from '@/events';
+import { AIDER_DESK_DATA_DIR } from '@/constants';
+import logger from '@/logger';
+⋮----
+interface PendingRequest {
+  resolve: (answer: string) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+  prompt: string;
+}
+⋮----
+export class GitAskpassManager
+⋮----
+constructor(
+    private readonly eventManager?: EventManager,
+    customAskpassDir?: string,
+)
+⋮----
+async init(): Promise<void>
+⋮----
+// Export askpass environment variables to process.env so all git commands inherit them
+⋮----
+private writeAskpassFiles(): void
+⋮----
+private async startServer(): Promise<void>
+⋮----
+private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void
+⋮----
+// Check if there is a cached answer for this prompt
+⋮----
+private promptUser(prompt: string): Promise<string>
+⋮----
+// Check if there is already another request active for this exact prompt text
+⋮----
+private buildPromptData(id: string, prompt: string): InputPromptData
+⋮----
+respond(id: string, value: string | null, rememberSession?: boolean): boolean
+⋮----
+getEnv(): NodeJS.ProcessEnv
+⋮----
+clearSessionCache(): void
+⋮----
+async close(): Promise<void>
+
+================
+File: src/main/git/git-manager.ts
+================
+import os from 'os';
+import path, { join } from 'path';
+import fs, { mkdir, rm, lstat, symlink } from 'fs/promises';
+import { existsSync, lstatSync } from 'fs';
+⋮----
+import {
+  BranchInfo,
+  ConflictResolutionFileContext,
+  GitSyncCommits,
+  MergeState,
+  RebaseState,
+  UpdatedFile,
+  UpdatedFilesGroupMode,
+  WorkingMode,
+  Worktree,
+  WorktreeAheadCommits,
+  WorktreeUncommittedFiles,
+} from '@common/types';
+// @ts-expect-error istextorbinary library does not provide TypeScript definitions
+import { isBinary } from 'istextorbinary';
+⋮----
+import type { GitAskpassManager } from '@/git/git-askpass-manager';
+⋮----
+import { execWithShellPath, withLock } from '@/utils';
+import { AIDER_DESK_TASKS_DIR } from '@/constants';
+import logger from '@/logger';
+import { isFileNotFoundError } from '@/utils/errors';
+⋮----
+export class GitError extends Error
+⋮----
+getErrorDetails()
+⋮----
+// Interface for raw commit data
+interface RawCommitData {
+  hash: string;
+  message: string;
+  date: string | Date;
+  author?: string;
+  additions?: number;
+  deletions?: number;
+  filesChanged?: number;
+}
+⋮----
+const isAbortError = (error: unknown): boolean =>
+⋮----
+export class GitManager
+⋮----
+constructor(private readonly gitAskpassManager?: GitAskpassManager)
+⋮----
+private getWorktreePath(projectPath: string, taskId: string): string
+⋮----
+private async initializeWorktree(projectPath: string, taskId: string): Promise<void>
+⋮----
+async createWorktree(projectPath: string, taskId: string, branch?: string, baseBranch = 'HEAD'): Promise<Worktree>
+⋮----
+// 1. Initialize repository if necessary
+⋮----
+// Initialize git repository
+⋮----
+// 2. Clean up stale worktree registrations (e.g. the directory was deleted out-of-band)
+⋮----
+// 3. Clean up any existing worktree before recreating its directory
+⋮----
+// 4. Ensure the repository has at least one commit
+⋮----
+// Repository has no commits yet, create initial commit
+⋮----
+// Ignore add errors (no files to add)
+⋮----
+// 5. Logic for creating the worktree
+⋮----
+const baseRef = baseBranch; // Will be 'HEAD' if not provided
+⋮----
+// A. Branch name provided: Check if branch exists or create it
+⋮----
+// Check if it's an actual branch (not just a commit SHA)
+⋮----
+// Branch doesn't exist, it will be created from baseRef
+⋮----
+// A1. Use existing branch
+⋮----
+// Get the base commit (the tip of the existing branch)
+⋮----
+// A2. Create new branch from baseRef (which defaults to 'HEAD')
+⋮----
+// Verify that the base branch exists if specified and is a branch name
+⋮----
+// Capture the base commit before creating the worktree
+⋮----
+// Create the new branch and checkout the worktree
+⋮----
+newBranchName = branch; // Use the newly created branch name
+⋮----
+// B. No branch name provided: Create detached worktree from current HEAD (or specified baseRef)
+⋮----
+// Note: git worktree add <path> defaults to current HEAD
+⋮----
+// Capture the base commit (the commit it's detached at)
+⋮----
+// Use the baseRef for the branch name, or resolve the current branch if baseRef is 'HEAD'
+⋮----
+// Resolve the base branch: if baseRef is 'HEAD', resolve to the current branch name
+⋮----
+async renameBranch(projectPath: string, oldBranch: string, newBranch: string): Promise<string>
+⋮----
+private async findUniqueBranchName(projectPath: string, baseName: string): Promise<string>
+⋮----
+async createSymlinks(projectPath: string, worktreePath: string, folderNames: string[]): Promise<void>
+⋮----
+private async existsAndIsDirectory(path: string): Promise<boolean>
+⋮----
+private async isFolderTrackedByGit(projectPath: string, folderName: string): Promise<boolean>
+⋮----
+async removeWorktree(projectDir: string, worktree: Worktree, force = false): Promise<void>
+⋮----
+// Clean up the branch if it's a task branch (starts with "task-" or looks like generated from task name)
+⋮----
+// Branch might not exist or be protected, don't fail the removal
+⋮----
+// If the worktree is not found, that's okay - it might have been manually deleted
+⋮----
+// For other errors, still throw
+⋮----
+async listWorktrees(projectDir: string): Promise<Worktree[]>
+⋮----
+async listBranches(projectPath: string, includeRemote = false): Promise<BranchInfo[]>
+⋮----
+// Get all local branches
+⋮----
+// Get all worktrees to identify which branches have worktrees
+⋮----
+// Get upstream tracking info (upstream name and ahead/behind counts) in one call
+⋮----
+// Remove leading *, +, and spaces. The + indicates uncommitted changes
+⋮----
+// Unborn HEAD (repository with no commits yet): `git branch` outputs nothing,
+// so synthesize the current branch to keep it visible in the UI
+⋮----
+// Skip remote-name refs (e.g. "origin"), detached HEAD pointers (e.g. "origin/HEAD") and branches that exist locally
+⋮----
+// Sort branches: current first, then other worktree branches, then locals, then remotes; alphabetical within groups
+⋮----
+// Within each group, sort alphabetically
+⋮----
+async createBranch(projectPath: string, name: string, startPoint?: string, checkout = true): Promise<void>
+⋮----
+async checkoutBranch(projectPath: string, branch: string, createTracking = false, takeOver = false): Promise<void>
+⋮----
+private async detachBranchFromOtherWorktrees(projectPath: string, branch: string): Promise<void>
+⋮----
+// The first worktree is always the main working tree. Detaching it would leave the main repository
+// in a detached HEAD state, breaking project-level git operations, so it must never be detached.
+⋮----
+const isMainWorktree = (w: Worktree)
+⋮----
+async deleteBranch(projectPath: string, branch: string, force = false): Promise<void>
+⋮----
+async mergeIntoCurrent(projectPath: string, branch: string): Promise<
+⋮----
+async rebaseOnto(projectPath: string, branch: string): Promise<
+⋮----
+private quoteArg(arg: string): string
+⋮----
+private wrapGitError(error: unknown, commands: string[], workingDirectory?: string): GitError
+⋮----
+private async getConflictedFiles(path: string): Promise<string[]>
+⋮----
+async getProjectMainBranch(projectPath: string): Promise<string>
+⋮----
+// ONLY check the current branch in the project root directory
+⋮----
+// Throw error if we're in detached HEAD state
+⋮----
+// Deprecated: Use getProjectMainBranch instead
+async detectMainBranch(projectPath: string): Promise<string>
+⋮----
+// Deprecated: Use getProjectMainBranch instead
+async getEffectiveMainBranch(project:
+⋮----
+async getCommitHash(worktreePath: string, ref: string): Promise<string | undefined>
+⋮----
+async getHeadCommit(worktreePath: string): Promise<string | undefined>
+⋮----
+/**
+   * Check if a commit is an ancestor of another commit (or HEAD).
+   * Returns true if `ancestorCommit` is reachable from `descendantRef`.
+   */
+async isCommitAncestorOf(worktreePath: string, ancestorCommit: string, descendantRef = 'HEAD'): Promise<boolean>
+⋮----
+// git merge-base --is-ancestor returns exit code 0 if ancestor, 1 if not
+⋮----
+/**
+   * Get the "onto" commit from an active rebase.
+   * Returns undefined if no rebase is in progress or the file doesn't exist.
+   */
+async getRebaseOntoCommit(worktreePath: string): Promise<string | undefined>
+⋮----
+// Try rebase-merge first (interactive rebase)
+⋮----
+// rebase-merge/onto doesn't exist, try rebase-apply
+⋮----
+// Try rebase-apply (non-interactive rebase)
+⋮----
+// rebase-apply/onto doesn't exist either
+⋮----
+/**
+   * Resolve a commit to the branch name that points to it.
+   * Returns the first branch found, or undefined if no branch points to that exact commit.
+   */
+async getBranchPointingAtCommit(projectPath: string, commit: string): Promise<string | undefined>
+⋮----
+async getBranchesContainingCommit(projectPath: string, commit: string): Promise<string[]>
+⋮----
+async hasChangesToRebase(worktreePath: string, mainBranch: string): Promise<boolean>
+⋮----
+// Check if main branch has commits that the current branch doesn't have
+// Use cross-platform approach
+⋮----
+// Error checking, assume no changes
+⋮----
+async checkForRebaseConflicts(
+    worktreePath: string,
+    mainBranch: string,
+): Promise<
+⋮----
+// First check if there are any changes to rebase
+⋮----
+// Get the merge base
+⋮----
+// Try a dry-run merge to detect conflicts
+// We use merge-tree to check for conflicts without modifying the working tree
+⋮----
+// Parse merge-tree output for conflicts
+⋮----
+// Get list of files that would conflict
+⋮----
+// Find files modified in both branches
+⋮----
+// Get commit info for better error reporting
+⋮----
+// If merge-tree is not available (older git), fall back to checking modified files
+⋮----
+// Get files changed in both branches
+⋮----
+// Find files modified in both branches (potential conflicts)
+⋮----
+// Get commit info
+⋮----
+// On error, return unknown status
+⋮----
+async rebaseMainIntoWorktree(
+    worktreePath: string,
+    mainBranch: string,
+    baseCommit?: string,
+    symlinkFolders: string[] = [],
+): Promise<
+⋮----
+// 0. Guard against starting a rebase while one is already in progress
+⋮----
+// 1. Check for uncommitted changes and create temporary commit if needed
+⋮----
+// Stage all changes
+⋮----
+// Unstage symlink folders to prevent them from being tracked by git
+// (they are worktree infrastructure artifacts, not real project files)
+⋮----
+// Create temporary commit with unique timestamp
+⋮----
+// 2. Validate baseCommit if provided - ensure it's an ancestor of HEAD
+// If baseCommit is stale (e.g., user rebased externally), fall back to simple rebase
+⋮----
+// 3. Rebase the current worktree branch onto target branch
+// When baseCommit is provided and valid, use --onto to only replay commits made after baseCommit
+// This avoids carrying over base branch commits that aren't in the target branch
+⋮----
+// 4. If rebase succeeds AND we had uncommitted changes, reset to uncommitted state
+⋮----
+// Create detailed error with git command output
+⋮----
+async abortRebase(worktreePath: string): Promise<void>
+⋮----
+// Check if we're in the middle of a rebase
+⋮----
+// Abort the rebase
+⋮----
+// Always try to reset temporary commit if it exists
+⋮----
+async continueRebase(worktreePath: string): Promise<
+⋮----
+// Capture the "onto" info before continuing (it will be gone after rebase completes)
+⋮----
+// Always try to reset temporary commit if it exists after successful continue
+⋮----
+private async squashAndMergeWorktreeToMain(
+    projectPath: string,
+    worktreePath: string,
+    mainBranch: string,
+    commitMessage: string,
+    baseCommit?: string,
+    checkoutless = false,
+): Promise<void>
+⋮----
+// SAFETY CHECK 0: A rebase left in progress (e.g. awaiting conflict resolution in the UI)
+// would block our own rebase and must not be aborted by this operation
+⋮----
+// Get current branch name in worktree (for logging purposes)
+⋮----
+// Check if there are any changes to merge (before rebase)
+⋮----
+// Validate baseCommit if provided - ensure it's an ancestor of HEAD
+// If baseCommit is stale (e.g., user rebased externally), fall back to simple rebase
+⋮----
+// SAFETY CHECK 1: Rebase worktree onto main FIRST before squashing
+// Use --onto with baseCommit to only replay worktree-specific commits
+⋮----
+// Only abort a rebase that this operation started - never a pre-existing rebase
+// the user may still be resolving (e.g. started concurrently while we passed the guard)
+⋮----
+// Ignore abort errors
+⋮----
+// Get the HEAD commit hash from worktree AFTER rebase (but before squashing)
+// This preserves the worktree's commit history
+⋮----
+// Create the squashed commit via plumbing and update the target branch ref directly
+// without checking it out (the project directory is on a different branch, and git
+// guarantees the target branch cannot be checked out in any other worktree)
+⋮----
+// No-op check: nothing to squash if the trees are identical
+⋮----
+// Switch to main branch in the main repository
+⋮----
+// SQUASH MERGE: Use git merge --squash to create a squashed staging of all changes
+// This keeps the worktree branch history intact while creating a single commit in main
+⋮----
+// Check if there are staged changes to commit
+⋮----
+// Commit the squashed changes with the provided message
+⋮----
+// Preserve specific errors (e.g. rebase-in-progress guard, rebase conflict details)
+⋮----
+// Create detailed error with git command output
+⋮----
+// Prioritize actual error messages over lastOutput (which may contain unrelated data like commit counts)
+⋮----
+private async mergeWorktreeToMain(projectPath: string, worktreePath: string, mainBranch: string, checkoutless = false): Promise<void>
+⋮----
+// SAFETY CHECK 0: A rebase left in progress (e.g. awaiting conflict resolution in the UI)
+// would block our own rebase and must not be aborted by this operation
+⋮----
+// Get current branch name in worktree (for logging purposes)
+⋮----
+// Check if there are any changes to merge
+⋮----
+// SAFETY CHECK 1: Rebase worktree onto main FIRST (resolves conflicts in worktree, not main)
+⋮----
+// Only abort a rebase that this operation started - never a pre-existing rebase
+// the user may still be resolving (e.g. started concurrently while we passed the guard)
+⋮----
+// Ignore abort errors
+⋮----
+// Get the HEAD commit hash from worktree AFTER rebase
+⋮----
+// Update the target branch ref directly without checking it out:
+// the project directory is on a different branch, and git guarantees the target
+// branch cannot be checked out in any other worktree
+⋮----
+// Switch to main branch in the main repository
+⋮----
+// SAFETY CHECK 2: Use --ff-only merge to prevent history rewriting
+// This will fail if local main has diverged from the worktree branch
+⋮----
+// Preserve specific errors (e.g. rebase-in-progress guard, rebase conflict details)
+⋮----
+// Create detailed error with git command output
+⋮----
+// Prioritize actual error messages over lastOutput (which may contain unrelated data like commit counts)
+⋮----
+generateRebaseCommands(mainBranch: string): string[]
+⋮----
+generateSquashCommands(mainBranch: string, branchName: string): string[]
+⋮----
+generateMergeCommands(mainBranch: string, branchName: string): string[]
+⋮----
+async gitPull(worktreePath: string, rebase?: boolean): Promise<
+⋮----
+async gitPush(worktreePath: string, force?: boolean, setUpstream?: boolean): Promise<
+⋮----
+private async getDefaultRemote(repoPath: string): Promise<string>
+⋮----
+async updateBranch(repoPath: string, branchName: string): Promise<
+⋮----
+// ignore
+⋮----
+async getLastCommits(worktreePath: string, count: number = 20, includeStats: boolean = true): Promise<RawCommitData[]>
+⋮----
+async getChangesDiff(projectPath: string, worktreePath: string, targetBranch?: string): Promise<string>
+⋮----
+// Check if there are any commits in worktree that are not in main
+⋮----
+// No commits in worktree, return empty string
+⋮----
+// Get the first commit hash in the worktree branch (oldest commit not in main)
+⋮----
+// Get full diff from the commit before the oldest worktree commit to HEAD
+⋮----
+async getOriginBranch(worktreePath: string, branch: string): Promise<string | null>
+⋮----
+async getTaskWorktree(projectPath: string, taskId: string): Promise<Worktree | null>
+⋮----
+// Find worktree that matches our task's worktree path
+⋮----
+// A prunable worktree has a missing or invalid directory (stale registration), treat it as absent
+⋮----
+// If no worktree exists for this task, return null
+⋮----
+/**
+   * Check if there are uncommitted changes in the given path
+   */
+async hasUncommittedChanges(path: string): Promise<boolean>
+⋮----
+/**
+   * Stash uncommitted changes with a unique identifier
+   * Returns the stash identifier or null if no changes to stash
+   */
+async stashUncommittedChanges(stashId: string, path: string, message: string, symlinkFolders: string[] = []): Promise<string | null>
+⋮----
+// Find which symlink folders have untracked files
+⋮----
+// Get untracked files to check which symlink folders have content
+⋮----
+// Check if folder has untracked files
+⋮----
+// Build stash command with exclude patterns for folders with untracked files
+⋮----
+/**
+   * Apply a stash by its identifier
+   */
+async applyStash(path: string, stashId: string): Promise<void>
+⋮----
+// Find the stash entry that matches our identifier
+⋮----
+// Extract stash reference (e.g., "stash@{0}")
+⋮----
+// A previous partial apply may have restored this stash's untracked files to disk,
+// which blocks re-applying the stash. Remove identical copies and retry once.
+⋮----
+/**
+   * Remove untracked files from the stash's untracked-files commit that already exist on disk
+   * with identical content (left behind by a partial stash apply), so the stash can be applied again.
+   * Tracked files and files with different content are never removed.
+   */
+private async removeIdenticalStashUntrackedFiles(dir: string, stashRef: string): Promise<void>
+⋮----
+// Never remove files that are tracked in the index
+⋮----
+// not in the index
+⋮----
+/**
+   * Drop a stash by its identifier
+   */
+async dropStash(path: string, stashId: string): Promise<void>
+⋮----
+// Find the stash entry that matches our identifier
+⋮----
+// Extract stash reference (e.g., "stash@{0}")
+⋮----
+// Don't throw - dropping stash is not critical
+⋮----
+/**
+   * Merge worktree to main branch with uncommitted changes support
+   * Returns MergeState for potential revert
+   */
+async mergeWorktreeToMainWithUncommitted(
+    projectPath: string,
+    taskId: string,
+    worktreePath: string,
+    squash: boolean,
+    commitMessage?: string,
+    targetBranch?: string,
+    symlinkFolders: string[] = [],
+    baseCommit?: string,
+): Promise<MergeState>
+⋮----
+// If the project directory is on a different branch, update the target branch ref directly
+// without checking it out (the working tree is left untouched)
+⋮----
+// 1. Track initial state
+⋮----
+// 2. Stash uncommitted changes in worktree
+⋮----
+// 3. Stash uncommitted changes in main branch if any (not needed for checkoutless merge,
+// since the project directory working tree is never touched)
+⋮----
+// 4. Perform the merge operation (existing methods handle the actual merge)
+⋮----
+// 5. Apply worktree stash to both branches (keeping changes uncommitted)
+// For checkoutless merge the project directory is on a different branch, so the
+// worktree's uncommitted changes are only restored into the worktree
+⋮----
+// Drop the worktree stash after successful application
+⋮----
+// 6. Restore main branch's original uncommitted changes if any
+// DO NOT drop this stash - we need it for potential revert
+⋮----
+// Return merge state for potential revert
+⋮----
+// Recovery: revert main repo to pre-merge state before restoring stashes
+// Only when the merge step actually ran - otherwise the main working tree may still
+// contain un-stashed changes that a hard reset would destroy
+⋮----
+// Checkoutless merge never touched the project working tree - only move the ref back
+⋮----
+// Abort any in-progress merge (in case merge itself failed)
+⋮----
+// Ignore - no merge in progress
+⋮----
+// Hard reset main to undo merge commit and clean conflict markers from failed stash apply
+⋮----
+// Restore worktree stash
+⋮----
+// Restore main's original uncommitted changes on the clean working tree
+⋮----
+/**
+   * Check if worktree has uncommitted changes or unmerged commits
+   * Returns information about unsaved work in the worktree
+   */
+async checkWorktreeForUnmergedWork(
+    projectPath: string,
+    worktreePath: string,
+    targetBranch?: string,
+    symlinkFolders: string[] = [],
+): Promise<
+⋮----
+// 1. Check for uncommitted changes
+⋮----
+// Filter out files that belong to symlink folders (worktree infrastructure artifacts)
+⋮----
+// 2. Get the target branch name
+⋮----
+// 3. Check for commits in worktree that are not in target branch
+⋮----
+// If we can't get commits, log but don't fail
+⋮----
+// On error, return safe defaults (assume there might be work)
+⋮----
+async getAheadCommits(worktreePath: string, targetBranch: string): Promise<WorktreeAheadCommits>
+⋮----
+/**
+   * Get outgoing and incoming commits relative to a target branch, or relative to the
+   * upstream of the current branch when no target branch is provided.
+   * Fetches the remote first (throttled per repository) so un-fetched remote commits are counted too.
+   */
+async getSyncCommits(repoPath: string, targetBranch?: string): Promise<GitSyncCommits>
+⋮----
+const parseCommits = (stdout: string)
+⋮----
+private async fetchRemote(repoPath: string): Promise<void>
+⋮----
+async getUncommittedFiles(worktreePath: string): Promise<WorktreeUncommittedFiles>
+⋮----
+private parseGitStatusEntries(stdout: string): string[]
+⋮----
+private isSymlinkPath(cwd: string, filePath: string): boolean
+⋮----
+private isDirectoryPath(cwd: string, filePath: string): boolean
+⋮----
+/**
+   * Get updated files with per-commit and uncommitted diffs.
+   *
+   * Worktree mode grouped: returns files grouped by commit (with per-commit diffs)
+   * plus uncommitted files (with uncommitted diffs). A file can appear in multiple groups.
+   * Worktree mode flat: returns all changed files with cumulative diff from base,
+   * plus uncommitted changes vs HEAD. Each file appears once.
+   * Non-worktree mode: returns uncommitted files only (diff vs HEAD).
+   */
+async getUpdatedFiles(
+    worktreePath: string,
+    workingMode?: WorkingMode,
+    mainBranch?: string,
+    groupMode: UpdatedFilesGroupMode = UpdatedFilesGroupMode.Grouped,
+): Promise<UpdatedFile[]>
+⋮----
+private async includeUntrackedFiles(worktreePath: string, files: UpdatedFile[]): Promise<UpdatedFile[]>
+⋮----
+private async createUntrackedUpdatedFile(worktreePath: string, filePath: string): Promise<UpdatedFile>
+⋮----
+private formatDiffPath(filePath: string): string
+⋮----
+/**
+   * Worktree mode: separate committed (per-commit) and uncommitted file diffs.
+   */
+private async getWorktreeUpdatedFiles(worktreePath: string, mainBranch: string): Promise<UpdatedFile[]>
+⋮----
+// 1. Get commits in order (oldest first) between mainBranch and HEAD
+⋮----
+// 2. For each commit, get its files with per-commit diffs
+⋮----
+// Get numstat for this specific commit
+⋮----
+// Build a map of filePath -> {additions, deletions} from numstat
+⋮----
+// Get full patch for this commit (all files at once for efficiency)
+⋮----
+// Split unified diff into per-file diffs
+⋮----
+// Emit one UpdatedFile per file in this commit
+⋮----
+// Skip symlink paths (worktree infrastructure artifacts)
+⋮----
+// Check binary - skip diff for binary files
+⋮----
+// If we can't check, keep the diff as-is
+⋮----
+// 3. Get uncommitted changes (diff against HEAD, not merge-base)
+⋮----
+// Check if HEAD exists (no commits yet in worktree)
+⋮----
+// Skip symlink paths (worktree infrastructure artifacts)
+⋮----
+/**
+   * Worktree flat mode: all changed files with diff from base to working tree,
+   * covering both committed and uncommitted changes in a single pass.
+   */
+private async getWorktreeFlatUpdatedFiles(worktreePath: string, mainBranch: string): Promise<UpdatedFile[]>
+⋮----
+// git diff (without ...) compares mainBranch directly to the working tree,
+// including both committed and uncommitted changes.
+⋮----
+// Skip symlink paths (worktree infrastructure artifacts)
+⋮----
+/**
+   * Non-worktree mode: simple uncommitted changes vs HEAD.
+   */
+private async getNonWorktreeUpdatedFiles(worktreePath: string): Promise<UpdatedFile[]>
+⋮----
+// Skip symlink paths (worktree infrastructure artifacts)
+⋮----
+/**
+   * No-HEAD mode: repo has no commits yet. Uses the well-known empty tree hash
+   * as the diff base, which is equivalent to `git diff HEAD` against an empty repo.
+   * Shows staged files and unstaged modifications to staged files (same as `git diff HEAD`
+   * would show if HEAD pointed to an empty commit). Untracked files are not shown,
+   * consistent with the existing HEAD-based behavior.
+   */
+private async getNoHeadUpdatedFiles(worktreePath: string): Promise<UpdatedFile[]>
+⋮----
+/**
+   * Parse the output of `git diff-tree -p -r` into a map of filePath -> diff text.
+   * Splits on "diff --git" boundaries to isolate per-file patches.
+   */
+private parseCommitDiff(patchOutput: string): Map<string, string>
+⋮----
+// Split into segments starting with "diff --git"
+⋮----
+// Extract file path from "diff --git a/path b/path"
+⋮----
+private async markConflictingFiles(worktreePath: string, files: UpdatedFile[]): Promise<UpdatedFile[]>
+⋮----
+async addFileToGit(worktreePath: string, filePath: string): Promise<void>
+⋮----
+async restoreFile(worktreePath: string, filePath: string): Promise<void>
+⋮----
+// Check if file exists in HEAD (committed)
+⋮----
+// File exists in HEAD - restore both staged area and working tree from HEAD
+⋮----
+// New file not in HEAD - remove from index and delete working tree copy
+⋮----
+// File might not be in the index
+⋮----
+async getUncommittedDiff(worktreePath: string, filePaths?: string[]): Promise<string | null>
+⋮----
+cancelCommitChanges(worktreePath: string): boolean
+⋮----
+async commitChanges(worktreePath: string, message: string, amend: boolean, filePaths?: string[]): Promise<boolean>
+⋮----
+// Get the list of updated files (unstaged changes that are shown in the UI)
+⋮----
+// Stage updated files before committing
+⋮----
+// Escape the commit message for shell
+⋮----
+// If amending and message is empty, use --no-edit to keep previous message
+⋮----
+async getRebaseState(worktreePath: string): Promise<RebaseState>
+⋮----
+// ignore
+⋮----
+// ignore
+⋮----
+async getUnmergedFiles(worktreePath: string): Promise<string[]>
+⋮----
+async getStageFileContent(worktreePath: string, stage: 1 | 2 | 3, filePath: string): Promise<string | null>
+⋮----
+async collectConflictContext(worktreePath: string, filePath: string): Promise<ConflictResolutionFileContext>
+⋮----
+/**
+   * Reset a temporary commit back to uncommitted changes state
+   */
+private async resetTempCommit(worktreePath: string): Promise<void>
+⋮----
+/**
+   * Reset temporary commit if it exists by finding it by name pattern
+   */
+private async resetTempCommitIfExists(worktreePath: string): Promise<void>
+⋮----
+// Check if HEAD is a temporary commit
+⋮----
+// Don't throw - this is cleanup logic
+⋮----
+async stageResolvedFile(worktreePath: string, filePath: string, content: string): Promise<void>
+⋮----
+async listConflictedFiles(worktreePath: string): Promise<string[]>
+⋮----
+/**
+   * Apply uncommitted changes from worktree to the branch currently checked out in the
+   * project directory without merging commits or switching branches
+   * This transfers work-in-progress changes while keeping them uncommitted in both branches
+   */
+async applyUncommittedChangesToMain(projectPath: string, taskId: string, worktreePath: string, symlinkFolders: string[] = []): Promise<void>
+⋮----
+// 1. Check if there are uncommitted changes in worktree
+⋮----
+// 2. Stash uncommitted changes from worktree
+⋮----
+// 3. Stash uncommitted changes in the project directory to keep them safe while applying
+⋮----
+// 4. Apply stash to the currently checked out branch (keeping uncommitted)
+⋮----
+// 5. Apply stash back to worktree (keeping uncommitted)
+⋮----
+// 6. Clean up stash
+⋮----
+// 7. Restore project directory's original uncommitted changes if any
+⋮----
+// Recovery: clean up project directory from failed stash apply
+⋮----
+// Restore project directory's original uncommitted changes
+⋮----
+// Restore stash to worktree
+⋮----
+/**
+   * Revert a merge operation using the stored MergeState
+   * Restores the main branch to its pre-merge state while preserving uncommitted changes
+   */
+async revertMerge(projectPath: string, taskId: string, worktreePath: string, mergeState: MergeState, symlinkFolders: string[] = []): Promise<void>
+⋮----
+// For a checkoutless merge the ref is moved back directly, unless the user has since
+// checked out the target branch in the project directory
+⋮----
+// 1. Stash current uncommitted changes in worktree
+⋮----
+// 2. Move the target branch ref back to the pre-merge state without touching the project working tree
+⋮----
+// 2. Stash current uncommitted changes in main repo to clean the working directory
+// This is crucial to avoid conflicts with untracked files when applying the original stash
+⋮----
+// 3. Switch to the branch we merged into, then reset it to previous state
+⋮----
+// 4. Reset worktree branch to previous state
+⋮----
+// 5. Restore main's original uncommitted changes if they were preserved
+⋮----
+// Clean up the stash after successful revert
+⋮----
+// 6. Restore uncommitted changes in worktree
+⋮----
+// 7. Clean up temporary main stash
+// We don't apply it back because we want to revert to the state BEFORE the merge (with original changes)
+// Applying it back would re-introduce the changes that were just merged
+⋮----
+// Recovery: try to restore stashes
+⋮----
+private async pruneDeleted(projectDir: string): Promise<void>
+⋮----
+// in case of failure, try to remove the directory manually
+⋮----
+async mergeWorktreeToWorktree(sourceWorktreeDir: string, targetWorktreeDir: string, includeUncommitted = false): Promise<void>
+⋮----
+// Ignore abort errors
+⋮----
+async close(projectDir: string)
+
+================
+File: src/main/git/index.ts
+================
+
 
 ================
 File: src/main/logger/event-transport.ts
@@ -6498,7 +7370,7 @@ const createOpenAIVoiceSession = async (profile: ProviderProfile, settings: Sett
 ================
 File: src/main/models/providers/opencode-go.ts
 ================
-import { Model, ProviderProfile, SettingsData } from '@common/types';
+import { Model, ProviderProfile, SettingsData, TlsPolicyRegistrar } from '@common/types';
 import { isOpenCodeGoProvider, LlmProvider, OpenCodeGoProvider } from '@common/agent';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -6507,7 +7379,7 @@ import { omit } from 'lodash';
 ⋮----
 import { getDefaultModelInfo, getDefaultUsageReport } from './default';
 ⋮----
-import type { LanguageModel, ModelMessage } from 'ai';
+import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 ⋮----
 import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
 import { getEffectiveEnvironmentVariable } from '@/utils';
@@ -6540,7 +7412,17 @@ export const hasOpencodeGoEnvVars = (settings: SettingsData): boolean =>
 export const getOpencodeGoAiderMapping = (provider: ProviderProfile, modelId: string, settings: SettingsData, projectDir: string): AiderModelMapping =>
 ⋮----
 // === LLM Creation Functions ===
-export const createOpencodeGoLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel =>
+export const createOpencodeGoLlm = (
+  profile: ProviderProfile,
+  model: Model,
+  settings: SettingsData,
+  projectDir: string,
+  _toolSet?: ToolSet,
+  _systemPrompt?: string,
+  _providerMetadata?: unknown,
+  _tlsRegistrar?: TlsPolicyRegistrar,
+  sessionId?: string,
+): LanguageModel =>
 ⋮----
 // Grok's upstream rejects the `item_reference` input items that @ai-sdk/openai emits for
 // Responses history parts carrying OpenAI item IDs. Stripping that metadata makes the SDK
@@ -7151,6 +8033,7 @@ createLlm(
     toolSet?: ToolSet,
     systemPrompt?: string,
     providerMetadata?: unknown,
+    sessionId?: string,
 ): LanguageModel | Promise<LanguageModel>
 ⋮----
 // Resolve Model object if string is provided
@@ -7262,6 +8145,7 @@ export interface LlmProviderStrategy {
     systemPrompt?: string,
     providerMetadata?: unknown,
     tlsRegistrar?: TlsPolicyRegistrar,
+    sessionId?: string,
   ) => LanguageModel | Promise<LanguageModel>;
 
   /**
@@ -7490,7 +8374,7 @@ import { Project } from '@/project';
 import { Store } from '@/store';
 import { EventManager } from '@/events';
 import { ModelManager } from '@/models';
-import { WorktreeManager } from '@/worktrees';
+import { GitManager } from '@/git';
 import { MemoryManager } from '@/memory/memory-manager';
 import { PromptsManager } from '@/prompts';
 import { ExtensionManager } from '@/extensions/extension-manager';
@@ -7506,7 +8390,7 @@ constructor(
     private readonly dataManager: DataManager,
     private readonly eventManager: EventManager,
     private readonly modelManager: ModelManager,
-    worktreeManager: WorktreeManager,
+    gitManager: GitManager,
     private readonly agentProfileManager: AgentProfileManager,
     private readonly memoryManager: MemoryManager,
     private readonly promptsManager: PromptsManager,
@@ -7550,7 +8434,7 @@ File: src/main/project/project.ts
 import fs from 'fs/promises';
 import path from 'path';
 ⋮----
-import { AgentProfile, CreateTaskParams, DefaultTaskState, ModeDefinition, ProjectSettings, SettingsData, TaskData } from '@common/types';
+import { AgentProfile, BranchInfo, CreateTaskParams, DefaultTaskState, ModeDefinition, ProjectSettings, SettingsData, TaskData } from '@common/types';
 import { fileExists } from '@common/utils';
 import { v4 as uuidv4 } from 'uuid';
 ⋮----
@@ -7565,7 +8449,7 @@ import { TelemetryManager } from '@/telemetry';
 import { EventManager } from '@/events';
 import { INTERNAL_TASK_ID, Task } from '@/task';
 import { migrateSessionsToTasks } from '@/project/migrations';
-import { WorktreeManager } from '@/worktrees';
+import { GitManager } from '@/git';
 import { MemoryManager } from '@/memory/memory-manager';
 import { PromptsManager } from '@/prompts';
 import { ExtensionManager } from '@/extensions/extension-manager';
@@ -7584,7 +8468,7 @@ constructor(
     private readonly dataManager: DataManager,
     private readonly eventManager: EventManager,
     private readonly modelManager: ModelManager,
-    private readonly worktreeManager: WorktreeManager,
+    private readonly gitManager: GitManager,
     private readonly agentProfileManager: AgentProfileManager,
     private readonly memoryManager: MemoryManager,
     private readonly promptsManager: PromptsManager,
@@ -7605,6 +8489,8 @@ public async createNewTask(params?: CreateTaskParams)
 // Allow extensions to modify initial task data before task is created
 ⋮----
 // Apply modifications from extension
+⋮----
+// Local mode must never carry a worktree (e.g. inherited from parent while workingMode was overridden to local)
 ⋮----
 // adding files from internal task that keeps track of files to new task
 ⋮----
@@ -7693,6 +8579,8 @@ forEachTask(callback: (task: Task) => void, initializedOnly = true)
 async settingsChanged(oldSettings: SettingsData, newSettings: SettingsData)
 ⋮----
 async projectSettingsChanged(oldSettings: ProjectSettings, newSettings: ProjectSettings)
+⋮----
+public listBranches(): Promise<BranchInfo[]>
 ⋮----
 async close()
 ⋮----
@@ -7790,6 +8678,8 @@ import {
   CompactConversationPromptData,
   ConflictResolutionPromptData,
   ConflictResolutionSystemPromptData,
+  GitErrorResolutionPromptData,
+  GitErrorResolutionSystemPromptData,
   HandoffPromptData,
   InitProjectPromptData,
   PromptTemplateData,
@@ -7955,6 +8845,19 @@ export interface ConflictResolutionPromptData {
   theirsPath?: string;
 }
 ⋮----
+export interface GitErrorResolutionSystemPromptData {
+  POWER_TOOL_GROUP_NAME: string;
+  TOOL_GROUP_NAME_SEPARATOR: string;
+  POWER_TOOL_BASH: string;
+  POWER_TOOL_FILE_READ: string;
+  POWER_TOOL_GREP: string;
+}
+⋮----
+export interface GitErrorResolutionPromptData {
+  action: string;
+  error: string;
+}
+⋮----
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface UpdateTaskStateData {
   // Static for now
@@ -7971,6 +8874,8 @@ export type PromptTemplateName =
   | 'task-name'
   | 'conflict-resolution'
   | 'conflict-resolution-system'
+  | 'git-error-resolution'
+  | 'git-error-resolution-system'
   | 'update-task-state'
   | 'handoff'
   | 'code-change-requests';
@@ -8200,6 +9105,8 @@ import { BaseApi } from './base-api';
 ⋮----
 import { EventsHandler } from '@/events-handler';
 ⋮----
+// Git branch operations
+⋮----
 export class ProjectApi extends BaseApi
 ⋮----
 constructor(private readonly eventsHandler: EventsHandler)
@@ -8298,6 +9205,27 @@ registerRoutes(router: Router): void
 ⋮----
 // List branches
 ⋮----
+// Git branch operations
+// List git branches
+⋮----
+// Get outgoing and incoming commits relative to the target branch or upstream
+⋮----
+// Create git branch
+⋮----
+// Checkout git branch
+⋮----
+// Delete git branch
+⋮----
+// Merge branch into current branch
+⋮----
+// Rebase current branch onto another branch
+⋮----
+// Update branch from remote
+⋮----
+// Git pull
+⋮----
+// Git push
+⋮----
 // Worktree status
 ⋮----
 // Rebase worktree from branch
@@ -8308,7 +9236,11 @@ registerRoutes(router: Router): void
 ⋮----
 // Resolve worktree conflicts with agent
 ⋮----
-// Rename worktree branch
+// Resolve git error with agent
+⋮----
+// Rename branch (local or worktree)
+⋮----
+// Rename worktree branch (deprecated alias for /project/git/branch/rename)
 ⋮----
 // Update open projects order
 ⋮----
@@ -8562,6 +9494,8 @@ registerRoutes(router: Router): void
 // Clear system logs
 ⋮----
 // Get aider connector status
+⋮----
+// Respond to input prompt
 
 ================
 File: src/main/server/rest-api/terminal-api.ts
@@ -8586,6 +9520,8 @@ registerRoutes(router: Router): void
 // Resize terminal
 ⋮----
 // Close terminal
+⋮----
+// Get recent terminal output buffer (for re-attaching clients)
 ⋮----
 // Get terminal for task
 ⋮----
@@ -9418,7 +10354,7 @@ import { AIDER_TOOL_GROUP_NAME, AIDER_TOOL_RUN_PROMPT, SUBAGENTS_TOOL_GROUP_NAME
 ⋮----
 import logger from '@/logger';
 import { Task } from '@/task';
-import { isDirectory, isFileIgnored } from '@/utils';
+import { isDirectory, isFileIgnored, withLock } from '@/utils';
 import { extractPromptContextFromToolResult } from '@/agent/utils';
 import { migrateContextV1toV2 } from '@/task/migrations/v1-to-v2';
 import { AIDER_DESK_TASKS_DIR } from '@/constants';
@@ -9518,6 +10454,19 @@ toConnectorMessages(contextMessages: ContextMessage[] = this.messages): Connecto
 ⋮----
 async save(): Promise<void>
 ⋮----
+// Serialize writes so concurrent saves cannot interleave and corrupt the file
+⋮----
+// Remove temp files orphaned by a crash between writeFile and rename
+⋮----
+// Write atomically: write to a temp file, then rename over the target so a
+// crash mid-write never leaves context.json half-written.
+⋮----
+/**
+   * Removes temp files orphaned by a crash between writeFile and rename.
+   * Only safe to call while holding the save lock for this task's storage path.
+   */
+private async cleanupStaleTempFiles(dir: string): Promise<void>
+⋮----
 /**
    * Creates a backup of the current context.json file before a destructive operation
    * (e.g., smart compaction). Backups are named context.backup.001.json, context.backup.002.json, etc.
@@ -9544,6 +10493,15 @@ async load(): Promise<void>
 async reloadFromDisk(): Promise<boolean>
 ⋮----
 private async readContextFromDisk(): Promise<TaskContext | null>
+⋮----
+/**
+   * Recovers from a corrupt/truncated context.json by falling back to the newest
+   * backup if one exists, otherwise moving the corrupt file aside and returning an
+   * empty context so the task still loads instead of failing outright.
+   */
+private async recoverCorruptContext(): Promise<TaskContext | null>
+⋮----
+// No usable backup: move the corrupt file aside so it does not keep breaking loads.
 ⋮----
 private async loadInternal(): Promise<void>
 ⋮----
@@ -9675,8 +10633,11 @@ import {
   DefaultTaskState,
   EditFormat,
   FileEdit,
+  BranchInfo,
+  GitSyncCommits,
   LogData,
   LogLevel,
+  MergeState,
   MessageRole,
   Mode,
   ModelInfo,
@@ -9694,6 +10655,7 @@ import {
   TaskStateEmoji,
   TodoItem,
   TokensInfoData,
+  ToolApprovalState,
   ToolCallPart,
   ToolData,
   ToolInputChunkData,
@@ -9726,6 +10688,8 @@ import {
   getSubagentId,
 } from '@common/agent';
 import {
+  POWER_TOOL_BASH,
+  POWER_TOOL_GROUP_NAME,
   SKILLS_TOOL_ACTIVATE_SKILL,
   SKILLS_TOOL_GROUP_NAME,
   SUBAGENTS_TOOL_GROUP_NAME,
@@ -9768,7 +10732,7 @@ import { ContextManager } from '@/task/context-manager';
 import { Project } from '@/project';
 import { AiderManager } from '@/task/aider-manager';
 import { SkillManager } from '@/skills/skill-manager';
-import { GitError, WorktreeManager } from '@/worktrees';
+import { GitError, GitManager } from '@/git';
 import { MemoryManager } from '@/memory/memory-manager';
 import { getElectronApp } from '@/app';
 import { PromptsManager } from '@/prompts';
@@ -9792,7 +10756,7 @@ constructor(
     private readonly dataManager: DataManager,
     private readonly eventManager: EventManager,
     private readonly modelManager: ModelManager,
-    private readonly worktreeManager: WorktreeManager,
+    private readonly gitManager: GitManager,
     private readonly memoryManager: MemoryManager,
     private readonly promptsManager: PromptsManager,
     private readonly extensionManager: ExtensionManager,
@@ -9849,6 +10813,8 @@ private async renameWorktreeBranchIfNeeded(): Promise<void>
    */
 private async resolveMissingWorktreeBaseBranch(): Promise<boolean>
 ⋮----
+// The task branch itself always contains its base commit - never a valid base branch candidate
+⋮----
 private isInternal()
 ⋮----
 public async saveTask(updates?: Partial<TaskData>, updateTimestamps = true): Promise<TaskData>
@@ -9866,6 +10832,9 @@ private async initInternal(readonly: boolean)
 // Readonly init must not mutate worktrees, spawn connectors, or run expensive scans
 ⋮----
 // Check if worktree is enabled for this task
+⋮----
+// getTaskWorktree reports baseCommit as the worktree's current HEAD, so preserve
+// the stored rebase fork-point when re-adopting an existing worktree
 ⋮----
 // Worktree is already set (e.g. inherited from parent)
 ⋮----
@@ -10478,6 +11447,8 @@ private async runExtensionCommand(extensionCommand: RegisteredCommand, args: str
 ⋮----
 public async runCustomCommand(commandName: string, args: string[], mode: Mode = 'agent'): Promise<void>
 ⋮----
+// Queue the custom command for later execution
+⋮----
 // First, check if this is an extension command
 ⋮----
 // Handle extension command execution
@@ -10510,6 +11481,8 @@ public async updateTask(updates: Partial<TaskData>): Promise<TaskData>
 ⋮----
 private async sendWorktreeIntegrationStatusUpdated()
 ⋮----
+// These methods are often invoked fire-and-forget (void); never let them produce unhandled rejections
+⋮----
 public async sendUpdatedFilesUpdated()
 ⋮----
 public async sendSkillsUpdated(): Promise<void>
@@ -10534,11 +11507,17 @@ public async mergeWorktreeToMain(squash: boolean, targetBranch?: string, commitM
 ⋮----
 public async switchToLocalWorkingMode(options?: SwitchToLocalOptions): Promise<void>
 ⋮----
+// When the merge was checkoutless (project directory is on a different branch than the merge
+// target), the uncommitted changes were left in the worktree. Carry them over to the project
+// directory before the worktree is removed below, otherwise they would be destroyed with it.
+⋮----
+// Abort the switch so the worktree is preserved together with its uncommitted changes
+⋮----
 public async switchToWorktreeWorkingMode(options?: SwitchToWorktreeOptions): Promise<void>
 ⋮----
 public async getLocalUncommittedFiles(): Promise<WorktreeUncommittedFiles>
 ⋮----
-public async applyUncommittedChanges(targetBranch?: string): Promise<void>
+public async applyUncommittedChanges(): Promise<void>
 ⋮----
 public async mergeWorktreeToWorktree(targetWorktreeDir: string, includeUncommitted = false): Promise<void>
 ⋮----
@@ -10550,13 +11529,13 @@ public async addFileToGit(filePath: string): Promise<void>
 ⋮----
 public async restoreFile(filePath: string): Promise<void>
 ⋮----
-public async generateCommitMessage(): Promise<string>
+public async generateCommitMessage(filePaths?: string[]): Promise<string>
 ⋮----
 // Get last 10 commit messages for context
 ⋮----
 // Continue without commit history
 ⋮----
-public async commitChanges(message: string, amend: boolean): Promise<void>
+public async commitChanges(message: string, amend: boolean, filePaths?: string[]): Promise<void>
 ⋮----
 public cancelCommitChanges(): void
 ⋮----
@@ -10564,9 +11543,44 @@ public async getWorktreeIntegrationStatus(targetBranch?: string)
 ⋮----
 public async rebaseWorktreeFromBranch(fromBranch?: string): Promise<void>
 ⋮----
+// Remember the intended source branch before starting so the conflict-resolution
+// flow (continue/abort rebase) can rely on it instead of guessing it from git state
+⋮----
+// The rebase never started, so the pending marker is no longer needed
+⋮----
+// The rebase never started, so the pending marker is no longer needed
+⋮----
+// keep the marker if we cannot determine the rebase state
+⋮----
 public async abortWorktreeRebase(): Promise<void>
 ⋮----
+public async renameBranch(newBranchName: string): Promise<void>
+⋮----
+public async listGitBranches(includeRemote?: boolean): Promise<BranchInfo[]>
+⋮----
+public async getSyncCommits(targetBranch?: string): Promise<GitSyncCommits>
+⋮----
+public async createGitBranch(name: string, startPoint?: string, checkout?: boolean): Promise<void>
+⋮----
+public async checkoutGitBranch(branch: string, createTracking?: boolean, takeOver?: boolean): Promise<void>
+⋮----
+public async deleteGitBranch(branch: string, force?: boolean): Promise<void>
+⋮----
+public async mergeIntoCurrentBranch(branch: string): Promise<
+⋮----
+public async rebaseOntoBranch(branch: string): Promise<
+⋮----
+public async updateGitBranch(branchName: string): Promise<
+⋮----
+public async gitPull(rebase?: boolean): Promise<
+⋮----
+public async gitPush(force?: boolean, setUpstream?: boolean): Promise<
+⋮----
+public async renameGitBranch(newBranchName: string): Promise<void>
+⋮----
 public async renameWorktreeBranch(newBranchName: string): Promise<void>
+⋮----
+private async runGitAction<T>(action: string, gitAction: () => Promise<T>, shouldSkipLogging?: (error: unknown) => boolean): Promise<T>
 ⋮----
 private async executeConflictResolution(directoryPath: string, directoryName: string): Promise<void>
 ⋮----
@@ -10593,6 +11607,10 @@ public async resolveConflictsWithAgent(): Promise<void>
 // Check main repository
 ⋮----
 // No conflicts found
+⋮----
+public reportGitActionError(action: string, error: unknown): void
+⋮----
+public async resolveGitErrorWithAgent(): Promise<void>
 ⋮----
 public async continueWorktreeRebase(): Promise<void>
 ⋮----
@@ -10746,6 +11764,7 @@ export interface TerminalInstance {
   ptyProcess: pty.IPty;
   cols: number;
   rows: number;
+  outputBuffer: string;
 }
 ⋮----
 export class TerminalManager
@@ -10774,7 +11793,11 @@ public resizeTerminal(terminalId: string, cols: number, rows: number): boolean
 ⋮----
 public closeTerminal(terminalId: string): boolean
 ⋮----
+public getTerminalBuffer(terminalId: string):
+⋮----
 public closeTerminalForProject(baseDir: string): void
+⋮----
+public closeTerminalsForTask(taskId: string): void
 ⋮----
 public getTerminalForTask(taskId: string): TerminalInstance | undefined
 ⋮----
@@ -11545,6 +12568,39 @@ private htmlToMarkDown(content: string): string
 export const scrapeWeb = async (url: string, timeout: number = 60000, abortSignal?: AbortSignal, format: WebScrapeFormat = 'markdown') =>
 
 ================
+File: src/main/utils/window-load-retry.ts
+================
+import { delay } from '@common/utils';
+⋮----
+import logger from '@/logger';
+⋮----
+// Chromium network error codes that indicate transient failures where a retry can succeed
+enum TransientLoadErrorCode {
+  NetworkChanged = -21,
+  ConnectionReset = -101,
+  ConnectionRefused = -102,
+  NameNotResolved = -105,
+  InternetDisconnected = -106,
+  TimedOut = -118,
+}
+⋮----
+interface LoadRetryOptions {
+  load: () => void | Promise<void>;
+  isDestroyed: () => boolean;
+  maxRetries?: number;
+  baseDelayMs?: number;
+}
+⋮----
+export interface LoadRetryHandler {
+  onDidFailLoad: (errorCode: number, isMainFrame: boolean, validatedURL?: string) => Promise<void>;
+  reset: () => void;
+}
+⋮----
+export const createLoadRetryHandler = (
+⋮----
+const onDidFailLoad = async (errorCode: number, isMainFrame: boolean, validatedURL?: string): Promise<void> =>
+
+================
 File: src/main/versions/index.ts
 ================
 
@@ -11619,720 +12675,6 @@ public async downloadLatestAiderDesk(): Promise<void>
 autoUpdater.autoDownload = false; // Ensure it's reset on error
 
 ================
-File: src/main/worktrees/index.ts
-================
-
-
-================
-File: src/main/worktrees/worktree-manager.ts
-================
-import path, { join } from 'path';
-import fs, { mkdir, rm, lstat, symlink } from 'fs/promises';
-import { existsSync, lstatSync } from 'fs';
-⋮----
-import {
-  ConflictResolutionFileContext,
-  MergeState,
-  RebaseState,
-  UpdatedFile,
-  UpdatedFilesGroupMode,
-  WorkingMode,
-  Worktree,
-  WorktreeAheadCommits,
-  WorktreeUncommittedFiles,
-} from '@common/types';
-// @ts-expect-error istextorbinary library does not provide TypeScript definitions
-import { isBinary } from 'istextorbinary';
-⋮----
-import { execWithShellPath, withLock } from '@/utils';
-import { AIDER_DESK_TASKS_DIR } from '@/constants';
-import logger from '@/logger';
-import { isFileNotFoundError } from '@/utils/errors';
-⋮----
-export class GitError extends Error
-⋮----
-getErrorDetails()
-⋮----
-// Interface for raw commit data
-interface RawCommitData {
-  hash: string;
-  message: string;
-  date: string | Date;
-  author?: string;
-  additions?: number;
-  deletions?: number;
-  filesChanged?: number;
-}
-⋮----
-const isAbortError = (error: unknown): boolean =>
-⋮----
-export class WorktreeManager
-⋮----
-private getWorktreePath(projectPath: string, taskId: string): string
-⋮----
-private async initializeWorktree(projectPath: string, taskId: string): Promise<void>
-⋮----
-async createWorktree(projectPath: string, taskId: string, branch?: string, baseBranch = 'HEAD'): Promise<Worktree>
-⋮----
-// 1. Initialize repository if necessary
-⋮----
-// Initialize git repository
-⋮----
-// 2. Clean up stale worktree registrations (e.g. the directory was deleted out-of-band)
-⋮----
-// 3. Clean up any existing worktree before recreating its directory
-⋮----
-// 4. Ensure the repository has at least one commit
-⋮----
-// Repository has no commits yet, create initial commit
-⋮----
-// Ignore add errors (no files to add)
-⋮----
-// 5. Logic for creating the worktree
-⋮----
-const baseRef = baseBranch; // Will be 'HEAD' if not provided
-⋮----
-// A. Branch name provided: Check if branch exists or create it
-⋮----
-// Check if it's an actual branch (not just a commit SHA)
-⋮----
-// Branch doesn't exist, it will be created from baseRef
-⋮----
-// A1. Use existing branch
-⋮----
-// Get the base commit (the tip of the existing branch)
-⋮----
-// A2. Create new branch from baseRef (which defaults to 'HEAD')
-⋮----
-// Verify that the base branch exists if specified and is a branch name
-⋮----
-// Capture the base commit before creating the worktree
-⋮----
-// Create the new branch and checkout the worktree
-⋮----
-newBranchName = branch; // Use the newly created branch name
-⋮----
-// B. No branch name provided: Create detached worktree from current HEAD (or specified baseRef)
-⋮----
-// Note: git worktree add <path> defaults to current HEAD
-⋮----
-// Capture the base commit (the commit it's detached at)
-⋮----
-// Use the baseRef for the branch name, or resolve the current branch if baseRef is 'HEAD'
-⋮----
-// Resolve the base branch: if baseRef is 'HEAD', resolve to the current branch name
-⋮----
-async renameBranch(projectPath: string, oldBranch: string, newBranch: string): Promise<string>
-⋮----
-private async findUniqueBranchName(projectPath: string, baseName: string): Promise<string>
-⋮----
-async createSymlinks(projectPath: string, worktreePath: string, folderNames: string[]): Promise<void>
-⋮----
-private async existsAndIsDirectory(path: string): Promise<boolean>
-⋮----
-private async isFolderTrackedByGit(projectPath: string, folderName: string): Promise<boolean>
-⋮----
-async removeWorktree(projectDir: string, worktree: Worktree, force = false): Promise<void>
-⋮----
-// Clean up the branch if it's a task branch (starts with "task-" or looks like generated from task name)
-⋮----
-// Branch might not exist or be protected, don't fail the removal
-⋮----
-// If the worktree is not found, that's okay - it might have been manually deleted
-⋮----
-// For other errors, still throw
-⋮----
-async listWorktrees(projectDir: string): Promise<Worktree[]>
-⋮----
-async listBranches(projectPath: string): Promise<Array<
-⋮----
-// Get all local branches
-⋮----
-// Get all worktrees to identify which branches have worktrees
-⋮----
-// Remove leading *, +, and spaces. The + indicates uncommitted changes
-⋮----
-// Sort branches: worktree branches first, then the rest
-⋮----
-// Within each group, sort alphabetically
-⋮----
-async getProjectMainBranch(projectPath: string): Promise<string>
-⋮----
-// ONLY check the current branch in the project root directory
-⋮----
-// Throw error if we're in detached HEAD state
-⋮----
-// Deprecated: Use getProjectMainBranch instead
-async detectMainBranch(projectPath: string): Promise<string>
-⋮----
-// Deprecated: Use getProjectMainBranch instead
-async getEffectiveMainBranch(project:
-⋮----
-async getCommitHash(worktreePath: string, ref: string): Promise<string | undefined>
-⋮----
-async getHeadCommit(worktreePath: string): Promise<string | undefined>
-⋮----
-/**
-   * Check if a commit is an ancestor of another commit (or HEAD).
-   * Returns true if `ancestorCommit` is reachable from `descendantRef`.
-   */
-async isCommitAncestorOf(worktreePath: string, ancestorCommit: string, descendantRef = 'HEAD'): Promise<boolean>
-⋮----
-// git merge-base --is-ancestor returns exit code 0 if ancestor, 1 if not
-⋮----
-/**
-   * Get the "onto" commit from an active rebase.
-   * Returns undefined if no rebase is in progress or the file doesn't exist.
-   */
-async getRebaseOntoCommit(worktreePath: string): Promise<string | undefined>
-⋮----
-// Try rebase-merge first (interactive rebase)
-⋮----
-// rebase-merge/onto doesn't exist, try rebase-apply
-⋮----
-// Try rebase-apply (non-interactive rebase)
-⋮----
-// rebase-apply/onto doesn't exist either
-⋮----
-/**
-   * Resolve a commit to the branch name that points to it.
-   * Returns the first branch found, or undefined if no branch points to that exact commit.
-   */
-async getBranchPointingAtCommit(projectPath: string, commit: string): Promise<string | undefined>
-⋮----
-async getBranchesContainingCommit(projectPath: string, commit: string): Promise<string[]>
-⋮----
-async hasChangesToRebase(worktreePath: string, mainBranch: string): Promise<boolean>
-⋮----
-// Check if main branch has commits that the current branch doesn't have
-// Use cross-platform approach
-⋮----
-// Error checking, assume no changes
-⋮----
-async checkForRebaseConflicts(
-    worktreePath: string,
-    mainBranch: string,
-): Promise<
-⋮----
-// First check if there are any changes to rebase
-⋮----
-// Get the merge base
-⋮----
-// Try a dry-run merge to detect conflicts
-// We use merge-tree to check for conflicts without modifying the working tree
-⋮----
-// Parse merge-tree output for conflicts
-⋮----
-// Get list of files that would conflict
-⋮----
-// Find files modified in both branches
-⋮----
-// Get commit info for better error reporting
-⋮----
-// If merge-tree is not available (older git), fall back to checking modified files
-⋮----
-// Get files changed in both branches
-⋮----
-// Find files modified in both branches (potential conflicts)
-⋮----
-// Get commit info
-⋮----
-// On error, return unknown status
-⋮----
-async rebaseMainIntoWorktree(
-    worktreePath: string,
-    mainBranch: string,
-    baseCommit?: string,
-    symlinkFolders: string[] = [],
-): Promise<
-⋮----
-// 0. Guard against starting a rebase while one is already in progress
-⋮----
-// 1. Check for uncommitted changes and create temporary commit if needed
-⋮----
-// Stage all changes
-⋮----
-// Unstage symlink folders to prevent them from being tracked by git
-// (they are worktree infrastructure artifacts, not real project files)
-⋮----
-// Create temporary commit with unique timestamp
-⋮----
-// 2. Validate baseCommit if provided - ensure it's an ancestor of HEAD
-// If baseCommit is stale (e.g., user rebased externally), fall back to simple rebase
-⋮----
-// 3. Rebase the current worktree branch onto target branch
-// When baseCommit is provided and valid, use --onto to only replay commits made after baseCommit
-// This avoids carrying over base branch commits that aren't in the target branch
-⋮----
-// 4. If rebase succeeds AND we had uncommitted changes, reset to uncommitted state
-⋮----
-// Create detailed error with git command output
-⋮----
-async abortRebase(worktreePath: string): Promise<void>
-⋮----
-// Check if we're in the middle of a rebase
-⋮----
-// Abort the rebase
-⋮----
-// Always try to reset temporary commit if it exists
-⋮----
-async continueRebase(worktreePath: string): Promise<
-⋮----
-// Capture the "onto" info before continuing (it will be gone after rebase completes)
-⋮----
-// Always try to reset temporary commit if it exists after successful continue
-⋮----
-private async squashAndMergeWorktreeToMain(
-    projectPath: string,
-    worktreePath: string,
-    mainBranch: string,
-    commitMessage: string,
-    baseCommit?: string,
-): Promise<void>
-⋮----
-// SAFETY CHECK 0: A rebase left in progress (e.g. awaiting conflict resolution in the UI)
-// would block our own rebase and must not be aborted by this operation
-⋮----
-// Get current branch name in worktree (for logging purposes)
-⋮----
-// Check if there are any changes to merge (before rebase)
-⋮----
-// Validate baseCommit if provided - ensure it's an ancestor of HEAD
-// If baseCommit is stale (e.g., user rebased externally), fall back to simple rebase
-⋮----
-// SAFETY CHECK 1: Rebase worktree onto main FIRST before squashing
-// Use --onto with baseCommit to only replay worktree-specific commits
-⋮----
-// Only abort a rebase that this operation started - never a pre-existing rebase
-// the user may still be resolving (e.g. started concurrently while we passed the guard)
-⋮----
-// Ignore abort errors
-⋮----
-// Get the HEAD commit hash from worktree AFTER rebase (but before squashing)
-// This preserves the worktree's commit history
-⋮----
-// Switch to main branch in the main repository
-⋮----
-// SQUASH MERGE: Use git merge --squash to create a squashed staging of all changes
-// This keeps the worktree branch history intact while creating a single commit in main
-⋮----
-// Check if there are staged changes to commit
-⋮----
-// Commit the squashed changes with the provided message
-⋮----
-// Preserve specific errors (e.g. rebase-in-progress guard, rebase conflict details)
-⋮----
-// Create detailed error with git command output
-⋮----
-// Prioritize actual error messages over lastOutput (which may contain unrelated data like commit counts)
-⋮----
-private async mergeWorktreeToMain(projectPath: string, worktreePath: string, mainBranch: string): Promise<void>
-⋮----
-// SAFETY CHECK 0: A rebase left in progress (e.g. awaiting conflict resolution in the UI)
-// would block our own rebase and must not be aborted by this operation
-⋮----
-// Get current branch name in worktree (for logging purposes)
-⋮----
-// Check if there are any changes to merge
-⋮----
-// SAFETY CHECK 1: Rebase worktree onto main FIRST (resolves conflicts in worktree, not main)
-⋮----
-// Only abort a rebase that this operation started - never a pre-existing rebase
-// the user may still be resolving (e.g. started concurrently while we passed the guard)
-⋮----
-// Ignore abort errors
-⋮----
-// Get the HEAD commit hash from worktree AFTER rebase
-⋮----
-// Switch to main branch in the main repository
-⋮----
-// SAFETY CHECK 2: Use --ff-only merge to prevent history rewriting
-// This will fail if local main has diverged from the worktree branch
-⋮----
-// Preserve specific errors (e.g. rebase-in-progress guard, rebase conflict details)
-⋮----
-// Create detailed error with git command output
-⋮----
-// Prioritize actual error messages over lastOutput (which may contain unrelated data like commit counts)
-⋮----
-generateRebaseCommands(mainBranch: string): string[]
-⋮----
-generateSquashCommands(mainBranch: string, branchName: string): string[]
-⋮----
-generateMergeCommands(mainBranch: string, branchName: string): string[]
-⋮----
-async gitPull(worktreePath: string): Promise<
-⋮----
-async gitPush(worktreePath: string): Promise<
-⋮----
-async getLastCommits(worktreePath: string, count: number = 20, includeStats: boolean = true): Promise<RawCommitData[]>
-⋮----
-async getChangesDiff(projectPath: string, worktreePath: string, targetBranch?: string): Promise<string>
-⋮----
-// Check if there are any commits in worktree that are not in main
-⋮----
-// No commits in worktree, return empty string
-⋮----
-// Get the first commit hash in the worktree branch (oldest commit not in main)
-⋮----
-// Get full diff from the commit before the oldest worktree commit to HEAD
-⋮----
-async getOriginBranch(worktreePath: string, branch: string): Promise<string | null>
-⋮----
-async getTaskWorktree(projectPath: string, taskId: string): Promise<Worktree | null>
-⋮----
-// Find worktree that matches our task's worktree path
-⋮----
-// A prunable worktree has a missing or invalid directory (stale registration), treat it as absent
-⋮----
-// If no worktree exists for this task, return null
-⋮----
-/**
-   * Check if there are uncommitted changes in the given path
-   */
-async hasUncommittedChanges(path: string): Promise<boolean>
-⋮----
-/**
-   * Stash uncommitted changes with a unique identifier
-   * Returns the stash identifier or null if no changes to stash
-   */
-async stashUncommittedChanges(stashId: string, path: string, message: string, symlinkFolders: string[] = []): Promise<string | null>
-⋮----
-// Find which symlink folders have untracked files
-⋮----
-// Get untracked files to check which symlink folders have content
-⋮----
-// Check if folder has untracked files
-⋮----
-// Build stash command with exclude patterns for folders with untracked files
-⋮----
-/**
-   * Apply a stash by its identifier
-   */
-async applyStash(path: string, stashId: string): Promise<void>
-⋮----
-// Find the stash entry that matches our identifier
-⋮----
-// Extract stash reference (e.g., "stash@{0}")
-⋮----
-// A previous partial apply may have restored this stash's untracked files to disk,
-// which blocks re-applying the stash. Remove identical copies and retry once.
-⋮----
-/**
-   * Remove untracked files from the stash's untracked-files commit that already exist on disk
-   * with identical content (left behind by a partial stash apply), so the stash can be applied again.
-   * Tracked files and files with different content are never removed.
-   */
-private async removeIdenticalStashUntrackedFiles(dir: string, stashRef: string): Promise<void>
-⋮----
-// Never remove files that are tracked in the index
-⋮----
-// not in the index
-⋮----
-/**
-   * Drop a stash by its identifier
-   */
-async dropStash(path: string, stashId: string): Promise<void>
-⋮----
-// Find the stash entry that matches our identifier
-⋮----
-// Extract stash reference (e.g., "stash@{0}")
-⋮----
-// Don't throw - dropping stash is not critical
-⋮----
-/**
-   * Merge worktree to main branch with uncommitted changes support
-   * Returns MergeState for potential revert
-   */
-async mergeWorktreeToMainWithUncommitted(
-    projectPath: string,
-    taskId: string,
-    worktreePath: string,
-    squash: boolean,
-    commitMessage?: string,
-    targetBranch?: string,
-    symlinkFolders: string[] = [],
-    baseCommit?: string,
-): Promise<MergeState>
-⋮----
-// 1. Track initial state
-⋮----
-// 2. Stash uncommitted changes in worktree
-⋮----
-// 3. Stash uncommitted changes in main branch if any
-⋮----
-// 4. Perform the merge operation (existing methods handle the actual merge)
-⋮----
-// 5. Apply worktree stash to both branches (keeping changes uncommitted)
-⋮----
-// Drop the worktree stash after successful application
-⋮----
-// 6. Restore main branch's original uncommitted changes if any
-// DO NOT drop this stash - we need it for potential revert
-⋮----
-// Return merge state for potential revert
-⋮----
-// Recovery: revert main repo to pre-merge state before restoring stashes
-// Only when the merge step actually ran - otherwise the main working tree may still
-// contain un-stashed changes that a hard reset would destroy
-⋮----
-// Abort any in-progress merge (in case merge itself failed)
-⋮----
-// Ignore - no merge in progress
-⋮----
-// Hard reset main to undo merge commit and clean conflict markers from failed stash apply
-⋮----
-// Restore worktree stash
-⋮----
-// Restore main's original uncommitted changes on the clean working tree
-⋮----
-/**
-   * Check if worktree has uncommitted changes or unmerged commits
-   * Returns information about unsaved work in the worktree
-   */
-async checkWorktreeForUnmergedWork(
-    projectPath: string,
-    worktreePath: string,
-    targetBranch?: string,
-    symlinkFolders: string[] = [],
-): Promise<
-⋮----
-// 1. Check for uncommitted changes
-⋮----
-// Filter out files that belong to symlink folders (worktree infrastructure artifacts)
-⋮----
-// 2. Get the target branch name
-⋮----
-// 3. Check for commits in worktree that are not in target branch
-⋮----
-// If we can't get commits, log but don't fail
-⋮----
-// On error, return safe defaults (assume there might be work)
-⋮----
-async getAheadCommits(worktreePath: string, targetBranch: string): Promise<WorktreeAheadCommits>
-⋮----
-async getUncommittedFiles(worktreePath: string): Promise<WorktreeUncommittedFiles>
-⋮----
-private parseGitStatusEntries(stdout: string): string[]
-⋮----
-private isSymlinkPath(cwd: string, filePath: string): boolean
-⋮----
-private isDirectoryPath(cwd: string, filePath: string): boolean
-⋮----
-/**
-   * Get updated files with per-commit and uncommitted diffs.
-   *
-   * Worktree mode grouped: returns files grouped by commit (with per-commit diffs)
-   * plus uncommitted files (with uncommitted diffs). A file can appear in multiple groups.
-   * Worktree mode flat: returns all changed files with cumulative diff from base,
-   * plus uncommitted changes vs HEAD. Each file appears once.
-   * Non-worktree mode: returns uncommitted files only (diff vs HEAD).
-   */
-async getUpdatedFiles(
-    worktreePath: string,
-    workingMode?: WorkingMode,
-    mainBranch?: string,
-    groupMode: UpdatedFilesGroupMode = UpdatedFilesGroupMode.Grouped,
-): Promise<UpdatedFile[]>
-⋮----
-private async includeUntrackedFiles(worktreePath: string, files: UpdatedFile[]): Promise<UpdatedFile[]>
-⋮----
-private async createUntrackedUpdatedFile(worktreePath: string, filePath: string): Promise<UpdatedFile>
-⋮----
-private formatDiffPath(filePath: string): string
-⋮----
-/**
-   * Worktree mode: separate committed (per-commit) and uncommitted file diffs.
-   */
-private async getWorktreeUpdatedFiles(worktreePath: string, mainBranch: string): Promise<UpdatedFile[]>
-⋮----
-// 1. Get commits in order (oldest first) between mainBranch and HEAD
-⋮----
-// 2. For each commit, get its files with per-commit diffs
-⋮----
-// Get numstat for this specific commit
-⋮----
-// Build a map of filePath -> {additions, deletions} from numstat
-⋮----
-// Get full patch for this commit (all files at once for efficiency)
-⋮----
-// Split unified diff into per-file diffs
-⋮----
-// Emit one UpdatedFile per file in this commit
-⋮----
-// Skip symlink paths (worktree infrastructure artifacts)
-⋮----
-// Check binary - skip diff for binary files
-⋮----
-// If we can't check, keep the diff as-is
-⋮----
-// 3. Get uncommitted changes (diff against HEAD, not merge-base)
-⋮----
-// Check if HEAD exists (no commits yet in worktree)
-⋮----
-// Skip symlink paths (worktree infrastructure artifacts)
-⋮----
-/**
-   * Worktree flat mode: all changed files with diff from base to working tree,
-   * covering both committed and uncommitted changes in a single pass.
-   */
-private async getWorktreeFlatUpdatedFiles(worktreePath: string, mainBranch: string): Promise<UpdatedFile[]>
-⋮----
-// git diff (without ...) compares mainBranch directly to the working tree,
-// including both committed and uncommitted changes.
-⋮----
-// Skip symlink paths (worktree infrastructure artifacts)
-⋮----
-/**
-   * Non-worktree mode: simple uncommitted changes vs HEAD.
-   */
-private async getNonWorktreeUpdatedFiles(worktreePath: string): Promise<UpdatedFile[]>
-⋮----
-// Skip symlink paths (worktree infrastructure artifacts)
-⋮----
-/**
-   * No-HEAD mode: repo has no commits yet. Uses the well-known empty tree hash
-   * as the diff base, which is equivalent to `git diff HEAD` against an empty repo.
-   * Shows staged files and unstaged modifications to staged files (same as `git diff HEAD`
-   * would show if HEAD pointed to an empty commit). Untracked files are not shown,
-   * consistent with the existing HEAD-based behavior.
-   */
-private async getNoHeadUpdatedFiles(worktreePath: string): Promise<UpdatedFile[]>
-⋮----
-/**
-   * Parse the output of `git diff-tree -p -r` into a map of filePath -> diff text.
-   * Splits on "diff --git" boundaries to isolate per-file patches.
-   */
-private parseCommitDiff(patchOutput: string): Map<string, string>
-⋮----
-// Split into segments starting with "diff --git"
-⋮----
-// Extract file path from "diff --git a/path b/path"
-⋮----
-private async markConflictingFiles(worktreePath: string, files: UpdatedFile[]): Promise<UpdatedFile[]>
-⋮----
-async addFileToGit(worktreePath: string, filePath: string): Promise<void>
-⋮----
-async restoreFile(worktreePath: string, filePath: string): Promise<void>
-⋮----
-// Check if file exists in HEAD (committed)
-⋮----
-// File exists in HEAD - restore both staged area and working tree from HEAD
-⋮----
-// New file not in HEAD - remove from index and delete working tree copy
-⋮----
-// File might not be in the index
-⋮----
-async getUncommittedDiff(worktreePath: string): Promise<string | null>
-⋮----
-cancelCommitChanges(worktreePath: string): boolean
-⋮----
-async commitChanges(worktreePath: string, message: string, amend: boolean): Promise<boolean>
-⋮----
-// Get the list of updated files (unstaged changes that are shown in the UI)
-⋮----
-// Stage all updated files before committing
-⋮----
-// Escape the commit message for shell
-⋮----
-// If amending and message is empty, use --no-edit to keep previous message
-⋮----
-async getRebaseState(worktreePath: string): Promise<RebaseState>
-⋮----
-// ignore
-⋮----
-// ignore
-⋮----
-async getUnmergedFiles(worktreePath: string): Promise<string[]>
-⋮----
-async getStageFileContent(worktreePath: string, stage: 1 | 2 | 3, filePath: string): Promise<string | null>
-⋮----
-async collectConflictContext(worktreePath: string, filePath: string): Promise<ConflictResolutionFileContext>
-⋮----
-/**
-   * Reset a temporary commit back to uncommitted changes state
-   */
-private async resetTempCommit(worktreePath: string): Promise<void>
-⋮----
-/**
-   * Reset temporary commit if it exists by finding it by name pattern
-   */
-private async resetTempCommitIfExists(worktreePath: string): Promise<void>
-⋮----
-// Check if HEAD is a temporary commit
-⋮----
-// Don't throw - this is cleanup logic
-⋮----
-async stageResolvedFile(worktreePath: string, filePath: string, content: string): Promise<void>
-⋮----
-async listConflictedFiles(worktreePath: string): Promise<string[]>
-⋮----
-/**
-   * Apply uncommitted changes from worktree to main branch without merging commits
-   * This transfers work-in-progress changes while keeping them uncommitted in both branches
-   */
-async applyUncommittedChangesToMain(
-    projectPath: string,
-    taskId: string,
-    worktreePath: string,
-    targetBranch?: string,
-    symlinkFolders: string[] = [],
-): Promise<void>
-⋮----
-// 1. Check if there are uncommitted changes in worktree
-⋮----
-// 2. Stash uncommitted changes from worktree
-⋮----
-// 3. Switch main repo to target branch
-⋮----
-// 4. Apply stash to target branch (keeping uncommitted)
-⋮----
-// 5. Apply stash back to worktree (keeping uncommitted)
-⋮----
-// 6. Clean up stash
-⋮----
-// Recovery: clean up main repo from failed stash apply
-⋮----
-// Restore stash to worktree
-⋮----
-/**
-   * Revert a merge operation using the stored MergeState
-   * Restores the main branch to its pre-merge state while preserving uncommitted changes
-   */
-async revertMerge(projectPath: string, taskId: string, worktreePath: string, mergeState: MergeState, symlinkFolders: string[] = []): Promise<void>
-⋮----
-// 1. Stash current uncommitted changes in worktree
-⋮----
-// 2. Stash current uncommitted changes in main repo to clean the working directory
-// This is crucial to avoid conflicts with untracked files when applying the original stash
-⋮----
-// 3. Switch to the branch we merged into, then reset it to previous state
-⋮----
-// 4. Reset worktree branch to previous state
-⋮----
-// 5. Restore main's original uncommitted changes if they were preserved
-⋮----
-// Clean up the stash after successful revert
-⋮----
-// 6. Restore uncommitted changes in worktree
-⋮----
-// 7. Clean up temporary main stash
-// We don't apply it back because we want to revert to the state BEFORE the merge (with original changes)
-// Applying it back would re-introduce the changes that were just merged
-⋮----
-// Recovery: try to restore stashes
-⋮----
-private async pruneDeleted(projectDir: string): Promise<void>
-⋮----
-// in case of failure, try to remove the directory manually
-⋮----
-async mergeWorktreeToWorktree(sourceWorktreeDir: string, targetWorktreeDir: string, includeUncommitted = false): Promise<void>
-⋮----
-// Ignore abort errors
-⋮----
-async close(projectDir: string)
-
-================
 File: src/main/app.ts
 ================
 import type { App } from 'electron';
@@ -12366,12 +12708,14 @@ import fs from 'fs/promises';
 import {
   AgentProfile,
   AutonomyMode,
+  BranchInfo,
   CloudflareTunnelStatus,
   CommandsData,
   CreateTaskParams,
   EditFormat,
   EnvironmentVariable,
   FileEdit,
+  GitSyncCommits,
   InstalledExtension,
   ExtensionToolInfo,
   McpOAuthStatusData,
@@ -12408,6 +12752,7 @@ import { isBinary } from 'istextorbinary';
 ⋮----
 import type { ModeDefinition, ExtensionConfigComponent, ExtensionOperationResult, ExtensionUIComponent } from '@common/types';
 import type { WindowManager } from '@/window-manager';
+import type { GitAskpassManager } from '@/git/git-askpass-manager';
 ⋮----
 import { McpManager, McpConfigManager, AgentProfileManager } from '@/agent';
 import { MemoryManager } from '@/memory/memory-manager';
@@ -12538,6 +12883,8 @@ async saveEditedPrompt(baseDir: string, taskId: string, messageId: string, promp
 ⋮----
 async answerQuestion(baseDir: string, taskId: string, answer: string): Promise<void>
 ⋮----
+respondInputPrompt(id: string, value: string | null, rememberSession?: boolean): void
+⋮----
 removeQueuedPrompt(baseDir: string, taskId: string, promptId: string): void
 ⋮----
 reorderQueuedPrompts(baseDir: string, taskId: string, prompts: QueuedPromptData[]): void
@@ -12600,7 +12947,11 @@ closeTerminal(terminalId: string): void
 ⋮----
 getTerminalForTask(taskId: string): string | null
 ⋮----
+getTerminalBuffer(terminalId: string):
+⋮----
 getTerminalsForTask(taskId: string):
+⋮----
+private getTaskOrThrow(baseDir: string, taskId: string)
 ⋮----
 async mergeWorktreeToMain(baseDir: string, taskId: string, squash: boolean, targetBranch?: string, commitMessage?: string): Promise<void>
 ⋮----
@@ -12618,7 +12969,7 @@ async switchToWorktreeWorkingMode(
 ⋮----
 async getLocalUncommittedFiles(baseDir: string, taskId: string): Promise<
 ⋮----
-async applyUncommittedChanges(baseDir: string, taskId: string, targetBranch?: string): Promise<void>
+async applyUncommittedChanges(baseDir: string, taskId: string): Promise<void>
 ⋮----
 async revertLastMerge(baseDir: string, taskId: string): Promise<void>
 ⋮----
@@ -12630,13 +12981,33 @@ async readFile(baseDir: string, taskId: string, filePath: string): Promise<strin
 ⋮----
 async saveFile(baseDir: string, taskId: string, filePath: string, content: string): Promise<void>
 ⋮----
-async generateCommitMessage(baseDir: string, taskId: string): Promise<string>
+async generateCommitMessage(baseDir: string, taskId: string, filePaths?: string[]): Promise<string>
 ⋮----
-async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean): Promise<void>
+async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean, filePaths?: string[]): Promise<void>
 ⋮----
 cancelCommitChanges(baseDir: string, taskId: string): void
 ⋮----
-async listBranches(projectDir: string): Promise<Array<
+async listBranches(baseDir: string): Promise<BranchInfo[]>
+⋮----
+async listGitBranches(baseDir: string, taskId: string, includeRemote?: boolean): Promise<BranchInfo[]>
+⋮----
+async getSyncCommits(baseDir: string, taskId: string, targetBranch?: string): Promise<GitSyncCommits>
+⋮----
+async createGitBranch(baseDir: string, taskId: string, name: string, startPoint?: string, checkout?: boolean): Promise<void>
+⋮----
+async checkoutGitBranch(baseDir: string, taskId: string, branch: string, createTracking?: boolean, takeOver?: boolean): Promise<void>
+⋮----
+async deleteGitBranch(baseDir: string, taskId: string, branch: string, force?: boolean): Promise<void>
+⋮----
+async mergeIntoCurrentBranch(baseDir: string, taskId: string, branch: string): Promise<
+⋮----
+async rebaseOntoBranch(baseDir: string, taskId: string, branch: string): Promise<
+⋮----
+async updateGitBranch(baseDir: string, taskId: string, branchName: string): Promise<
+⋮----
+async gitPull(baseDir: string, taskId: string, rebase?: boolean): Promise<
+⋮----
+async gitPush(baseDir: string, taskId: string, force?: boolean, setUpstream?: boolean): Promise<
 ⋮----
 async getWorktreeIntegrationStatus(baseDir: string, taskId: string, targetBranch?: string)
 ⋮----
@@ -12647,6 +13018,10 @@ async abortWorktreeRebase(baseDir: string, taskId: string): Promise<void>
 async continueWorktreeRebase(baseDir: string, taskId: string): Promise<void>
 ⋮----
 async resolveConflictsWithAgent(baseDir: string, taskId: string): Promise<void>
+⋮----
+async resolveGitErrorWithAgent(baseDir: string, taskId: string): Promise<void>
+⋮----
+async renameGitBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void>
 ⋮----
 async renameWorktreeBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void>
 ⋮----
@@ -12844,10 +13219,12 @@ import { performStartUp, UpdateProgressData } from '@/start-up';
 import { Store } from '@/store';
 import logger, { eventTransport } from '@/logger';
 import { initManagers } from '@/managers';
-import { getDefaultProjectSettings, initPath } from '@/utils';
+import { createLoadRetryHandler, getDefaultProjectSettings, initPath } from '@/utils';
 import { WindowManager } from '@/window-manager';
 ⋮----
 // Global instances shared across all windows
+⋮----
+// Prevent unhandled promise rejections from crashing the process
 ⋮----
 const setupCustomMenu = (createWindowFn: () => void): void =>
 ⋮----
@@ -12865,6 +13242,12 @@ const initWindow = async (windowMgr: WindowManager, storeInstance: Store, projec
 ⋮----
 // Register window with window manager
 ⋮----
+// Retry transient network failures (e.g. ERR_NETWORK_CHANGED during dev server loading)
+// so a network change doesn't leave a blank white window
+⋮----
+// Renderer crash recovery: reload from the main process side, since a crashed/hung
+// renderer cannot process user-triggered reloads (e.g. Ctrl+R)
+⋮----
 const saveWindowState = (): void =>
 ⋮----
 // Only save state if this is the main window
@@ -12876,7 +13259,11 @@ const saveWindowState = (): void =>
 ⋮----
 // For HashRouter, query params must come after the hash: #/home?project=...
 ⋮----
+// transient failures (e.g. ERR_NETWORK_CHANGED) are retried by the did-fail-load handler
+⋮----
 // For production with HashRouter, append hash with query params
+⋮----
+// transient failures (e.g. ERR_NETWORK_CHANGED) are retried by the did-fail-load handler
 ⋮----
 // Apply saved zoom level
 ⋮----
@@ -12944,7 +13331,7 @@ import {
   AgentProfile,
   ChangeRequestItem,
 } from '@common/types';
-import { ipcMain, clipboard } from 'electron';
+import { ipcMain, clipboard, nativeImage } from 'electron';
 ⋮----
 import { EventsHandler } from './events-handler';
 ⋮----
@@ -12964,6 +13351,8 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 // Terminal handlers
 ⋮----
 // Worktree merge handlers
+⋮----
+// Git branch operations
 ⋮----
 // Server control handlers
 ⋮----
@@ -13016,7 +13405,7 @@ import { DataManager } from '@/data-manager';
 import { TerminalManager } from '@/terminal';
 import { VersionsManager } from '@/versions';
 import { TelemetryManager } from '@/telemetry';
-import { WorktreeManager } from '@/worktrees';
+import { GitManager, GitAskpassManager } from '@/git';
 import { MemoryManager } from '@/memory/memory-manager';
 import { ExtensionManager } from '@/extensions/extension-manager';
 import { Store } from '@/store';
@@ -13039,6 +13428,8 @@ export interface ManagersResult {
 }
 ⋮----
 export const initManagers = async (store: Store, windowManager?: WindowManager): Promise<ManagersResult> =>
+⋮----
+// Prevent unhandled promise rejections from crashing the process
 ⋮----
 // Initialize network manager FIRST — must be before any network calls
 ⋮----
@@ -13133,7 +13524,8 @@ export type MessageAction =
   | 'unsubscribe-events'
   | 'readonly-subscribe-events'
   | 'readonly-unsubscribe-events'
-  | 'update-models-info';
+  | 'update-models-info'
+  | 'write-to-terminal';
 ⋮----
 export interface Message {
   action: MessageAction;
@@ -13334,6 +13726,14 @@ export interface RequestContextInfoMessage extends Message {
 }
 ⋮----
 export const isRequestContextInfoMessage = (message: Message): message is RequestContextInfoMessage =>
+⋮----
+export interface WriteToTerminalMessage extends Message {
+  action: 'write-to-terminal';
+  terminalId: string;
+  data: string;
+}
+⋮----
+export const isWriteToTerminalMessage = (message: Message): message is WriteToTerminalMessage =>
 ⋮----
 export interface SubscribeEventsMessage extends Message {
   action: 'subscribe-events';
@@ -13727,6 +14127,7 @@ import {
   VersionsInfo,
   WorktreeIntegrationStatusUpdatedData,
   AiderConnectorStatus,
+  InputPromptData,
 } from '@common/types';
 import { electronAPI } from '@electron-toolkit/preload';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
@@ -13746,6 +14147,8 @@ const listener = (_: Electron.IpcRendererEvent, data: ExtensionUIRefreshData) =>
 // Terminal operations
 ⋮----
 // Worktree merge operations
+⋮----
+// Git branch operations
 ⋮----
 // Agent profile operations
 ⋮----
@@ -13878,6 +14281,8 @@ import {
   AgentProfile,
   MemoryEntry,
   MemoryEmbeddingProgress,
+  BranchInfo,
+  GitSyncCommits,
   SwitchToLocalOptions,
   SwitchToWorktreeOptions,
   WorktreeIntegrationStatus,
@@ -13892,6 +14297,7 @@ import {
   ExtensionToolInfo,
   ExtensionUIComponent,
   ModalOverlayUrlData,
+  InputPromptData,
   AiderConnectorStatus,
   ChangeRequestItem,
   SkillDefinition,
@@ -13947,6 +14353,7 @@ type EventDataMap = {
   'terminal-exit': TerminalExitData;
   'extension-ui-refresh': ExtensionUIRefreshData;
   'modal-overlay-url': ModalOverlayUrlData;
+  'input-prompt': InputPromptData;
   'aider-connector-status': { baseDir?: string; taskId?: string; status: AiderConnectorStatus };
 };
 ⋮----
@@ -13965,6 +14372,8 @@ constructor(message: string)
 export class BrowserApi implements ApplicationAPI
 ⋮----
 constructor()
+⋮----
+// Allow overriding the API port via query param (e.g. when opening the dev renderer in a browser against a dev server)
 ⋮----
 // eslint-disable-next-line no-console
 ⋮----
@@ -14044,8 +14453,8 @@ getAddableFiles(baseDir: string, taskId: string): Promise<string[]>
 getAllFiles(baseDir: string, taskId: string, useGit?: boolean): Promise<string[]>
 refreshContextFiles(baseDir: string, taskId: string): Promise<void>
 getUpdatedFiles(baseDir: string, taskId: string): Promise<
-async generateCommitMessage(baseDir: string, taskId: string): Promise<string>
-async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean): Promise<void>
+async generateCommitMessage(baseDir: string, taskId: string, filePaths?: string[]): Promise<string>
+async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean, filePaths?: string[]): Promise<void>
 async cancelCommitChanges(baseDir: string, taskId: string): Promise<void>
 addFile(baseDir: string, taskId: string, filePath: string, readOnly?: boolean): void
 async isValidPath(baseDir: string, path: string): Promise<boolean>
@@ -14192,10 +14601,13 @@ runCustomCommand(baseDir: string, taskId: string, commandName: string, args: str
 isTerminalSupported(): boolean
 async createTerminal(baseDir: string, taskId: string, cols?: number, rows?: number): Promise<string>
 async writeToTerminal(terminalId: string, data: string): Promise<boolean>
+⋮----
+private flushTerminalWrite(terminalId: string): Promise<boolean>
 async resizeTerminal(terminalId: string, cols: number, rows: number): Promise<boolean>
 async closeTerminal(terminalId: string): Promise<boolean>
 async getTerminalForTask(taskId: string): Promise<string | null>
 async getAllTerminalsForTask(taskId: string): Promise<Array<
+async getTerminalBuffer(terminalId: string): Promise<
 isManageServerSupported(): boolean
 ⋮----
 startServer(username?: string, password?: string): Promise<boolean>
@@ -14221,7 +14633,7 @@ switchToWorktreeWorkingMode(baseDir: string, taskId: string, options?: SwitchToW
 ⋮----
 getLocalUncommittedFiles(baseDir: string, taskId: string): Promise<WorktreeUncommittedFiles>
 ⋮----
-applyUncommittedChanges(baseDir: string, taskId: string, targetBranch?: string): Promise<void>
+applyUncommittedChanges(baseDir: string, taskId: string): Promise<void>
 ⋮----
 revertLastMerge(baseDir: string, taskId: string): Promise<void>
 ⋮----
@@ -14235,6 +14647,28 @@ async saveFile(baseDir: string, taskId: string, filePath: string, content: strin
 ⋮----
 listBranches(baseDir: string): Promise<Array<
 ⋮----
+listGitBranches(baseDir: string, taskId: string, includeRemote?: boolean): Promise<BranchInfo[]>
+⋮----
+getSyncCommits(baseDir: string, taskId: string, targetBranch?: string): Promise<GitSyncCommits>
+⋮----
+async createGitBranch(baseDir: string, taskId: string, name: string, startPoint?: string, checkout?: boolean): Promise<void>
+⋮----
+async checkoutGitBranch(baseDir: string, taskId: string, branch: string, createTracking?: boolean, takeOver?: boolean): Promise<void>
+⋮----
+async deleteGitBranch(baseDir: string, taskId: string, branch: string, force?: boolean): Promise<void>
+⋮----
+mergeIntoCurrentBranch(baseDir: string, taskId: string, branch: string): Promise<
+⋮----
+rebaseOntoBranch(baseDir: string, taskId: string, branch: string): Promise<
+⋮----
+updateGitBranch(baseDir: string, taskId: string, branchName: string): Promise<
+⋮----
+gitPull(baseDir: string, taskId: string, rebase?: boolean): Promise<
+⋮----
+gitPush(baseDir: string, taskId: string, force?: boolean): Promise<
+⋮----
+resolveGitErrorWithAgent(baseDir: string, taskId: string): Promise<void>
+⋮----
 getWorktreeIntegrationStatus(baseDir: string, taskId: string, targetBranch?: string): Promise<WorktreeIntegrationStatus>
 ⋮----
 rebaseWorktreeFromBranch(baseDir: string, taskId: string, fromBranch?: string): Promise<void>
@@ -14244,6 +14678,8 @@ abortWorktreeRebase(baseDir: string, taskId: string): Promise<void>
 continueWorktreeRebase(baseDir: string, taskId: string): Promise<void>
 ⋮----
 resolveWorktreeConflictsWithAgent(baseDir: string, taskId: string): Promise<void>
+⋮----
+renameGitBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void>
 ⋮----
 renameWorktreeBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void>
 ⋮----
@@ -14259,6 +14695,8 @@ async deleteProjectMemories(projectId: string): Promise<number>
 async writeToClipboard(text: string): Promise<void>
 ⋮----
 // Fallback for mobile browsers and non-secure contexts
+⋮----
+async writeImageToClipboard(dataUrl: string): Promise<void>
 ⋮----
 async openPath(): Promise<boolean>
 ⋮----
@@ -14319,6 +14757,10 @@ onExtensionUIRefresh(callback: (data: ExtensionUIRefreshData) => void): () => vo
 ⋮----
 onModalOverlayUrl(callback: (data: ModalOverlayUrlData) => void): () => void
 ⋮----
+onInputPrompt(callback: (data: InputPromptData) => void): () => void
+⋮----
+respondInputPrompt(id: string, value: string | null, rememberSession?: boolean): Promise<void>
+⋮----
 loadExtensionLibrary(librarySpec: string): Promise<string>
 ⋮----
 isWebViewSupported(): boolean
@@ -14349,6 +14791,8 @@ export type ReadonlyEvent = {
 type EventListener = (event: ReadonlyEvent) => void;
 ⋮----
 const getBaseUrl = (): string =>
+⋮----
+// Allow overriding the API port via query param (e.g. when opening the dev renderer in a browser against a dev server)
 ⋮----
 export const loadBrowserBootstrap = async (): Promise<BrowserBootstrap> =>
 ⋮----
@@ -14482,6 +14926,7 @@ File: src/renderer/src/components/common/CommandPalette/CommandPaletteContent.ts
 import { ChangeEvent, KeyboardEvent, MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { clsx } from 'clsx';
+import { useLocalStorage } from '@reactuses/core';
 ⋮----
 import { TaskStateChip } from '@/components/common/TaskStateChip';
 import { PaletteItem, PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
@@ -15116,6 +15561,7 @@ type Props = {
   oldValue?: string;
   newValue?: string;
   className?: string;
+  hideCopyButton?: boolean;
 };
 ⋮----
 const handleDiffViewModeChange = (value: string) =>
@@ -15412,6 +15858,52 @@ export type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> & {
 };
 
 ================
+File: src/renderer/src/components/common/InputPromptDialog.tsx
+================
+import { useCallback, useEffect, useState } from 'react';
+import { InputPromptData } from '@common/types';
+⋮----
+import { useApi } from '@/contexts/ApiContext';
+import { InputPromptModal } from '@/components/common/InputPromptModal';
+⋮----
+type Props = {
+  promptData?: InputPromptData | null;
+  onRespond?: (id: string, value: string | null, rememberSession?: boolean) => void;
+};
+
+================
+File: src/renderer/src/components/common/InputPromptModal.tsx
+================
+import { ChangeEvent, FormEvent, KeyboardEvent, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { RiEyeLine, RiEyeOffLine } from 'react-icons/ri';
+import { InputPromptData } from '@common/types';
+⋮----
+import { BaseDialog } from '@/components/common/BaseDialog';
+import { Button } from '@/components/common/Button';
+import { Checkbox } from '@/components/common/Checkbox';
+import { Input } from '@/components/common/Input';
+⋮----
+type Props = {
+  promptData: InputPromptData;
+  onRespond: (id: string, value: string | null, rememberSession?: boolean) => void;
+};
+⋮----
+const handleClose = () =>
+⋮----
+const handleSubmit = (e?: FormEvent<HTMLFormElement>) =>
+⋮----
+const handleConfirmChoice = (answer: string) =>
+⋮----
+const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) =>
+⋮----
+const handleChange = (e: ChangeEvent<HTMLInputElement>) =>
+⋮----
+const handleToggleShowPassword = () =>
+⋮----
+const handleToggleRemember = (checked: boolean) =>
+
+================
 File: src/renderer/src/components/common/ItemSelector.tsx
 ================
 import { ElementType, memo, useRef, useState } from 'react';
@@ -15648,6 +16140,49 @@ export const RadioButton = (
 const handleChange = () =>
 ⋮----
 className="sr-only" // Hide the actual input but keep it accessible
+
+================
+File: src/renderer/src/components/common/SearchableSelect.tsx
+================
+import { KeyboardEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { HiChevronUpDown, HiCheck } from 'react-icons/hi2';
+import { useTranslation } from 'react-i18next';
+⋮----
+import { useClickOutside } from '@/hooks/useClickOutside';
+import { useDropdownState } from '@/hooks/useDropdownState';
+import { KeyboardKeys } from '@/constants/keyboardKeys';
+import { Option } from '@/components/common/Select';
+⋮----
+type Props = {
+  label?: ReactNode;
+  options?: Option[];
+  value?: string;
+  onChange?: (value: string) => void;
+  className?: string;
+  size?: 'sm' | 'md' | 'lg';
+  disabled?: boolean;
+  placement?: 'bottom' | 'top';
+  placeholder?: string;
+};
+⋮----
+const getOptionText = (opt: Option): string
+⋮----
+const handleOpen = () =>
+⋮----
+const handleSearchChange = (search: string) =>
+⋮----
+const handleOptionSelect = (option: Option) =>
+⋮----
+const handleInputKeyDown = (e: KeyboardEvent) =>
+⋮----
+const handleBlur = () =>
+⋮----
+const handleChevronMouseDown = (e: MouseEvent<SVGSVGElement>) =>
+⋮----
+onMouseDown=
+⋮----
+onChange=
 
 ================
 File: src/renderer/src/components/common/Section.tsx
@@ -16913,6 +17448,8 @@ type Props = {
 ⋮----
 const parseMarkdownResults = (md: string): Array<Match> | null =>
 ⋮----
+
+⋮----
 if (
     prevProps.compact !== nextProps.compact ||
     prevProps.hideMessageBar !== nextProps.hideMessageBar ||
@@ -17093,6 +17630,7 @@ import { CopyMessageButton } from './CopyMessageButton';
 import { MessageActions } from './MessageActions';
 ⋮----
 import { IconButton } from '@/components/common/IconButton';
+import { removeMessageActionId } from '@/stores/taskStore';
 ⋮----
 type Props = {
   baseDir: string;
@@ -17101,6 +17639,7 @@ type Props = {
   onRemove?: () => void;
   compact?: boolean;
   onInterrupt?: () => void;
+  removeActionId?: (actionId: string) => void;
 };
 ⋮----
 const renderMessage = () => (
@@ -17131,6 +17670,7 @@ type Props = {
   baseDir: string;
   taskId: string;
   onInterrupt?: () => void;
+  removeActionId?: (actionId: string) => void;
 };
 ⋮----
 const handleAbortRebase = () =>
@@ -17138,6 +17678,8 @@ const handleAbortRebase = () =>
 const handleContinueRebase = () =>
 ⋮----
 const handleResolveConflictsWithAgent = () =>
+⋮----
+const handleResolveGitErrorWithAgent = () =>
 ⋮----
 const handleRebaseWorktree = () =>
 ⋮----
@@ -17151,8 +17693,9 @@ File: src/renderer/src/components/message/MessageBar.tsx
 import { useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { toPng } from 'html-to-image';
 import { UsageReportData, Message } from '@common/types';
-import { MdCallSplit, MdDeleteForever, MdDeleteSweep, MdEdit, MdRedo } from 'react-icons/md';
+import { MdCallSplit, MdDeleteForever, MdDeleteSweep, MdEdit, MdImage, MdRedo } from 'react-icons/md';
 import { FaEllipsisVertical } from 'react-icons/fa6';
 import { twMerge } from 'tailwind-merge';
 ⋮----
@@ -17161,6 +17704,7 @@ import { IconButton } from '../common/IconButton';
 import { CopyMessageButton } from './CopyMessageButton';
 import { UsageInfo } from './UsageInfo';
 ⋮----
+import { useApi } from '@/contexts/ApiContext';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { ExtensionComponentWrapper } from '@/components/extensions/ExtensionComponentWrapper';
 import { includeMessageProperty } from '@/components/message/utils';
@@ -17195,6 +17739,10 @@ const handleEditClick = () =>
 const handleForkClick = () =>
 ⋮----
 const handleRemoveUpToClick = () =>
+⋮----
+const handleCopyAsImageClick = async () =>
+⋮----
+// eslint-disable-next-line no-console
 ⋮----
 <div className=
 
@@ -17523,8 +18071,6 @@ export const ResponseMessageBlock = ({
   onFork,
   onRemoveUpTo,
 }: Props) =>
-⋮----
-className=
 
 ================
 File: src/renderer/src/components/message/RetrieveMemoryToolMessage.tsx
@@ -17667,13 +18213,17 @@ type Props = {
 ================
 File: src/renderer/src/components/message/StoreMemoryToolMessage.tsx
 ================
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FaBrain, FaCheckCircle, FaExclamationTriangle, FaTimesCircle } from 'react-icons/fa';
+import { FaBrain, FaCheckCircle, FaExclamationTriangle, FaTimesCircle, FaTrash } from 'react-icons/fa';
 import { CgSpinner } from 'react-icons/cg';
 import { ToolMessage } from '@common/types';
 ⋮----
 import { ExpandableMessageBlock } from '@/components/message/ExpandableMessageBlock';
+import { IconButton } from '@/components/common/IconButton';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { useApi } from '@/contexts/ApiContext';
 ⋮----
 type Props = {
   message: ToolMessage;
@@ -17684,7 +18234,30 @@ type Props = {
   hideMessageBar?: boolean;
 };
 ⋮----
+type StoredMemoryResult = {
+  success: boolean;
+  id: string;
+};
+⋮----
+const tryParseJson = (value: string): unknown =>
+⋮----
+// Tool results are stored JSON-stringified; versions that returned a JSON string from the tool are stored double-encoded
+⋮----
+const loadMemories = async () =>
+⋮----
+// Ignore errors loading memories
+⋮----
+const handleDeleteMemory = async () =>
+⋮----
+// Ignore errors loading memories
+⋮----
 {/* Memory Details */}
+⋮----
+onClick=
+⋮----
+title=
+⋮----
+confirmButtonText=
 
 ================
 File: src/renderer/src/components/message/StreamingToolMessage.tsx
@@ -18234,6 +18807,10 @@ const handleWheel = (e: WheelEvent) =>
 const handleTouchStart = (e: TouchEvent) =>
 ⋮----
 const handleTouchMove = (e: TouchEvent) =>
+⋮----
+const handlePointerDown = () =>
+⋮----
+const handlePointerUp = () =>
 ⋮----
 const scrollToEndIfFollowing = () =>
 ⋮----
@@ -20360,7 +20937,22 @@ File: src/renderer/src/components/project/TaskSidebar/TaskSidebar.tsx
 ================
 import { DefaultTaskState, TaskData } from '@common/types';
 import { useTranslation } from 'react-i18next';
-import { MouseEvent, DragEvent, useState, useRef, useEffect, useOptimistic, startTransition, Activity, memo, useCallback, useMemo } from 'react';
+import {
+  MouseEvent,
+  DragEvent,
+  useState,
+  useRef,
+  useEffect,
+  useOptimistic,
+  startTransition,
+  Activity,
+  memo,
+  useCallback,
+  useMemo,
+  forwardRef,
+  useImperativeHandle,
+  ForwardedRef,
+} from 'react';
 import { HiPlus } from 'react-icons/hi';
 import { RiMenuUnfold4Line, RiMenuFold2Line } from 'react-icons/ri';
 import { CgSpinner } from 'react-icons/cg';
@@ -20409,6 +21001,10 @@ type Props = {
   contentRef?: React.RefObject<HTMLDivElement | null>;
 };
 ⋮----
+export type TaskSidebarRef = {
+  startRenaming: (taskId: string) => void;
+};
+⋮----
 // eslint-disable-next-line react-compiler/react-compiler
 ⋮----
 const handleMouseMove = (moveEvent: globalThis.MouseEvent) =>
@@ -20427,7 +21023,7 @@ const handleKeyDown = (e: globalThis.KeyboardEvent) =>
 ⋮----
 // eslint-disable-next-line react-hooks/incompatible-library
 ⋮----
-const hasActiveSubtask = (taskId: string): boolean =>
+// the active task may be activated before the task list update arrives, retry on the next tasks update
 ⋮----
 // eslint-disable-next-line no-console
 ⋮----
@@ -20689,6 +21285,262 @@ export const FilesContextInfoContent = ({
 }: Props) =>
 
 ================
+File: src/renderer/src/components/project/GitBranchesButton.tsx
+================
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { FaArrowsRotate, FaBan, FaCodeMerge, FaCompress, FaDownload, FaFileLines, FaPlay, FaPlus, FaRobot, FaUpload } from 'react-icons/fa6';
+import { TbDeviceImacDown } from 'react-icons/tb';
+import { FaPencilAlt } from 'react-icons/fa';
+import { IoGitBranch } from 'react-icons/io5';
+import { VscWorktreeSmall } from 'react-icons/vsc';
+import { MdKeyboardArrowDown } from 'react-icons/md';
+import { useTranslation } from 'react-i18next';
+import { useHotkeys } from 'react-hotkeys-hook';
+import { useLocalStorage } from '@reactuses/core';
+import { BranchInfo, GitSyncCommits, WorktreeIntegrationStatus } from '@common/types';
+⋮----
+import { useApi } from '@/contexts/ApiContext';
+import { useClickOutside } from '@/hooks/useClickOutside';
+import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
+import { invokeAction, registerAction, unregisterAction } from '@/stores/actionsStore';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { Checkbox } from '@/components/common/Checkbox';
+import { RadioButton } from '@/components/common/RadioButton';
+import { InlineEditPanel } from '@/components/common/InlineEditPanel';
+import { WorktreeActionDialog } from '@/components/project/WorktreeActionDialog';
+import { GitStatusBadges } from '@/components/project/GitStatusBadges';
+import { GitBranchesPopup } from '@/components/project/GitBranchesPopup';
+import { GitBranchesTooltipContent } from '@/components/project/GitBranchesTooltipContent';
+import { Tooltip } from '@/components/ui/Tooltip';
+import { showErrorNotification, showInfoNotification } from '@/utils/notifications';
+⋮----
+enum PullStrategy {
+  Merge = 'merge',
+  Rebase = 'rebase',
+}
+⋮----
+const slugifyBranchName = (name: string) =>
+⋮----
+const trimBranchNameSeparators = (name: string) =>
+⋮----
+const truncateBranchName = (name: string) =>
+⋮----
+type Props = {
+  baseDir: string;
+  taskId: string;
+  worktreePath?: string;
+  status?: WorktreeIntegrationStatus | null;
+  taskName?: string;
+  disabled?: boolean;
+  onSwitchToLocal: () => void;
+  onSwitchToWorktree: () => void;
+  willShowConfirmDialog?: boolean;
+  onMerge: (targetBranch?: string) => void;
+  onSquash: (targetBranch?: string, commitMessage?: string) => void;
+  onOnlyUncommitted: () => void;
+  onRebaseFromBranch: (fromBranch?: string) => void;
+  onAbortRebase: () => void;
+  onContinueRebase: () => void;
+  onResolveConflictsWithAgent: () => void;
+  onRenameBranch: (newBranchName: string) => Promise<void>;
+  canAbortRebase?: boolean;
+  canContinueRebase?: boolean;
+  canResolveConflictsWithAgent?: boolean;
+};
+⋮----
+const refreshOnVisible = () =>
+⋮----
+// The error is already logged to the task chat by the backend with a 'Resolve with AI' action
+// eslint-disable-next-line no-console
+⋮----
+const handleToggle = () =>
+⋮----
+const handleCreateBranchConfirm = async () =>
+⋮----
+const handleNewBranchFrom = (branch: BranchInfo) =>
+⋮----
+const handleCreateBranchFromConfirm = async () =>
+⋮----
+const handleSelect = (branch: BranchInfo) =>
+⋮----
+const trackRecentBranch = (branchName: string) =>
+⋮----
+// ignore persistence errors
+⋮----
+const performCheckout = async (branch: BranchInfo, takeOver = false) =>
+⋮----
+const performMerge = async (branch: BranchInfo) =>
+⋮----
+const performRebase = async (branch: BranchInfo) =>
+⋮----
+const handleMergeIntoCurrent = (branch: BranchInfo) =>
+⋮----
+const handleRebaseOnto = (branch: BranchInfo) =>
+⋮----
+const handleRebaseWorktreeOnto = (branch: BranchInfo) =>
+⋮----
+const handleDelete = (branch: BranchInfo) =>
+⋮----
+const handleDeleteConfirm = async () =>
+⋮----
+const handlePullConfirm = () =>
+⋮----
+const handlePullStrategyChange = (value: string) =>
+⋮----
+const handleUpdateBranch = async (branch: BranchInfo) =>
+⋮----
+const handlePushConfirm = async () =>
+⋮----
+const handlePushCancel = () =>
+⋮----
+const handleBranchEditConfirm = async () =>
+⋮----
+const handleBranchEditCancel = () =>
+⋮----
+const handleSwitchToLocal = () =>
+⋮----
+const handleSwitchToWorktree = () =>
+⋮----
+
+⋮----
+<button onClick=
+⋮----
+onClick=
+⋮----
+content=
+⋮----
+handleCloseDropdown();
+if (rebaseBranch)
+onRebaseFromBranch(rebaseBranch);
+⋮----
+title=
+⋮----
+setBranchToMerge(null);
+void performMerge(branch);
+⋮----
+onCancel=
+⋮----
+setBranchToRebase(null);
+void performRebase(branch);
+⋮----
+onConfirm=
+⋮----
+setShowOnlyUncommittedDialog(false);
+onOnlyUncommitted();
+⋮----
+setShowAbortRebaseConfirm(false);
+onAbortRebase();
+⋮----
+setShowContinueRebaseConfirm(false);
+onContinueRebase();
+⋮----
+setShowResolveWithAgentConfirm(false);
+onResolveConflictsWithAgent();
+⋮----
+confirmButtonText=
+⋮----
+label=
+⋮----
+<Checkbox label=
+
+================
+File: src/renderer/src/components/project/GitBranchesPopup.tsx
+================
+import { MouseEvent, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { CgSpinner } from 'react-icons/cg';
+import { FaChevronDown, FaChevronRight, FaFolder, FaFolderOpen, FaMagnifyingGlass } from 'react-icons/fa6';
+import { IoGitBranch } from 'react-icons/io5';
+import { clsx } from 'clsx';
+import { BranchInfo } from '@common/types';
+⋮----
+type Props = {
+  branches: BranchInfo[];
+  currentBranch: string;
+  loading: boolean;
+  recentBranches: string[];
+  worktreeMode?: boolean;
+  onSelect: (branch: BranchInfo) => void;
+  onNewBranchFrom: (branch: BranchInfo) => void;
+  onUpdateBranch?: (branch: BranchInfo) => void;
+  onMergeIntoCurrent: (branch: BranchInfo) => void;
+  onRebaseOnto: (branch: BranchInfo) => void;
+  onRebaseWorktreeOnto?: (branch: BranchInfo) => void;
+  onDelete: (branch: BranchInfo) => void;
+};
+⋮----
+type BranchTreeNode = {
+  name: string;
+  fullPath: string;
+  branch?: BranchInfo;
+  children: BranchTreeNode[];
+};
+⋮----
+const buildBranchTree = (branches: BranchInfo[]): BranchTreeNode[] =>
+⋮----
+const handleKeyDown = (e: KeyboardEvent) =>
+⋮----
+const isFolderCollapsed = (fullPath: string) =>
+⋮----
+// Collapsed by default; only folders on the current branch's path start expanded
+⋮----
+const handleFilterChange = (value: string) =>
+⋮----
+const toggleFolder = (fullPath: string, currentlyCollapsed: boolean) =>
+⋮----
+const showSubmenu = (branch: BranchInfo, e: MouseEvent<HTMLElement>) =>
+⋮----
+const getSubmenuItems = (branch: BranchInfo) =>
+⋮----
+<span className=
+⋮----
+onClick=
+⋮----
+if (tree.length === 0)
+⋮----
+
+⋮----
+setOpenSubmenu(null);
+item.action();
+⋮----
+className=
+
+================
+File: src/renderer/src/components/project/GitBranchesTooltipContent.tsx
+================
+import { CgArrowBottomLeft, CgArrowTopRight } from 'react-icons/cg';
+import { IoGitBranch } from 'react-icons/io5';
+import { TiTick } from 'react-icons/ti';
+import { useTranslation } from 'react-i18next';
+import { GitSyncCommits } from '@common/types';
+⋮----
+type Props = {
+  currentBranch: string;
+  syncCommits: GitSyncCommits;
+  worktreeBaseBranch?: string;
+};
+⋮----
+const renderCommitList = (commits: string[]) =>
+
+================
+File: src/renderer/src/components/project/GitStatusBadges.tsx
+================
+import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { CgArrowBottomLeft, CgArrowTopRight } from 'react-icons/cg';
+import { TiWarning } from 'react-icons/ti';
+⋮----
+import type { WorktreeIntegrationStatus } from '@common/types';
+⋮----
+import { Tooltip } from '@/components/ui/Tooltip';
+⋮----
+type Props = {
+  status?: WorktreeIntegrationStatus | null;
+  showOutgoing: boolean;
+  showIncoming: boolean;
+};
+
+================
 File: src/renderer/src/components/project/MobileSidebar.tsx
 ================
 import { Dispatch, SetStateAction } from 'react';
@@ -20748,6 +21600,38 @@ className=
 <div onClick=
 ⋮----
 showFileDialog=
+
+================
+File: src/renderer/src/components/project/MountedTaskView.tsx
+================
+import { TaskData } from '@common/types';
+import { forwardRef } from 'react';
+import { clsx } from 'clsx';
+⋮----
+import { TaskView, TaskViewRef } from '@/components/project/TaskView';
+import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
+import { FloatingExtensionPanels } from '@/components/extensions/FloatingExtensionPanels';
+import { useActiveAgentProfile } from '@/utils/agents';
+⋮----
+type Props = {
+  projectDir: string;
+  task: TaskData;
+  isActive: boolean;
+  inputHistory: string[];
+  shouldFocusPrompt: boolean;
+  updateTask: (taskId: string, updates: Partial<TaskData>, useOptimistic?: boolean) => void;
+  updateOptimisticTaskState: (taskId: string, taskState: string) => void;
+  onArchiveTask?: () => void;
+  onUnarchiveTask?: () => void;
+  onDeleteTask?: () => void;
+  onToggleTaskSidebar?: () => void;
+};
+⋮----
+// Inactive pooled tasks are hidden with CSS (display:none) rather than unmounted or wrapped in a
+// hidden <Activity>. This keeps the TaskView fully mounted with its effects/subscriptions intact,
+// so switching back is instant with no message reload and no sidebar re-fetch.
+⋮----
+<div className=
 
 ================
 File: src/renderer/src/components/project/NoProjectsOpen.tsx
@@ -20913,12 +21797,12 @@ File: src/renderer/src/components/project/ProjectView.tsx
 ================
 import { AutonomyMode, InputHistoryData, ProjectStartMode, TaskCreatedData, TaskData, DefaultTaskState } from '@common/types';
 import { useTranslation } from 'react-i18next';
-import { Activity, startTransition, useCallback, useEffect, useOptimistic, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useOptimistic, useRef, useState } from 'react';
 import { useLocalStorage } from '@reactuses/core';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { clsx } from 'clsx';
 ⋮----
-import { COLLAPSED_WIDTH, EXPANDED_WIDTH, MIN_WIDTH, MAX_WIDTH, TaskSidebar } from './TaskSidebar/TaskSidebar';
+import { COLLAPSED_WIDTH, EXPANDED_WIDTH, MIN_WIDTH, MAX_WIDTH, TaskSidebar, TaskSidebarRef } from './TaskSidebar/TaskSidebar';
 ⋮----
 import {
   useProjectTasks,
@@ -20932,12 +21816,13 @@ import {
 import { unloadTasks } from '@/stores/taskStore';
 import { releaseTaskFiles, useTaskAllFiles } from '@/stores/taskFilesStore';
 import { getTaskDir, getSortedVisibleTasks } from '@/utils/task-utils';
-import { cleanupProjectCache } from '@/stores/extensionUIStore';
+import { cleanupProjectCache, cleanupTaskCache } from '@/stores/extensionUIStore';
 import { cleanupProcessingResponseMessage } from '@/hooks/useTaskResponseHandlers';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
-import { TaskView, TaskViewRef } from '@/components/project/TaskView';
+import { TaskViewRef } from '@/components/project/TaskView';
+import { MountedTaskView } from '@/components/project/MountedTaskView';
 import { useApi } from '@/contexts/ApiContext';
 import { TasksProvider } from '@/contexts/TasksContext';
 import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
@@ -20945,13 +21830,13 @@ import { useOverlayFocusRestore } from '@/hooks/useOverlayFocusRestore';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useBooleanState } from '@/hooks/useBooleanState';
 import { showNotification } from '@/utils/browser-notifications';
-import { showErrorNotification, showInfoNotification } from '@/utils/notifications';
+import { showErrorNotification, showInfoNotification, showWarningNotification } from '@/utils/notifications';
 import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
 import { FloatingExtensionPanels } from '@/components/extensions/FloatingExtensionPanels';
 import { useFileEditorStore } from '@/stores/fileEditorStore';
 import { useActiveAgentProfile } from '@/utils/agents';
-import { PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
-import { registerAction, unregisterAction } from '@/stores/actionsStore';
+import { PaletteItem, PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
+import { invokeAction, registerAction, unregisterAction } from '@/stores/actionsStore';
 import { FileEditorModal } from '@/components/Workspace/FileEditorModal';
 ⋮----
 type Props = {
@@ -20959,6 +21844,9 @@ type Props = {
   isProjectActive?: boolean;
   initialTaskId?: string;
 };
+⋮----
+// Keep recently-active tasks mounted (LRU) so switching back is instant. The active task is
+// always at the front and therefore never evicted.
 ⋮----
 // eslint-disable-next-line no-console
 ⋮----
@@ -21001,6 +21889,8 @@ const initProject = async () =>
 // Self-healing fallback: if the project became active and finished loading but no task was ever
 // activated (e.g., lost startup race or a failed task creation), activate an existing task.
 ⋮----
+// Release backend/store state for tasks evicted from the mount pool (mirrors unmount cleanup).
+⋮----
 // Switch to specific task tabs (Ctrl + 1-9)
 ⋮----
 // eslint-disable-next-line no-console
@@ -21010,6 +21900,8 @@ const initProject = async () =>
 // eslint-disable-next-line no-console
 ⋮----
 // Close current task
+⋮----
+// eslint-disable-next-line no-console
 ⋮----
 // eslint-disable-next-line no-console
 ⋮----
@@ -21227,6 +22119,7 @@ import { useSearchText } from '@/hooks/useSearchText';
 import { TaskStateActions } from '@/components/message/TaskStateActions';
 import { TaskInfoPanel } from '@/components/message/TaskInfoPanel';
 import { registerAction, unregisterAction } from '@/stores/actionsStore';
+import { getSessionKey, useTerminalVisible, toggleTerminalVisible, setTerminalVisible } from '@/stores/terminalStore';
 ⋮----
 type AddFileDialogOptions = {
   readOnly: boolean;
@@ -21253,10 +22146,11 @@ type Props = {
   onToggleTaskSidebar?: () => void;
 };
 ⋮----
-// ProjectView keys TaskView by task.id, so switching tasks remounts this component. Defer the
-// heavy message list until after the shell has painted: the first commit renders the shell +
-// LoadingOverlay (renderReady=false), then a rAF flips renderReady inside a transition so the
-// messages render without blocking the switch.
+// On first mount, defer the heavy message list until after the shell has painted: the first
+// commit renders the shell + LoadingOverlay (renderReady=false), then a rAF flips renderReady
+// inside a transition so the messages render without blocking the initial load. Guarded by
+// renderReady so re-running the effect (e.g. a project-level <Activity> becoming visible again)
+// does not re-trigger the transition and flash the loading overlay on an already-rendered task.
 ⋮----
 // Focus prompt field
 ⋮----
@@ -21448,7 +22342,7 @@ import { BranchInfo } from '@common/types';
 ⋮----
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { useApi } from '@/contexts/ApiContext';
-import Select from '@/components/common/Select';
+import SearchableSelect from '@/components/common/SearchableSelect';
 import { Input } from '@/components/common/Input';
 ⋮----
 type Props = {
@@ -21476,76 +22370,6 @@ const handleCommitMessageChange = (e: ChangeEvent<HTMLInputElement>) =>
 label=
 
 ================
-File: src/renderer/src/components/project/WorktreeMergeButton.tsx
-================
-import { useState, useRef } from 'react';
-import { FaArrowsRotate, FaBan, FaCodeMerge, FaCompress, FaDownload, FaFileLines, FaPlay, FaRobot } from 'react-icons/fa6';
-import { FaPencilAlt } from 'react-icons/fa';
-import { IoGitBranch } from 'react-icons/io5';
-import { MdKeyboardArrowDown } from 'react-icons/md';
-import { useTranslation } from 'react-i18next';
-import { WorktreeIntegrationStatus } from '@common/types';
-⋮----
-import { useClickOutside } from '@/hooks/useClickOutside';
-import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import { InlineEditPanel } from '@/components/common/InlineEditPanel';
-import { WorktreeActionDialog } from '@/components/project/WorktreeActionDialog';
-import { Tooltip } from '@/components/ui/Tooltip';
-⋮----
-type Props = {
-  baseDir: string;
-  defaultBranch?: string;
-  onMerge: (targetBranch?: string) => void;
-  onSquash: (targetBranch?: string, commitMessage?: string) => void;
-  onOnlyUncommitted: (targetBranch?: string) => void;
-  onRebaseFromBranch: (fromBranch?: string) => void;
-  onAbortRebase: () => void;
-  onContinueRebase: () => void;
-  onResolveConflictsWithAgent: () => void;
-  onRenameBranch: (newBranchName: string) => Promise<void>;
-  disabled?: boolean;
-  canAbortRebase?: boolean;
-  canContinueRebase?: boolean;
-  canResolveConflictsWithAgent?: boolean;
-  status?: WorktreeIntegrationStatus | null;
-  taskName?: string;
-};
-⋮----
-const handleToggle = () =>
-⋮----
-const handleMergeClick = () =>
-⋮----
-const handleSquashClick = () =>
-⋮----
-const handleOnlyUncommittedClick = () =>
-⋮----
-const handleRebaseClick = () =>
-⋮----
-const handleAbortRebaseClick = () =>
-⋮----
-const handleContinueRebaseClick = () =>
-⋮----
-const handleResolveWithAgentClick = () =>
-⋮----
-const handleAbortRebaseConfirm = () =>
-⋮----
-const handleContinueRebaseConfirm = () =>
-⋮----
-const handleResolveWithAgentConfirm = () =>
-⋮----
-const handleEditBranch = () =>
-⋮----
-const handleBranchEditConfirm = async () =>
-⋮----
-const handleBranchEditCancel = () =>
-⋮----
-title=
-⋮----
-confirmButtonText=
-⋮----
-onConfirm=
-
-================
 File: src/renderer/src/components/project/WorktreeRevertButton.tsx
 ================
 import { useState } from 'react';
@@ -21571,35 +22395,6 @@ tooltip=
 title=
 ⋮----
 confirmButtonText=
-
-================
-File: src/renderer/src/components/project/WorktreeStatusBadges.tsx
-================
-import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
-import { TiWarning } from 'react-icons/ti';
-⋮----
-import type { WorktreeIntegrationStatus } from '@common/types';
-⋮----
-import { Tooltip } from '@/components/ui/Tooltip';
-⋮----
-const formatTruncatedList = (items: string[]) =>
-⋮----
-type Props = {
-  status: WorktreeIntegrationStatus;
-  onRefresh: () => void;
-};
-⋮----
-const renderBadge = (tooltipContent: React.ReactNode, onClick: () => void, children: React.ReactNode) => (
-    <Tooltip content={tooltipContent} maxWidth="none">
-      <span
-        className="px-1.5 py-0.5 rounded bg-bg-secondary text-text-primary text-2xs cursor-pointer hover:bg-bg-secondary-light transition-colors"
-        onClick={onClick}
-      >
-        {children}
-      </span>
-    </Tooltip>
-  );
 
 ================
 File: src/renderer/src/components/PromptField/AudioAnalyzer.tsx
@@ -21967,8 +22762,6 @@ File: src/renderer/src/components/PromptField/TaskWorkingMode.tsx
 ================
 import { SwitchToLocalOptions, SwitchToWorktreeOptions, TaskData, WorkingMode, WorktreeUncommittedFiles } from '@common/types';
 import { useCallback, useEffect, useState, useMemo } from 'react';
-import { AiFillFolderOpen } from 'react-icons/ai';
-import { IoGitBranch } from 'react-icons/io5';
 import { MdClose } from 'react-icons/md';
 import { CgSpinner } from 'react-icons/cg';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -21977,12 +22770,10 @@ import { useTranslation } from 'react-i18next';
 import { registerAction, unregisterAction } from '@/stores/actionsStore';
 import { Button } from '@/components/common/Button';
 import { IconButton } from '@/components/common/IconButton';
-import { useResponsive } from '@/hooks/useResponsive';
-import { WorktreeMergeButton } from '@/components/project/WorktreeMergeButton';
+import { GitBranchesButton } from '@/components/project/GitBranchesButton';
 import { WorktreeRevertButton } from '@/components/project/WorktreeRevertButton';
 import { BaseDialog } from '@/components/common/BaseDialog';
 import { RadioButton } from '@/components/common/RadioButton';
-import { WorktreeStatusBadges } from '@/components/project/WorktreeStatusBadges';
 import { useApi } from '@/contexts/ApiContext';
 import { useWorktreeIntegrationStatus } from '@/hooks/useWorktreeIntegrationStatus';
 import { useCommitChanges } from '@/hooks/useCommitChanges';
@@ -22004,7 +22795,7 @@ type Props = {
   task: TaskData;
   onMerge: (targetBranch?: string) => void;
   onSquash: (targetBranch?: string, commitMessage?: string) => void;
-  onOnlyUncommitted: (targetBranch?: string) => void;
+  onOnlyUncommitted: () => void;
   onRebaseFromBranch: (fromBranch?: string) => void;
   onAbortRebase: () => void;
   onContinueRebase: () => void;
@@ -22043,8 +22834,6 @@ const handleSwitchToLocal = () =>
 const handleSwitchToWorktree = () =>
 ⋮----
 const handleCancelCommit = () =>
-⋮----
-<Button size="xs" variant="text" color="tertiary" onClick=
 ⋮----
 title=
 ⋮----
@@ -23790,13 +24579,14 @@ File: src/renderer/src/components/terminal/Terminal.scss
 ================
 File: src/renderer/src/components/terminal/Terminal.tsx
 ================
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useCallback, ChangeEvent } from 'react';
 import { Ghostty, Terminal as GhosttyTerminal, FitAddon } from 'ghostty-web';
 import { TerminalData, TerminalExitData } from '@common/types';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 ⋮----
 import { useApi } from '@/contexts/ApiContext';
+import { setTabPtyId } from '@/stores/terminalStore';
 ⋮----
 export type TerminalRef = {
   focus: () => void;
@@ -23806,77 +24596,100 @@ export type TerminalRef = {
 };
 ⋮----
 type Props = {
+  sessionKey: string;
+  tabId: string;
   baseDir: string;
   taskId: string;
   visible: boolean;
+  ptyId: string | null;
   className?: string;
-  onExit?: () => void;
 };
 ⋮----
-// Show connecting overlay when WASM is ready but no PTY process exists yet
+const useIsTouchDevice = (): boolean =>
+⋮----
+const listener = (e: MediaQueryListEvent) =>
+⋮----
+// Load the ghostty WASM module once per app, not once per terminal instance
+⋮----
+const loadGhostty = (): Promise<InstanceType<typeof Ghostty>> =>
 ⋮----
 // Initialize ghostty-web WASM once
 ⋮----
-const getGhosttyInit = (): Promise<InstanceType<typeof Ghostty>> =>
-⋮----
 // eslint-disable-next-line no-console
 ⋮----
-// Initialize terminal
+// Initialize terminal emulator once - its lifetime is independent of the PTY session
 ⋮----
 // Handle terminal input
 ⋮----
 // Handle terminal resize
 ⋮----
-// Create terminal process
+// Create the PTY process when visible and no session is attached
 ⋮----
 const createTerminal = async () =>
 ⋮----
-// Handle terminal input
-⋮----
-// Handle terminal resize
-⋮----
 // eslint-disable-next-line no-console
 ⋮----
-// Handle terminal data and exit/restart
+// Attach to the PTY session: reset the emulator, replay the recent output,
+// and only then subscribe to live events so no output is rendered twice
 ⋮----
 const handleTerminalData = (data: TerminalData) =>
 ⋮----
 const handleTerminalExit = (data: TerminalExitData) =>
 ⋮----
+const subscribe = () =>
+⋮----
+const attach = async () =>
+⋮----
+// eslint-disable-next-line no-console
+⋮----
+// A freshly created PTY has an empty buffer - subscribe directly without a replay round trip
+⋮----
 // Handle restart on keypress after exit
-⋮----
-const handleRestartInput = () =>
-⋮----
-// Clear terminalId to trigger re-creation via the createTerminal effect
 ⋮----
 // Handle resize when visibility changes
 ⋮----
-// Cleanup on unmount
+// Touch input: forward soft keyboard input to the PTY
+⋮----
+const handleKeyDown = (e: KeyboardEvent) =>
+⋮----
+const handleBeforeInput = (e: InputEvent) =>
+⋮----
+const restartSession = () =>
+⋮----
+const handleTouchInputChange = (e: ChangeEvent<HTMLTextAreaElement>) =>
+⋮----
+const handleContainerPointerDown = () =>
 ⋮----
 const handleTerminalFocus = () =>
 ⋮----
 const handleTerminalBlur = () =>
+⋮----
+<div className=
 
 ================
 File: src/renderer/src/components/terminal/TerminalView.tsx
 ================
-import { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
+import { useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { IoMdAdd, IoMdClose, IoMdRemove } from 'react-icons/io';
 import { BiCopy } from 'react-icons/bi';
 import { clsx } from 'clsx';
-import { v4 as uuidv4 } from 'uuid';
 import { useTranslation } from 'react-i18next';
 ⋮----
 import { Terminal as TerminalComponent, TerminalRef } from '@/components/terminal/Terminal';
 import { IconButton } from '@/components/common/IconButton';
+import {
+  getSessionKey,
+  useTerminalStore,
+  useTerminalTabs,
+  useActiveTerminalTabId,
+  addTerminalTab,
+  removeTerminalTab,
+  setActiveTerminalTab,
+} from '@/stores/terminalStore';
+import { useApi } from '@/contexts/ApiContext';
 ⋮----
 export type TerminalViewRef = {
   resize: () => void;
-};
-⋮----
-type TerminalTab = {
-  id: string;
-  terminalId: string | null;
 };
 ⋮----
 type Props = {
@@ -23892,16 +24705,16 @@ type Props = {
 ⋮----
 // Create a new terminal tab
 ⋮----
-// Close a terminal tab
+// Close a terminal tab and kill its PTY process
 const closeTerminalTab = (tabId: string) =>
 ⋮----
-// If we're closing the active tab, activate the previous one
+// Ensure there is at least one tab when the terminal view becomes visible
+⋮----
+// Only react to visibility changes, not to tab count changes
 ⋮----
 // Focus the active terminal when the terminal view becomes visible
 ⋮----
 // Small delay to ensure terminal is rendered
-⋮----
-// eslint-disable-next-line react-hooks/set-state-in-effect
 ⋮----
 // Handle copying terminal output
 const handleCopyOutput = () =>
@@ -23912,8 +24725,6 @@ const handleCopyOutput = () =>
 onClick=
 ⋮----
 {/* Terminal content */}
-⋮----
-onExit=
 
 ================
 File: src/renderer/src/components/ui/Tooltip.tsx
@@ -24453,6 +25264,7 @@ import type { TreeItem } from './types';
 ⋮----
 import { Input } from '@/components/common/Input';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { TriStateCheckbox, type TriState } from '@/components/common/TriStateCheckbox';
 ⋮----
 type GroupTree = {
   group: DiffModalGroup;
@@ -24460,13 +25272,20 @@ type GroupTree = {
   files: UpdatedFile[];
 };
 ⋮----
+const collectDescendantFilePaths = (treeData: Record<string, TreeItem>, nodeId: string): string[] =>
+⋮----
 type Props = {
   groups: DiffModalGroup[];
   currentFile: UpdatedFile | null;
   onFileSelect: (file: UpdatedFile) => void;
+  selectedFilePaths: Set<string>;
+  onToggleFileSelection: (filePath: string, selected: boolean) => void;
+  onToggleFolderSelection: (filePaths: string[], selected: boolean) => void;
 };
 ⋮----
 // eslint-disable-next-line react-hooks/set-state-in-effect
+⋮----
+// Only uncommitted files can be selected for commit, so checkboxes are shown only for the uncommitted group
 ⋮----
 const handleExpandItem = (item: TreeItem) =>
 ⋮----
@@ -24476,6 +25295,7 @@ const handleClick = () =>
 ⋮----
 const renderChevron = () =>
 ⋮----
+const handleToggleSelection = () =>
 
 ================
 File: src/renderer/src/components/Workspace/EmptyContextInfo.tsx
@@ -25038,6 +25858,12 @@ type Props = {
 ⋮----
 // Flatten groups into a single file list for navigation
 ⋮----
+// Files eligible for commit: only uncommitted files (committed files are shown for reference only)
+⋮----
+// Files selected for commit: all committable files minus explicitly deselected ones
+⋮----
+// Reset selection to all files whenever the committable file list changes (e.g. after a commit)
+⋮----
 // Cumulative file counts per group for rendering offsets in all-files view
 ⋮----
 // Find the position of a file in the flat list, matching by path and commitHash.
@@ -25079,8 +25905,6 @@ className=
 ⋮----
 {/* Main content area: file sidebar on left, diff viewer center, comments panel right */}
 ⋮----
-{/* Diff viewer with its own scroll - scrollbar right next to the file */}
-⋮----
 comments=
 ⋮----
 {/* Right side: Comments panel */}
@@ -25105,7 +25929,7 @@ import { useTranslation } from 'react-i18next';
 import { TbGitCommit, TbGitPullRequestDraft } from 'react-icons/tb';
 import { RiEyeLine, RiEyeOffLine } from 'react-icons/ri';
 ⋮----
-import { createFileTree } from './types';
+import { createFileTree, normalizePath } from './types';
 import { SectionLoading } from './SectionLoading';
 import { SectionContent } from './SectionContent';
 import { UpdatedFilesDiffModal } from './UpdatedFilesDiffModal';
@@ -25160,6 +25984,8 @@ className=
 // eslint-disable-next-line no-console
 ⋮----
 // eslint-disable-next-line no-console
+⋮----
+// Optimistically mark the file as tracked; authoritative data arrives via the updatedFilesUpdated event
 ⋮----
 // eslint-disable-next-line no-console
 ⋮----
@@ -26029,7 +26855,7 @@ import { showErrorNotification, showSuccessNotification } from '@/utils/notifica
 ⋮----
 type UseCommitChanges = {
   isCommitting: boolean;
-  commit: (message: string, amend: boolean) => Promise<void>;
+  commit: (message: string, amend: boolean, filePaths?: string[]) => Promise<void>;
   cancelCommit: () => void;
 };
 ⋮----
@@ -26187,6 +27013,8 @@ File: src/renderer/src/hooks/useOverlayFocusRestore.ts
 import { useEffect, useRef } from 'react';
 ⋮----
 import { useOverlayStore } from '@/stores/overlayStore';
+⋮----
+const isEditableElement = (element: Element | null): element is HTMLElement
 ⋮----
 export const useOverlayRegistration = (id: string, isOpen: boolean) =>
 ⋮----
@@ -26432,6 +27260,7 @@ File: src/renderer/src/hooks/useTaskLogHandlers.ts
 import { useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuidv4 } from 'uuid';
+import { isLogMessage } from '@common/types';
 ⋮----
 import type { LogData, LogMessage, LoadingMessage, Message } from '@common/types';
 ⋮----
@@ -28085,7 +28914,7 @@ export const useTaskAutocompletionWords = (taskDir: string | undefined)
 File: src/renderer/src/stores/taskStore.ts
 ================
 import { useShallow } from 'zustand/react/shallow';
-import { ContextFile, ModelsData, QueuedPromptData, QuestionData, TodoItem, TokensInfoData, Message } from '@common/types';
+import { ContextFile, ModelsData, QueuedPromptData, QuestionData, TodoItem, TokensInfoData, Message, isLogMessage, isLoadingMessage } from '@common/types';
 import { createWithEqualityFn } from 'zustand/traditional';
 import { shallow } from 'zustand/vanilla/shallow';
 import { devtools } from 'zustand/middleware';
@@ -28126,6 +28955,8 @@ export const updateTaskState = (taskId: string, updates: Partial<TaskState>)
 ⋮----
 export const setMessages = (taskId: string, updateMessages: (prev: Message[])
 ⋮----
+export const removeMessageActionId = (taskId: string, messageId: string, actionId: string)
+⋮----
 export const setTodoItems = (taskId: string, updateTodoItems: (prev: TodoItem[])
 ⋮----
 export const setTokensInfo = (taskId: string, tokensInfo: TokensInfoData | null)
@@ -28159,6 +28990,61 @@ export const useTaskQueuedPrompts = (taskId: string)
 export const useTaskMessages = (taskId: string)
 ⋮----
 export const useTaskLoaded = (taskId: string)
+
+================
+File: src/renderer/src/stores/terminalStore.ts
+================
+import { useShallow } from 'zustand/react/shallow';
+import { createWithEqualityFn } from 'zustand/traditional';
+import { shallow } from 'zustand/vanilla/shallow';
+import { devtools } from 'zustand/middleware';
+import { v4 as uuidv4 } from 'uuid';
+⋮----
+export type TerminalTab = {
+  id: string;
+  ptyId: string | null;
+};
+⋮----
+export const getSessionKey = (baseDir: string, taskId: string): string => `$
+⋮----
+interface TerminalState {
+  tabsMap: Map<string, TerminalTab[]>;
+  activeTabMap: Map<string, string | null>;
+  visibleMap: Map<string, boolean>;
+}
+⋮----
+interface TerminalActions {
+  addTab: (sessionKey: string) => string;
+  removeTab: (sessionKey: string, tabId: string) => void;
+  setActiveTab: (sessionKey: string, tabId: string) => void;
+  setVisible: (sessionKey: string, visible: boolean) => void;
+  setTabPtyId: (sessionKey: string, tabId: string, ptyId: string | null) => void;
+  handlePtyExit: (ptyId: string) => void;
+}
+⋮----
+type TerminalStore = TerminalState & TerminalActions;
+⋮----
+// Module-level action functions (no hook subscription required)
+export const addTerminalTab = (sessionKey: string)
+⋮----
+export const removeTerminalTab = (sessionKey: string, tabId: string)
+⋮----
+export const setActiveTerminalTab = (sessionKey: string, tabId: string)
+⋮----
+export const setTerminalVisible = (sessionKey: string, visible: boolean)
+⋮----
+export const toggleTerminalVisible = (sessionKey: string)
+⋮----
+export const setTabPtyId = (sessionKey: string, tabId: string, ptyId: string | null)
+⋮----
+export const handlePtyExit = (ptyId: string)
+⋮----
+// Selector hooks for optimized re-renders
+export const useTerminalTabs = (sessionKey: string): TerminalTab[]
+⋮----
+export const useActiveTerminalTabId = (sessionKey: string): string | null
+⋮----
+export const useTerminalVisible = (sessionKey: string): boolean
 
 ================
 File: src/renderer/src/themes/theme-aurora.scss
@@ -30757,6 +31643,7 @@ import { ModelProviderProvider } from '@/contexts/ModelProviderContext';
 import { AgentsProvider } from '@/contexts/AgentsContext';
 import { McpServersProvider } from '@/contexts/McpServersContext';
 import { ModalOverlayUrlViewer } from '@/components/common/ModalOverlayUrlViewer';
+import { InputPromptDialog } from '@/components/common/InputPromptDialog';
 import { UpdatedFilesDiff } from '@/pages/UpdatedFilesDiff';
 import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
 import { DiffsWorkerPoolProvider } from '@/contexts/DiffsWorkerPoolContext';
@@ -31232,7 +32119,7 @@ File: package.json
 ================
 {
   "name": "aider-desk",
-  "version": "0.81.0-dev",
+  "version": "0.83.0-dev",
   "description": "Aider desktop application wrapper",
   "main": "./out/main/index.js",
   "author": "Hotovo",
@@ -31390,7 +32277,7 @@ File: package.json
     "react-diff-view": "3.3.2",
     "react-hotkeys-hook": "4.6.2",
     "react-i18next": "15.7.4",
-    "react-icons": "5.5.0",
+    "react-icons": "5.7.0",
     "react-markdown": "10.1.0",
     "react-resizable": "3.1.3",
     "react-rnd": "10.5.3",

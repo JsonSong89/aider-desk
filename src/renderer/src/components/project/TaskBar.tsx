@@ -168,10 +168,12 @@ export const TaskBar = forwardRef<TaskBarRef, Props>(
 
     useImperativeHandle(ref, () => ({
       openMainModelSelector: (model) => {
-        if (mode === 'architect') {
-          architectModelSelectorRef.current?.open(model);
+        if (mode === 'architect' && architectModelSelectorRef.current) {
+          architectModelSelectorRef.current.open(model);
+        } else if (mainModelSelectorRef.current) {
+          mainModelSelectorRef.current.open(model);
         } else {
-          mainModelSelectorRef.current?.open(model);
+          agentModelSelectorRef.current?.open(model);
         }
       },
       openAgentModelSelector: (model) => {
@@ -385,24 +387,21 @@ export const TaskBar = forwardRef<TaskBarRef, Props>(
       }
     }, [api, baseDir, task.id, task.worktree]);
 
-    const handleOnlyUncommitted = useCallback(
-      async (targetBranch?: string) => {
-        if (!task.worktree) {
-          return;
-        }
+    const handleOnlyUncommitted = useCallback(async () => {
+      if (!task.worktree) {
+        return;
+      }
 
-        setIsMerging(true);
-        try {
-          await api.applyUncommittedChanges(baseDir, task.id, targetBranch);
-        } catch (error) {
-          // eslint-disable-next-line no-console
-          console.error('Failed to apply uncommitted changes:', error);
-        } finally {
-          setIsMerging(false);
-        }
-      },
-      [api, baseDir, task.id, task.worktree],
-    );
+      setIsMerging(true);
+      try {
+        await api.applyUncommittedChanges(baseDir, task.id);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to apply uncommitted changes:', error);
+      } finally {
+        setIsMerging(false);
+      }
+    }, [api, baseDir, task.id, task.worktree]);
 
     const handleRevert = useCallback(async () => {
       setIsMerging(true);
@@ -418,7 +417,7 @@ export const TaskBar = forwardRef<TaskBarRef, Props>(
 
     const handleRenameBranch = useCallback(
       async (newBranchName: string) => {
-        await api.renameWorktreeBranch(baseDir, task.id, newBranchName);
+        await api.renameGitBranch(baseDir, task.id, newBranchName);
       },
       [api, baseDir, task.id],
     );
