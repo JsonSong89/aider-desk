@@ -1,5 +1,48 @@
 # Changelog
 
+## [UNRELEASED]
+
+- added Copy Task ID to command palette
+- added optional description for bash tool commands displayed in tool messages
+- improved add file to Git action to update file state optimistically without refetching
+- added task management actions to command palette (create subtask/sibling, rename, change state)
+- fixed Copy Task ID label capitalization
+- fixed worktree rebase silently dropping commits when the tracked base commit is stale
+- fixed unhandled promise rejections crashing the app and prevented checkout from detaching the main repository branch
+- carry over uncommitted changes when switching to local after checkoutless merge
+- added automatic renderer crash recovery with reloading and crash loop protection
+- fixed event delivery errors when sending to destroyed or crashed windows
+- fixed chat auto-scroll to pause only on upward scrolling and reliably resume when returning to the bottom
+- added interactive authentication and passphrase prompts for Git operations
+- fixed queued custom commands appearing as user prompts; they now run directly from the queue and queue correctly while another prompt is running
+- prevent Escape key from interrupting task processing while typing in the prompt field
+- improved terminal sessions to persist when switching tasks or projects, with output replay on reattach, restart after session exit, and touch input support
+- fixed tool message status icons shrinking when the message content is long
+- fixed subtask inheriting parent worktree when working mode is overridden to local
+- added ability to select which changed files to commit in the updated files diff view
+- fixed branches dropdown not refreshing after branch switch or rebase completion
+- added ability to copy chat messages as an image to clipboard
+- improved git branches tooltip with icons and added rebase hint for worktrees behind their base branch
+
+## [0.82.0]
+
+- improved create task tool description and worktree inheritance
+- added git branch management
+- added support for checkoutless merge/squash for worktree operations
+- added x-opencode-session header to OpenCode Go provider
+- fixed worktree commit tracking and operations to use base branch
+- added confirmation dialog and force option for git push
+- fixed working mode switch dialog staying open and appearing frozen while switching
+- added ability to delete stored memories from the store memory tool message
+- added Resolve with AI action for failed git operations to fix errors with agent assistance
+- added automatic retry for transient network errors during window load to prevent blank window
+- added distinct "Create subtask" label when creating subtasks in the create task tool message
+- added git actions to the command palette with configurable hotkeys
+- fixed worktree integration checks failing when worktree directory no longer exists
+- added atomic context saving and corrupt recovery
+- optmized loading of available extensions
+- added ignoreGitignore input parameter for grep tool to search inside gitignored files
+
 ## [0.81.0]
 
 - added support for nested subtasks

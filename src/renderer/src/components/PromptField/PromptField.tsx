@@ -998,9 +998,6 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
                 setHistoryMenuVisible(false);
                 setHighlightedHistoryItemIndex(-1);
                 return true;
-              } else if (processing) {
-                interruptResponse();
-                return true;
               }
               return false;
             },

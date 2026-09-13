@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-import { AgentProfile, CreateTaskParams, DefaultTaskState, ModeDefinition, ProjectSettings, SettingsData, TaskData } from '@common/types';
+import { AgentProfile, BranchInfo, CreateTaskParams, DefaultTaskState, ModeDefinition, ProjectSettings, SettingsData, TaskData } from '@common/types';
 import { fileExists } from '@common/utils';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -16,7 +16,7 @@ import { TelemetryManager } from '@/telemetry';
 import { EventManager } from '@/events';
 import { INTERNAL_TASK_ID, Task } from '@/task';
 import { migrateSessionsToTasks } from '@/project/migrations';
-import { WorktreeManager } from '@/worktrees';
+import { GitManager } from '@/git';
 import { MemoryManager } from '@/memory/memory-manager';
 import { PromptsManager } from '@/prompts';
 import { ExtensionManager } from '@/extensions/extension-manager';
@@ -43,7 +43,7 @@ export class Project {
     private readonly dataManager: DataManager,
     private readonly eventManager: EventManager,
     private readonly modelManager: ModelManager,
-    private readonly worktreeManager: WorktreeManager,
+    private readonly gitManager: GitManager,
     private readonly agentProfileManager: AgentProfileManager,
     private readonly memoryManager: MemoryManager,
     private readonly promptsManager: PromptsManager,
@@ -151,6 +151,11 @@ export class Project {
       Object.assign(taskData, extResult.task);
     }
 
+    // Local mode must never carry a worktree (e.g. inherited from parent while workingMode was overridden to local)
+    if (taskData.workingMode === 'local') {
+      taskData.worktree = undefined;
+    }
+
     const task = await this.prepareTask(undefined, taskData);
     if (params?.sendEvent !== false) {
       this.eventManager.sendTaskCreated(task.task, params?.activate);
@@ -187,7 +192,7 @@ export class Project {
       this.dataManager,
       this.eventManager,
       this.modelManager,
-      this.worktreeManager,
+      this.gitManager,
       this.memoryManager,
       this.promptsManager,
       this.extensionManager,
@@ -410,7 +415,7 @@ export class Project {
     }
 
     try {
-      await this.worktreeManager.removeWorktree(this.baseDir, taskData.worktree, true);
+      await this.gitManager.removeWorktree(this.baseDir, taskData.worktree, true);
     } catch (error) {
       logger.warn('Failed to remove worktree during task deletion', {
         baseDir: this.baseDir,
@@ -635,6 +640,10 @@ export class Project {
     });
   }
 
+  public listBranches(): Promise<BranchInfo[]> {
+    return this.gitManager.listBranches(this.baseDir);
+  }
+
   async close() {
     await this.startPromise;
     this.startPromise = null;
@@ -647,7 +656,7 @@ export class Project {
     await this.promptsManager.unwatchProject(this.baseDir);
     this.extensionManager.stopProjectWatcher(this.baseDir);
     await Promise.all(Array.from(this.tasks.values()).map((task) => task.close()));
-    await this.worktreeManager.close(this.baseDir);
+    await this.gitManager.close(this.baseDir);
 
     // Remove watch-files lock file if it exists
     const lockFilePath = path.join(this.baseDir, AIDER_DESK_WATCH_FILES_LOCK);

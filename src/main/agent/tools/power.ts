@@ -431,9 +431,13 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         .describe('The number of lines of context to show before and after each matching line. Default: 0.'),
       caseSensitive: coerceBoolean.optional().default(false).describe('Whether the search should be case sensitive. Default: false.'),
       maxResults: z.coerce.number().int().min(1).optional().default(50).describe('Maximum number of results to return. Default: 50.'),
+      ignoreGitignore: coerceBoolean
+        .optional()
+        .default(false)
+        .describe('Whether to include files ignored by .gitignore, .ignore or .rgignore files. Default: false.'),
     }),
     execute: async (input, { toolCallId }) => {
-      const { filePattern, searchTerm, contextLines, caseSensitive, maxResults } = input;
+      const { filePattern, searchTerm, contextLines, caseSensitive, maxResults, ignoreGitignore } = input;
       task.addToolMessage(
         toolCallId,
         TOOL_GROUP_NAME,
@@ -444,6 +448,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
           contextLines,
           caseSensitive,
           maxResults,
+          ignoreGitignore,
         },
         undefined,
         undefined,
@@ -467,6 +472,10 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
 
       try {
         const rgArgs: string[] = ['--no-heading', '--line-number', '--color', 'never', '--max-columns', '2000', '--max-columns-preview'];
+
+        if (ignoreGitignore) {
+          rgArgs.push('--no-ignore');
+        }
 
         if (!caseSensitive) {
           rgArgs.push('-i');
@@ -722,11 +731,12 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
     description: POWER_TOOL_DESCRIPTIONS[TOOL_BASH],
     inputSchema: z.object({
       command: z.string().min(1).describe('The shell command to execute (e.g., ls -la, npm install).'),
+      description: z.string().optional().describe('Optional short description of the command intent (e.g., "Install dependencies").'),
       cwd: z.string().optional().describe('The working directory for the command (relative to <WorkingDirectory>). Default: <WorkingDirectory>.'),
       timeout: z.coerce.number().int().min(0).optional().default(120000).describe('Timeout for the command execution in milliseconds. Default: 120000 ms.'),
     }),
     execute: async (input, { toolCallId }) => {
-      const { command, cwd, timeout } = input;
+      const { command, cwd, timeout, description } = input;
       const expandedCwd = cwd ? expandTilde(cwd) : cwd;
       task.addToolMessage(
         toolCallId,
@@ -734,6 +744,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
         TOOL_BASH,
         {
           command,
+          description,
           cwd,
           timeout,
         },
@@ -843,7 +854,7 @@ Do not use escape characters \\ in the string like \\n or \\" and others. Do not
             toolCallId,
             TOOL_GROUP_NAME,
             TOOL_BASH,
-            { command, cwd, timeout },
+            { command, description, cwd, timeout },
             JSON.stringify({
               stdout: stdoutAccumulator.getPreview(BASH_STREAMING_PREVIEW_CHARS),
               stderr: stderrAccumulator.getPreview(BASH_STREAMING_PREVIEW_CHARS),

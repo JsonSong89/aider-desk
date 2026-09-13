@@ -73,6 +73,8 @@ const VirtualizedMessagesComponent = forwardRef<VirtualizedMessagesRef, Props>(
     const [scrollingPaused, setScrollingPaused] = useState(false);
     const scrollingPausedRef = useRef(false);
     const isProgrammaticScrollRef = useRef(false);
+    const prevScrollTopRef = useRef(0);
+    const pointerDownRef = useRef(false);
 
     const updateScrollingPaused = useCallback((paused: boolean) => {
       scrollingPausedRef.current = paused;
@@ -82,6 +84,7 @@ const VirtualizedMessagesComponent = forwardRef<VirtualizedMessagesRef, Props>(
     const handleListRef = useCallback((node: LegendListRef | null) => {
       listRef.current = node;
       const element = node?.getScrollableNode();
+      prevScrollTopRef.current = element?.scrollTop ?? 0;
       setScrollContainer(element ? (element as HTMLDivElement) : null);
     }, []);
 
@@ -119,14 +122,28 @@ const VirtualizedMessagesComponent = forwardRef<VirtualizedMessagesRef, Props>(
         }
       };
 
+      const handlePointerDown = () => {
+        pointerDownRef.current = true;
+      };
+
+      const handlePointerUp = () => {
+        pointerDownRef.current = false;
+      };
+
       element.addEventListener('wheel', handleWheel);
       element.addEventListener('touchstart', handleTouchStart, { passive: true });
       element.addEventListener('touchmove', handleTouchMove, { passive: true });
+      element.addEventListener('pointerdown', handlePointerDown);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerUp);
 
       return () => {
         element.removeEventListener('wheel', handleWheel);
         element.removeEventListener('touchstart', handleTouchStart);
         element.removeEventListener('touchmove', handleTouchMove);
+        element.removeEventListener('pointerdown', handlePointerDown);
+        window.removeEventListener('pointerup', handlePointerUp);
+        window.removeEventListener('pointercancel', handlePointerUp);
       };
     }, [scrollContainer, updateScrollingPaused]);
 
@@ -147,6 +164,7 @@ const VirtualizedMessagesComponent = forwardRef<VirtualizedMessagesRef, Props>(
         if (!scrollingPausedRef.current) {
           const target = effectiveScrollHeight - element.clientHeight;
           if (Math.abs(element.scrollTop - target) > 2) {
+            isProgrammaticScrollRef.current = true;
             element.scrollTop = target;
           }
         }
@@ -171,21 +189,32 @@ const VirtualizedMessagesComponent = forwardRef<VirtualizedMessagesRef, Props>(
       const tempPaddingBottom = parseFloat(content?.style.paddingBottom ?? '') || 0;
       const target = element.scrollHeight - element.clientHeight - tempPaddingBottom;
       if (Math.abs(element.scrollTop - target) > 2) {
+        isProgrammaticScrollRef.current = true;
         element.scrollTop = target;
       }
     }, [processedMessages]);
 
     const handleScrollState = useCallback(() => {
-      const state = listRef.current?.getState();
-      if (state?.isAtEnd) {
-        if (isProgrammaticScrollRef.current) {
-          return;
-        }
-        updateScrollingPaused(false);
-      } else {
-        isProgrammaticScrollRef.current = false;
+      const element = scrollContainer;
+      if (!element) {
+        return;
       }
-    }, [updateScrollingPaused]);
+      const scrollTop = element.scrollTop;
+      const scrolledUp = scrollTop < prevScrollTopRef.current - 1;
+      prevScrollTopRef.current = scrollTop;
+      if (isProgrammaticScrollRef.current) {
+        isProgrammaticScrollRef.current = false;
+        return;
+      }
+      const content = element.querySelector('.legend-list-content-container') as HTMLElement | null;
+      const tempPaddingBottom = parseFloat(content?.style.paddingBottom ?? '') || 0;
+      const distanceFromEnd = element.scrollHeight - tempPaddingBottom - scrollTop - element.clientHeight;
+      if (distanceFromEnd <= 2) {
+        updateScrollingPaused(false);
+      } else if (scrolledUp && distanceFromEnd > 30 && pointerDownRef.current) {
+        updateScrollingPaused(true);
+      }
+    }, [scrollContainer, updateScrollingPaused]);
 
     const scrollToBottom = useCallback(() => {
       updateScrollingPaused(false);

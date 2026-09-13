@@ -4,12 +4,14 @@ import fs from 'fs/promises';
 import {
   AgentProfile,
   AutonomyMode,
+  BranchInfo,
   CloudflareTunnelStatus,
   CommandsData,
   CreateTaskParams,
   EditFormat,
   EnvironmentVariable,
   FileEdit,
+  GitSyncCommits,
   InstalledExtension,
   ExtensionToolInfo,
   McpOAuthStatusData,
@@ -46,6 +48,7 @@ import { isBinary } from 'istextorbinary';
 
 import type { ModeDefinition, ExtensionConfigComponent, ExtensionOperationResult, ExtensionUIComponent } from '@common/types';
 import type { WindowManager } from '@/window-manager';
+import type { GitAskpassManager } from '@/git/git-askpass-manager';
 
 import { McpManager, McpConfigManager, AgentProfileManager } from '@/agent';
 import { MemoryManager } from '@/memory/memory-manager';
@@ -95,6 +98,7 @@ export class EventsHandler {
     private readonly networkManager: NetworkManager,
     private readonly promptsManager: PromptsManager,
     private readonly windowManager?: WindowManager,
+    private readonly gitAskpassManager?: GitAskpassManager,
   ) {}
 
   private cloneAbortController: AbortController | null = null;
@@ -318,10 +322,7 @@ export class EventsHandler {
   }
 
   async handoffConversation(baseDir: string, taskId: string, focus?: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error('Task not found');
-    }
+    const task = this.getTaskOrThrow(baseDir, taskId);
     const mode = this.store.getProjectSettings(baseDir).currentMode || 'agent';
     await task.handoffConversation(mode, focus);
   }
@@ -427,11 +428,7 @@ export class EventsHandler {
   }
 
   async waitForTaskIdle(baseDir: string, taskId: string): Promise<void> {
-    const project = this.projectManager.getProject(baseDir);
-    const task = project?.getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found in project ${baseDir}`);
-    }
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.waitForIdle();
   }
 
@@ -466,6 +463,10 @@ export class EventsHandler {
 
   async answerQuestion(baseDir: string, taskId: string, answer: string): Promise<void> {
     await this.projectManager.getProject(baseDir).getTask(taskId)?.answerQuestion(answer);
+  }
+
+  respondInputPrompt(id: string, value: string | null, rememberSession?: boolean): void {
+    this.gitAskpassManager?.respond(id, value, rememberSession);
   }
 
   removeQueuedPrompt(baseDir: string, taskId: string, promptId: string): void {
@@ -662,6 +663,10 @@ export class EventsHandler {
     return terminal ? terminal.id : null;
   }
 
+  getTerminalBuffer(terminalId: string): { exists: boolean; data: string } {
+    return this.terminalManager.getTerminalBuffer(terminalId);
+  }
+
   getTerminalsForTask(taskId: string): {
     id: string;
     taskId: string;
@@ -679,12 +684,16 @@ export class EventsHandler {
     }));
   }
 
-  async mergeWorktreeToMain(baseDir: string, taskId: string, squash: boolean, targetBranch?: string, commitMessage?: string): Promise<void> {
+  private getTaskOrThrow(baseDir: string, taskId: string) {
     const task = this.projectManager.getProject(baseDir).getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
+    return task;
+  }
 
+  async mergeWorktreeToMain(baseDir: string, taskId: string, squash: boolean, targetBranch?: string, commitMessage?: string): Promise<void> {
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.mergeWorktreeToMain(squash, targetBranch, commitMessage);
   }
 
@@ -693,11 +702,7 @@ export class EventsHandler {
     taskId: string,
     options?: { mergeBeforeSwitch?: boolean; targetBranch?: string; switchAllInWorktree?: boolean },
   ): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.switchToLocalWorkingMode(options);
   }
 
@@ -706,56 +711,32 @@ export class EventsHandler {
     taskId: string,
     options?: { carryOverUncommittedChanges?: boolean; dropSourceChanges?: boolean },
   ): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.switchToWorktreeWorkingMode(options);
   }
 
   async getLocalUncommittedFiles(baseDir: string, taskId: string): Promise<{ count: number; files: string[] }> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     return await task.getLocalUncommittedFiles();
   }
 
-  async applyUncommittedChanges(baseDir: string, taskId: string, targetBranch?: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
-    await task.applyUncommittedChanges(targetBranch);
+  async applyUncommittedChanges(baseDir: string, taskId: string): Promise<void> {
+    const task = this.getTaskOrThrow(baseDir, taskId);
+    await task.applyUncommittedChanges();
   }
 
   async revertLastMerge(baseDir: string, taskId: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.revertLastMerge();
   }
 
   async addFileToGit(baseDir: string, taskId: string, filePath: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.addFileToGit(filePath);
   }
 
   async restoreFile(baseDir: string, taskId: string, filePath: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.restoreFile(filePath);
   }
 
@@ -790,89 +771,101 @@ export class EventsHandler {
     }
   }
 
-  async generateCommitMessage(baseDir: string, taskId: string): Promise<string> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
-    return await task.generateCommitMessage();
+  async generateCommitMessage(baseDir: string, taskId: string, filePaths?: string[]): Promise<string> {
+    const task = this.getTaskOrThrow(baseDir, taskId);
+    return await task.generateCommitMessage(filePaths);
   }
 
-  async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
-    await task.commitChanges(message, amend);
+  async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean, filePaths?: string[]): Promise<void> {
+    const task = this.getTaskOrThrow(baseDir, taskId);
+    await task.commitChanges(message, amend, filePaths);
   }
 
   cancelCommitChanges(baseDir: string, taskId: string): void {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     task.cancelCommitChanges();
   }
 
-  async listBranches(projectDir: string): Promise<Array<{ name: string; isCurrent: boolean; hasWorktree: boolean }>> {
-    return await this.projectManager.worktreeManager.listBranches(projectDir);
+  async listBranches(baseDir: string): Promise<BranchInfo[]> {
+    return await this.projectManager.getProject(baseDir).listBranches();
+  }
+
+  async listGitBranches(baseDir: string, taskId: string, includeRemote?: boolean): Promise<BranchInfo[]> {
+    return await this.getTaskOrThrow(baseDir, taskId).listGitBranches(includeRemote);
+  }
+
+  async getSyncCommits(baseDir: string, taskId: string, targetBranch?: string): Promise<GitSyncCommits> {
+    return await this.getTaskOrThrow(baseDir, taskId).getSyncCommits(targetBranch);
+  }
+
+  async createGitBranch(baseDir: string, taskId: string, name: string, startPoint?: string, checkout?: boolean): Promise<void> {
+    await this.getTaskOrThrow(baseDir, taskId).createGitBranch(name, startPoint, checkout);
+  }
+
+  async checkoutGitBranch(baseDir: string, taskId: string, branch: string, createTracking?: boolean, takeOver?: boolean): Promise<void> {
+    await this.getTaskOrThrow(baseDir, taskId).checkoutGitBranch(branch, createTracking, takeOver);
+  }
+
+  async deleteGitBranch(baseDir: string, taskId: string, branch: string, force?: boolean): Promise<void> {
+    await this.getTaskOrThrow(baseDir, taskId).deleteGitBranch(branch, force);
+  }
+
+  async mergeIntoCurrentBranch(baseDir: string, taskId: string, branch: string): Promise<{ conflictedFiles?: string[] }> {
+    return await this.getTaskOrThrow(baseDir, taskId).mergeIntoCurrentBranch(branch);
+  }
+
+  async rebaseOntoBranch(baseDir: string, taskId: string, branch: string): Promise<{ conflictedFiles?: string[] }> {
+    return await this.getTaskOrThrow(baseDir, taskId).rebaseOntoBranch(branch);
+  }
+
+  async updateGitBranch(baseDir: string, taskId: string, branchName: string): Promise<{ output: string }> {
+    return await this.getTaskOrThrow(baseDir, taskId).updateGitBranch(branchName);
+  }
+
+  async gitPull(baseDir: string, taskId: string, rebase?: boolean): Promise<{ output: string }> {
+    return await this.getTaskOrThrow(baseDir, taskId).gitPull(rebase);
+  }
+
+  async gitPush(baseDir: string, taskId: string, force?: boolean, setUpstream?: boolean): Promise<{ output: string }> {
+    return await this.getTaskOrThrow(baseDir, taskId).gitPush(force, setUpstream);
   }
 
   async getWorktreeIntegrationStatus(baseDir: string, taskId: string, targetBranch?: string) {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     return await task.getWorktreeIntegrationStatus(targetBranch);
   }
 
   async rebaseWorktreeFromBranch(baseDir: string, taskId: string, fromBranch?: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.rebaseWorktreeFromBranch(fromBranch);
   }
 
   async abortWorktreeRebase(baseDir: string, taskId: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.abortWorktreeRebase();
   }
 
   async continueWorktreeRebase(baseDir: string, taskId: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.continueWorktreeRebase();
   }
 
   async resolveConflictsWithAgent(baseDir: string, taskId: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
-
+    const task = this.getTaskOrThrow(baseDir, taskId);
     await task.resolveConflictsWithAgent();
   }
 
-  async renameWorktreeBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void> {
-    const task = this.projectManager.getProject(baseDir).getTask(taskId);
-    if (!task) {
-      throw new Error(`Task ${taskId} not found`);
-    }
+  async resolveGitErrorWithAgent(baseDir: string, taskId: string): Promise<void> {
+    const task = this.getTaskOrThrow(baseDir, taskId);
+    await task.resolveGitErrorWithAgent();
+  }
 
-    await task.renameWorktreeBranch(newBranchName);
+  async renameGitBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void> {
+    await this.getTaskOrThrow(baseDir, taskId).renameGitBranch(newBranchName);
+  }
+
+  async renameWorktreeBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void> {
+    await this.renameGitBranch(baseDir, taskId, newBranchName);
   }
 
   async scrapeWeb(baseDir: string, taskId: string, url: string, filePath?: string): Promise<void> {
@@ -956,6 +949,7 @@ export class EventsHandler {
   }
 
   async deleteTask(baseDir: string, id: string): Promise<void> {
+    this.terminalManager.closeTerminalsForTask(id);
     await this.projectManager.getProject(baseDir).deleteTask(id);
   }
 

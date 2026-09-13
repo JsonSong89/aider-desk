@@ -24,6 +24,8 @@ export const CreateTaskToolMessage = ({ message, onRemove, compact = false, onFo
   const agentProfileId = (message.args.agentProfileId as string) || '';
   const name = message.args.name as string | undefined;
   const parentTaskId = message.args.parentTaskId as string | null | undefined;
+  const asSubtask = message.args.asSubtask as boolean | undefined;
+  const isSubtask = asSubtask === true || parentTaskId !== undefined;
   const modelId = (message.args.modelId as string) || '';
   const mode = message.args.mode as string | undefined;
   const autonomyMode = message.args.autonomyMode as AutonomyMode | undefined;
@@ -50,7 +52,7 @@ export const CreateTaskToolMessage = ({ message, onRemove, compact = false, onFo
         <MdAssignmentAdd className="w-4 h-4" />
       </div>
       <div className="text-xs text-text-primary flex gap-3 overflow-hidden">
-        <span className="flex-shrink-0">{t('toolMessage.tasks.createTask')}</span>
+        <span className="flex-shrink-0">{t(isSubtask ? 'toolMessage.tasks.createSubtask' : 'toolMessage.tasks.createTask')}</span>
         <span className="overflow-hidden text-ellipsis max-w-[600px]">
           <CodeInline className="bg-bg-primary-light whitespace-nowrap">{prompt}</CodeInline>
         </span>
@@ -59,11 +61,11 @@ export const CreateTaskToolMessage = ({ message, onRemove, compact = false, onFo
       {content &&
         (isError ? (
           <Tooltip content={content}>
-            <RiErrorWarningFill className="w-3 h-3 text-error" />
+            <RiErrorWarningFill className="w-3 h-3 text-error shrink-0" />
           </Tooltip>
         ) : isDenied ? (
           <Tooltip content={content}>
-            <RiCloseCircleFill className="w-3 h-3 text-warning" />
+            <RiCloseCircleFill className="w-3 h-3 text-warning shrink-0" />
           </Tooltip>
         ) : (
           <RiCheckboxCircleFill className="w-3 h-3 text-success flex-shrink-0" />

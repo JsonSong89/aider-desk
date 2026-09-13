@@ -1,11 +1,11 @@
 import { AutonomyMode, InputHistoryData, ProjectStartMode, TaskCreatedData, TaskData, DefaultTaskState } from '@common/types';
 import { useTranslation } from 'react-i18next';
-import { Activity, startTransition, useCallback, useEffect, useOptimistic, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useOptimistic, useRef, useState } from 'react';
 import { useLocalStorage } from '@reactuses/core';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { clsx } from 'clsx';
 
-import { COLLAPSED_WIDTH, EXPANDED_WIDTH, MIN_WIDTH, MAX_WIDTH, TaskSidebar } from './TaskSidebar/TaskSidebar';
+import { COLLAPSED_WIDTH, EXPANDED_WIDTH, MIN_WIDTH, MAX_WIDTH, TaskSidebar, TaskSidebarRef } from './TaskSidebar/TaskSidebar';
 
 import {
   useProjectTasks,
@@ -19,12 +19,13 @@ import {
 import { unloadTasks } from '@/stores/taskStore';
 import { releaseTaskFiles, useTaskAllFiles } from '@/stores/taskFilesStore';
 import { getTaskDir, getSortedVisibleTasks } from '@/utils/task-utils';
-import { cleanupProjectCache } from '@/stores/extensionUIStore';
+import { cleanupProjectCache, cleanupTaskCache } from '@/stores/extensionUIStore';
 import { cleanupProcessingResponseMessage } from '@/hooks/useTaskResponseHandlers';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
-import { TaskView, TaskViewRef } from '@/components/project/TaskView';
+import { TaskViewRef } from '@/components/project/TaskView';
+import { MountedTaskView } from '@/components/project/MountedTaskView';
 import { useApi } from '@/contexts/ApiContext';
 import { TasksProvider } from '@/contexts/TasksContext';
 import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
@@ -32,14 +33,16 @@ import { useOverlayFocusRestore } from '@/hooks/useOverlayFocusRestore';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useBooleanState } from '@/hooks/useBooleanState';
 import { showNotification } from '@/utils/browser-notifications';
-import { showErrorNotification, showInfoNotification } from '@/utils/notifications';
+import { showErrorNotification, showInfoNotification, showWarningNotification } from '@/utils/notifications';
 import { ExtensionsProvider } from '@/contexts/ExtensionsContext';
 import { FloatingExtensionPanels } from '@/components/extensions/FloatingExtensionPanels';
 import { useFileEditorStore } from '@/stores/fileEditorStore';
 import { useActiveAgentProfile } from '@/utils/agents';
-import { PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
-import { registerAction, unregisterAction } from '@/stores/actionsStore';
+import { PaletteItem, PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
+import { invokeAction, registerAction, unregisterAction } from '@/stores/actionsStore';
 import { FileEditorModal } from '@/components/Workspace/FileEditorModal';
+
+const MAX_MOUNTED_TASKS = 5;
 
 type Props = {
   projectDir: string;
@@ -64,12 +67,14 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [starting, setStarting] = useState(true);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [mountedTaskIds, setMountedTaskIds] = useState<string[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [isTaskBarCollapsed, setIsTaskBarCollapsed] = useLocalStorage(`task-sidebar-collapsed-${projectDir}`, false);
   const [taskSidebarWidth, setTaskSidebarWidth] = useLocalStorage(`task-sidebar-width-${projectDir}`, EXPANDED_WIDTH);
   const [isTaskSidebarOpen, , hideTaskSidebar, toggleTaskSidebar] = useBooleanState();
   const [shouldFocusNewTask, setShouldFocusNewTask] = useState(false);
   const taskViewRef = useRef<TaskViewRef>(null);
+  const taskSidebarRef = useRef<TaskSidebarRef>(null);
   const taskContentRef = useRef<HTMLDivElement>(null);
   const creatingTaskRef = useRef(false);
   const hasActivatedTaskRef = useRef(false);
@@ -88,10 +93,23 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
 
   useOverlayFocusRestore(focusActiveTaskPrompt, isProjectActive);
 
+  const releaseTask = useCallback(
+    (taskId: string) => {
+      unloadTasks([taskId]);
+      releaseTaskFiles(taskId);
+      cleanupProcessingResponseMessage(taskId);
+      cleanupTaskCache(projectDir, taskId);
+    },
+    [projectDir],
+  );
+
   const activateTask = useCallback(
     (taskId: string, shouldFocusActiveTaskPrompt = true, shouldFocusNewTask = false) => {
       hasActivatedTaskRef.current = true;
       setActiveTaskId(taskId);
+      // Keep recently-active tasks mounted (LRU) so switching back is instant. The active task is
+      // always at the front and therefore never evicted.
+      setMountedTaskIds((current) => [taskId, ...current.filter((id) => id !== taskId)].slice(0, MAX_MOUNTED_TASKS));
       setShouldFocusNewTask(shouldFocusNewTask);
       if (shouldFocusActiveTaskPrompt) {
         focusActiveTaskPrompt();
@@ -241,6 +259,7 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
     const handleTaskDeleted = (taskData: TaskData) => {
       removeProjectTask(projectDir, taskData.id);
       releaseTaskFiles(taskData.id);
+      setMountedTaskIds((current) => (current.includes(taskData.id) ? current.filter((id) => id !== taskData.id) : current));
     };
 
     const handleInputHistoryUpdate = (data: InputHistoryData) => {
@@ -334,6 +353,14 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
       activateTask(candidate.id, false);
     }
   }, [isProjectActive, starting, tasksLoading, activeTaskId, optimisticTasks, activateTask]);
+
+  // Release backend/store state for tasks evicted from the mount pool (mirrors unmount cleanup).
+  const prevMountedTaskIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const evicted = prevMountedTaskIdsRef.current.filter((id) => !mountedTaskIds.includes(id));
+    prevMountedTaskIdsRef.current = mountedTaskIds;
+    evicted.forEach(releaseTask);
+  }, [mountedTaskIds, releaseTask]);
 
   const handleTaskSelect = useCallback(
     (taskId: string) => {
@@ -533,8 +560,43 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
         }
       },
     }));
-    replaceItems(`project:${projectDir}`, [...tasks, ...files]);
-  }, [isProjectActive, replaceItems, clearItems, activeTaskFiles, activeTaskId, handleTaskSelect, optimisticTasks, openFile, projectDir]);
+    const activeTaskParentId = activeTask?.parentId;
+    const siblingAction: PaletteItem[] = activeTaskParentId
+      ? [
+          {
+            id: 'task.newSibling',
+            label: t('uiActions.createNewSiblingTask'),
+            type: PaletteItemType.Action,
+            action: () => void createNewTask(activeTaskParentId),
+          },
+        ]
+      : [];
+    const pinAction: PaletteItem[] =
+      activeTaskId && activeTask?.createdAt
+        ? [
+            {
+              id: 'task.togglePin',
+              label: activeTask.pinned ? t('taskSidebar.unpinTask') : t('taskSidebar.pinTask'),
+              type: PaletteItemType.Action,
+              action: () => invokeAction('task.togglePin'),
+            },
+          ]
+        : [];
+    replaceItems(`project:${projectDir}`, [...tasks, ...files, ...siblingAction, ...pinAction]);
+  }, [
+    isProjectActive,
+    replaceItems,
+    clearItems,
+    activeTaskFiles,
+    activeTaskId,
+    activeTask,
+    handleTaskSelect,
+    optimisticTasks,
+    openFile,
+    createNewTask,
+    t,
+    projectDir,
+  ]);
 
   useEffect(() => {
     return () => clearItems(`project:${projectDir}`);
@@ -566,6 +628,20 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
       }
     },
     [api, projectDir, t],
+  );
+
+  const handleCopyTaskId = useCallback(
+    async (taskId: string) => {
+      try {
+        await api.writeToClipboard(taskId);
+        showInfoNotification(t('taskSidebar.taskIdCopied', { taskId }));
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to copy task id:', error);
+        showWarningNotification(t('uiActions.copyTaskIdFailed'));
+      }
+    },
+    [api, t],
   );
 
   const handleDuplicateTask = useCallback(
@@ -607,7 +683,17 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
 
     const actions: Record<string, () => void> = {
       'task.new': () => void createNewTask(),
+      'task.newSubtask': () => {
+        if (activeTaskId) {
+          void createNewTask(activeTaskId);
+        }
+      },
       'task.focusPrompt': focusActiveTaskPrompt,
+      'task.rename': () => {
+        if (activeTaskId) {
+          taskSidebarRef.current?.startRenaming(activeTaskId);
+        }
+      },
       'editor.open': () => openEditor(projectDir),
       'task.modelSelector': () => taskViewRef.current?.openMainModelSelector(),
       'task.agentProfileSelector': () => taskViewRef.current?.openAgentProfileSelector(),
@@ -624,6 +710,31 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
       'task.autonomy.autonomous': () => {
         if (activeTaskId) {
           void handleUpdateTask(activeTaskId, { autonomyMode: AutonomyMode.Autonomous });
+        }
+      },
+      'task.state.todo': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { state: DefaultTaskState.Todo });
+        }
+      },
+      'task.state.readyForImplementation': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { state: DefaultTaskState.ReadyForImplementation });
+        }
+      },
+      'task.state.readyForReview': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { state: DefaultTaskState.ReadyForReview });
+        }
+      },
+      'task.state.moreInfoNeeded': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { state: DefaultTaskState.MoreInfoNeeded });
+        }
+      },
+      'task.state.done': () => {
+        if (activeTaskId) {
+          void handleUpdateTask(activeTaskId, { state: DefaultTaskState.Done });
         }
       },
       'task.archive': () => void handleArchiveActiveTask(),
@@ -643,6 +754,11 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
       'task.copyMarkdown': () => {
         if (activeTaskId) {
           void handleCopyTaskAsMarkdown(activeTaskId);
+        }
+      },
+      'task.copyId': () => {
+        if (activeTaskId) {
+          void handleCopyTaskId(activeTaskId);
         }
       },
       'task.interrupt': () => {
@@ -694,6 +810,7 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
     handleExportTaskToImage,
     handleExportTaskToMarkdown,
     handleCopyTaskAsMarkdown,
+    handleCopyTaskId,
     api,
     handleUpdateOptimisticTaskState,
     optimisticTasks,
@@ -721,6 +838,7 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
 
           {(isTaskSidebarOpen || !isMobile) && (
             <TaskSidebar
+              ref={taskSidebarRef}
               loading={tasksLoading}
               tasks={optimisticTasks}
               activeTaskId={activeTaskId}
@@ -751,28 +869,30 @@ export const ProjectView = ({ projectDir, isProjectActive = false, initialTaskId
             }}
           >
             {isProjectActive && <FloatingExtensionPanels placement="project-floating" />}
-            {activeTask && (
-              <Activity mode={isProjectActive ? 'visible' : 'hidden'}>
-                <ExtensionsProvider projectDir={projectDir} task={activeTask} agentProfile={agentProfile}>
-                  <TaskView
-                    key={activeTask.id}
-                    ref={taskViewRef}
-                    projectDir={projectDir}
-                    task={activeTask}
-                    updateTask={handleUpdateTask}
-                    updateOptimisticTaskState={handleUpdateOptimisticTaskState}
-                    inputHistory={inputHistory}
-                    isActive={activeTaskId === activeTask.id}
-                    shouldFocusPrompt={shouldFocusNewTask}
-                    onArchiveTask={handleArchiveActiveTask}
-                    onUnarchiveTask={handleUnarchiveActiveTask}
-                    onDeleteTask={handleDeleteActiveTask}
-                    onToggleTaskSidebar={isMobile ? toggleTaskSidebar : undefined}
-                  />
-                  <FloatingExtensionPanels placement="task-floating" />
-                </ExtensionsProvider>
-              </Activity>
-            )}
+            {mountedTaskIds.map((mountedTaskId) => {
+              const mountedTask = optimisticTasks.find((task) => task.id === mountedTaskId);
+              if (!mountedTask) {
+                return null;
+              }
+              const isActive = activeTaskId === mountedTask.id;
+              return (
+                <MountedTaskView
+                  key={mountedTask.id}
+                  ref={isActive ? taskViewRef : undefined}
+                  projectDir={projectDir}
+                  task={mountedTask}
+                  isActive={isActive}
+                  inputHistory={inputHistory}
+                  shouldFocusPrompt={isActive && shouldFocusNewTask}
+                  updateTask={handleUpdateTask}
+                  updateOptimisticTaskState={handleUpdateOptimisticTaskState}
+                  onArchiveTask={handleArchiveActiveTask}
+                  onUnarchiveTask={handleUnarchiveActiveTask}
+                  onDeleteTask={handleDeleteActiveTask}
+                  onToggleTaskSidebar={isMobile ? toggleTaskSidebar : undefined}
+                />
+              );
+            })}
           </div>
           {isEditorOpen && editorOpenFiles.length > 0 && <FileEditorModal baseDir={projectDir} onClose={() => closeEditor(projectDir)} />}
         </div>

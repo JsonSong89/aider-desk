@@ -58,6 +58,8 @@ import {
   AgentProfile,
   MemoryEntry,
   MemoryEmbeddingProgress,
+  BranchInfo,
+  GitSyncCommits,
   SwitchToLocalOptions,
   SwitchToWorktreeOptions,
   WorktreeIntegrationStatus,
@@ -72,6 +74,7 @@ import {
   ExtensionToolInfo,
   ExtensionUIComponent,
   ModalOverlayUrlData,
+  InputPromptData,
   AiderConnectorStatus,
   ChangeRequestItem,
   SkillDefinition,
@@ -127,6 +130,7 @@ type EventDataMap = {
   'terminal-exit': TerminalExitData;
   'extension-ui-refresh': ExtensionUIRefreshData;
   'modal-overlay-url': ModalOverlayUrlData;
+  'input-prompt': InputPromptData;
   'aider-connector-status': { baseDir?: string; taskId?: string; status: AiderConnectorStatus };
 };
 
@@ -145,6 +149,8 @@ class UnsupportedError extends Error {
   }
 }
 
+const TERMINAL_WRITE_FLUSH_INTERVAL_MS = 25;
+
 export class BrowserApi implements ApplicationAPI {
   private readonly socket: Socket;
   private readonly listeners: {
@@ -152,9 +158,13 @@ export class BrowserApi implements ApplicationAPI {
   };
   private readonly apiClient: AxiosInstance;
   private appOS: OS | null = null;
+  private readonly terminalWriteQueue = new Map<string, string>();
+  private readonly terminalWriteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor() {
-    const port = window.location.port === '5173' ? '24337' : window.location.port;
+    // Allow overriding the API port via query param (e.g. when opening the dev renderer in a browser against a dev server)
+    const apiPortOverride = new URLSearchParams(window.location.search).get('apiPort');
+    const port = apiPortOverride || (window.location.port === '5173' ? '24337' : window.location.port);
     const baseUrl = `${window.location.protocol}//${window.location.hostname}${port ? `:${port}` : ''}`;
 
     this.socket = io(baseUrl, {
@@ -209,6 +219,7 @@ export class BrowserApi implements ApplicationAPI {
       'queued-prompts-updated': new Map(),
       'extension-ui-refresh': new Map(),
       'modal-overlay-url': new Map(),
+      'input-prompt': new Map(),
       'aider-connector-status': new Map(),
     };
     this.apiClient = create({
@@ -532,19 +543,24 @@ export class BrowserApi implements ApplicationAPI {
   getUpdatedFiles(baseDir: string, taskId: string): Promise<{ path: string; additions: number; deletions: number }[]> {
     return this.post('/get-updated-files', { projectDir: baseDir, taskId });
   }
-  async generateCommitMessage(baseDir: string, taskId: string): Promise<string> {
-    const res = await this.post<{ projectDir: string; taskId: string }, { message: string }>('/project/worktree/generate-commit-message', {
-      projectDir: baseDir,
-      taskId,
-    });
+  async generateCommitMessage(baseDir: string, taskId: string, filePaths?: string[]): Promise<string> {
+    const res = await this.post<{ projectDir: string; taskId: string; filePaths?: string[] }, { message: string }>(
+      '/project/worktree/generate-commit-message',
+      {
+        projectDir: baseDir,
+        taskId,
+        filePaths,
+      },
+    );
     return res.message;
   }
-  async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean): Promise<void> {
+  async commitChanges(baseDir: string, taskId: string, message: string, amend: boolean, filePaths?: string[]): Promise<void> {
     await this.post('/project/worktree/commit-changes', {
       projectDir: baseDir,
       taskId,
       message,
       amend,
+      filePaths,
     });
   }
   async cancelCommitChanges(baseDir: string, taskId: string): Promise<void> {
@@ -1048,11 +1064,45 @@ export class BrowserApi implements ApplicationAPI {
     return response.data.terminalId;
   }
   async writeToTerminal(terminalId: string, data: string): Promise<boolean> {
-    await this.apiClient.post('/terminal/write', {
-      terminalId,
-      data,
-    });
+    const queued = (this.terminalWriteQueue.get(terminalId) ?? '') + data;
+    this.terminalWriteQueue.set(terminalId, queued);
+
+    if (!this.terminalWriteTimers.has(terminalId)) {
+      this.terminalWriteTimers.set(
+        terminalId,
+        setTimeout(() => {
+          void this.flushTerminalWrite(terminalId);
+        }, TERMINAL_WRITE_FLUSH_INTERVAL_MS),
+      );
+    }
+
     return true;
+  }
+
+  private flushTerminalWrite(terminalId: string): Promise<boolean> {
+    this.terminalWriteTimers.delete(terminalId);
+    const data = this.terminalWriteQueue.get(terminalId);
+    this.terminalWriteQueue.delete(terminalId);
+
+    if (!data) {
+      return Promise.resolve(true);
+    }
+
+    if (this.socket.connected) {
+      this.socket.emit('message', {
+        action: 'write-to-terminal',
+        terminalId,
+        data,
+      });
+      return Promise.resolve(true);
+    }
+
+    return this.apiClient
+      .post('/terminal/write', {
+        terminalId,
+        data,
+      })
+      .then(() => true);
   }
   async resizeTerminal(terminalId: string, cols: number, rows: number): Promise<boolean> {
     await this.apiClient.post('/terminal/resize', {
@@ -1075,6 +1125,10 @@ export class BrowserApi implements ApplicationAPI {
   async getAllTerminalsForTask(taskId: string): Promise<Array<{ id: string; taskId: string; cols: number; rows: number; baseDir: string }>> {
     const response = await this.apiClient.get(`/terminal/${taskId}/all`);
     return response.data.terminals || [];
+  }
+  async getTerminalBuffer(terminalId: string): Promise<{ exists: boolean; data: string }> {
+    const response = await this.apiClient.get(`/terminal/buffer/${encodeURIComponent(terminalId)}`);
+    return response.data;
   }
   isManageServerSupported(): boolean {
     return false;
@@ -1141,11 +1195,10 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
-  applyUncommittedChanges(baseDir: string, taskId: string, targetBranch?: string): Promise<void> {
+  applyUncommittedChanges(baseDir: string, taskId: string): Promise<void> {
     return this.post('/project/worktree/apply-uncommitted', {
       projectDir: baseDir,
       taskId,
-      targetBranch,
     });
   }
 
@@ -1196,6 +1249,98 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
+  listGitBranches(baseDir: string, taskId: string, includeRemote?: boolean): Promise<BranchInfo[]> {
+    return this.get('/project/git/branches', {
+      projectDir: baseDir,
+      taskId,
+      includeRemote: includeRemote ? 'true' : undefined,
+    });
+  }
+
+  getSyncCommits(baseDir: string, taskId: string, targetBranch?: string): Promise<GitSyncCommits> {
+    return this.get('/project/git/sync-commits', {
+      projectDir: baseDir,
+      taskId,
+      targetBranch: targetBranch || undefined,
+    });
+  }
+
+  async createGitBranch(baseDir: string, taskId: string, name: string, startPoint?: string, checkout?: boolean): Promise<void> {
+    await this.post('/project/git/branch/create', {
+      projectDir: baseDir,
+      taskId,
+      name,
+      startPoint,
+      checkout,
+    });
+  }
+
+  async checkoutGitBranch(baseDir: string, taskId: string, branch: string, createTracking?: boolean, takeOver?: boolean): Promise<void> {
+    await this.post('/project/git/branch/checkout', {
+      projectDir: baseDir,
+      taskId,
+      branch,
+      createTracking,
+      takeOver,
+    });
+  }
+
+  async deleteGitBranch(baseDir: string, taskId: string, branch: string, force?: boolean): Promise<void> {
+    await this.post('/project/git/branch/delete', {
+      projectDir: baseDir,
+      taskId,
+      branch,
+      force,
+    });
+  }
+
+  mergeIntoCurrentBranch(baseDir: string, taskId: string, branch: string): Promise<{ conflictedFiles?: string[] }> {
+    return this.post('/project/git/merge', {
+      projectDir: baseDir,
+      taskId,
+      branch,
+    });
+  }
+
+  rebaseOntoBranch(baseDir: string, taskId: string, branch: string): Promise<{ conflictedFiles?: string[] }> {
+    return this.post('/project/git/rebase', {
+      projectDir: baseDir,
+      taskId,
+      branch,
+    });
+  }
+
+  updateGitBranch(baseDir: string, taskId: string, branchName: string): Promise<{ output: string }> {
+    return this.post('/project/git/branch/update', {
+      projectDir: baseDir,
+      taskId,
+      branchName,
+    });
+  }
+
+  gitPull(baseDir: string, taskId: string, rebase?: boolean): Promise<{ output: string }> {
+    return this.post('/project/git/pull', {
+      projectDir: baseDir,
+      taskId,
+      rebase,
+    });
+  }
+
+  gitPush(baseDir: string, taskId: string, force?: boolean): Promise<{ output: string }> {
+    return this.post('/project/git/push', {
+      projectDir: baseDir,
+      taskId,
+      force,
+    });
+  }
+
+  resolveGitErrorWithAgent(baseDir: string, taskId: string): Promise<void> {
+    return this.post('/project/git/resolve-error-with-agent', {
+      projectDir: baseDir,
+      taskId,
+    });
+  }
+
   getWorktreeIntegrationStatus(baseDir: string, taskId: string, targetBranch?: string): Promise<WorktreeIntegrationStatus> {
     return this.get('/project/worktree/status', {
       projectDir: baseDir,
@@ -1233,12 +1378,16 @@ export class BrowserApi implements ApplicationAPI {
     });
   }
 
-  renameWorktreeBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void> {
-    return this.post('/project/worktree/rename-branch', {
+  renameGitBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void> {
+    return this.post('/project/git/branch/rename', {
       projectDir: baseDir,
       taskId,
       newBranchName,
     });
+  }
+
+  renameWorktreeBranch(baseDir: string, taskId: string, newBranchName: string): Promise<void> {
+    return this.renameGitBranch(baseDir, taskId, newBranchName);
   }
 
   // Memory operations
@@ -1284,6 +1433,12 @@ export class BrowserApi implements ApplicationAPI {
         document.body.removeChild(textArea);
       }
     }
+  }
+
+  async writeImageToClipboard(dataUrl: string): Promise<void> {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
   }
 
   async openPath(): Promise<boolean> {
@@ -1445,6 +1600,14 @@ export class BrowserApi implements ApplicationAPI {
 
   onModalOverlayUrl(callback: (data: ModalOverlayUrlData) => void): () => void {
     return this.addListener('modal-overlay-url', callback);
+  }
+
+  onInputPrompt(callback: (data: InputPromptData) => void): () => void {
+    return this.addListener('input-prompt', callback);
+  }
+
+  respondInputPrompt(id: string, value: string | null, rememberSession?: boolean): Promise<void> {
+    return this.post('/input-prompt/respond', { id, value, rememberSession });
   }
 
   loadExtensionLibrary(librarySpec: string): Promise<string> {
