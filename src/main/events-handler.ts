@@ -359,6 +359,22 @@ export class EventsHandler {
     return await task.getUpdatedFiles();
   }
 
+  async getUpdatedFileDiff(baseDir: string, taskId: string, filePath: string, commitHash?: string): Promise<string> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (!task) {
+      return '';
+    }
+    return await task.getUpdatedFileDiff(filePath, commitHash);
+  }
+
+  async getUpdatedFileContents(baseDir: string, taskId: string, filePath: string, commitHash?: string): Promise<{ oldContent: string; newContent: string }> {
+    const task = this.projectManager.getProject(baseDir).getTask(taskId);
+    if (!task) {
+      return { oldContent: '', newContent: '' };
+    }
+    return await task.getUpdatedFileContents(filePath, commitHash);
+  }
+
   async addFile(baseDir: string, taskId: string, filePath: string, readOnly = false): Promise<void> {
     void this.projectManager.getProject(baseDir).getTask(taskId)?.addFiles({ path: filePath, readOnly });
   }
@@ -380,12 +396,18 @@ export class EventsHandler {
         buffer = imageBuffer;
       } else {
         const { clipboard } = await import('electron');
-        const image = clipboard.readImage();
-        if (image.isEmpty()) {
+        if (!(await clipboard.has('image/png'))) {
           task.addLogMessage('info', 'No image found in clipboard.');
           return;
         }
-        buffer = image.toPNG();
+        const items = await clipboard.read();
+        const item = items.find((i) => i.types.includes('image/png'));
+        const blob = await item?.getType('image/png');
+        if (!(blob instanceof Blob)) {
+          task.addLogMessage('info', 'No image found in clipboard.');
+          return;
+        }
+        buffer = Buffer.from(await blob.arrayBuffer());
       }
 
       const imagesDir = path.join(AIDER_DESK_TMP_DIR, 'images');
@@ -500,10 +522,10 @@ export class EventsHandler {
     return this.projectManager.getCustomModes(baseDir);
   }
 
-  async runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode): Promise<void> {
+  async runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode, images?: string[]): Promise<void> {
     const project = this.projectManager.getProject(baseDir);
     const task = project.getTask(taskId);
-    await task?.runCustomCommand(commandName, args, mode);
+    await task?.runCustomCommand(commandName, args, mode, images);
   }
 
   async updateMainModel(baseDir: string, taskId: string, mainModel: string): Promise<void> {
@@ -700,7 +722,7 @@ export class EventsHandler {
   async switchToLocalWorkingMode(
     baseDir: string,
     taskId: string,
-    options?: { mergeBeforeSwitch?: boolean; targetBranch?: string; switchAllInWorktree?: boolean },
+    options?: { mergeBeforeSwitch?: boolean; targetBranch?: string; switchAllInWorktree?: boolean; discardWorktreeChanges?: boolean },
   ): Promise<void> {
     const task = this.getTaskOrThrow(baseDir, taskId);
     await task.switchToLocalWorkingMode(options);
@@ -792,6 +814,14 @@ export class EventsHandler {
 
   async listGitBranches(baseDir: string, taskId: string, includeRemote?: boolean): Promise<BranchInfo[]> {
     return await this.getTaskOrThrow(baseDir, taskId).listGitBranches(includeRemote);
+  }
+
+  async isGitRepository(baseDir: string, taskId: string): Promise<boolean> {
+    return await this.getTaskOrThrow(baseDir, taskId).isGitRepository();
+  }
+
+  async initializeGitRepository(baseDir: string, taskId: string): Promise<void> {
+    await this.getTaskOrThrow(baseDir, taskId).initializeGitRepository();
   }
 
   async getSyncCommits(baseDir: string, taskId: string, targetBranch?: string): Promise<GitSyncCommits> {

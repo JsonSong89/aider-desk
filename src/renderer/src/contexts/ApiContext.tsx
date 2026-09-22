@@ -1,6 +1,5 @@
 import { createContext, useEffect, useMemo, ReactNode, useContext } from 'react';
 import { ApplicationAPI } from '@common/api';
-import { HotkeysProvider } from 'react-hotkeys-hook';
 
 import { BrowserApi } from '@/api/browser-api';
 
@@ -25,11 +24,7 @@ export const ApiProvider = ({ children }: Props) => {
     };
   }, [api]);
 
-  return (
-    <ApiContext.Provider value={api}>
-      <HotkeysProvider initiallyActiveScopes={['home', 'task', 'dialog', 'modal']}>{children}</HotkeysProvider>
-    </ApiContext.Provider>
-  );
+  return <ApiContext.Provider value={api}>{children}</ApiContext.Provider>;
 };
 
 export const useOptionalApi = (): ApplicationAPI | undefined => useContext(ApiContext);

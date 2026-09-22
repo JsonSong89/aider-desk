@@ -813,9 +813,6 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
 
     const setMessagesRef = useCallback((node: MessagesRef | VirtualizedMessagesRef | null) => {
       messagesRef.current = node;
-      if (node?.container) {
-        setSearchContainer(node.container);
-      }
     }, []);
 
     const handleRefreshAllFiles = useCallback((useGit?: boolean) => refreshAllFiles(task.id, useGit), [refreshAllFiles, task.id]);
@@ -872,6 +869,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                       messages={visibleMessages}
                       allFiles={allFiles}
                       renderMarkdown={renderMarkdown!}
+                      onContainerRef={setSearchContainer}
                       removeMessage={handleRemoveMessage}
                       removeGroup={handleRemoveGroup}
                       redoUserPrompt={handleRedoUserPrompt}
@@ -889,6 +887,7 @@ export const TaskView = forwardRef<TaskViewRef, Props>(
                       messages={visibleMessages}
                       allFiles={allFiles}
                       renderMarkdown={renderMarkdown!}
+                      onContainerRef={setSearchContainer}
                       removeMessage={handleRemoveMessage}
                       removeGroup={handleRemoveGroup}
                       redoUserPrompt={handleRedoUserPrompt}

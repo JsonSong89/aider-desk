@@ -335,7 +335,9 @@
     "modelName": "Model Name",
     "baseUrlPlaceholder": "e.g. http://localhost:8080/v1",
     "useWebSearch": "Use Web Search",
-    "useWebSearchTooltip": "When enabled, the model will use OpenAI's web search tool to access current information from the internet."
+    "useWebSearchTooltip": "When enabled, the model will use OpenAI's web search tool to access current information from the internet.",
+    "storeResponses": "Store responses",
+    "storeResponsesTooltip": "When enabled, OpenAI stores responses server-side and conversations reference them by ID when resuming. Disable this if your OpenAI organization uses Zero Data Retention (ZDR) — stored items are not persisted for ZDR organizations and resuming tasks would fail with 'Item with id not found'. When disabled, requests run in stateless mode and reasoning is replayed via encrypted content instead."
   },
   "ollama": {
     "baseUrl": "Base URL",
@@ -1124,7 +1126,8 @@
     "unarchive": "Unarchive",
     "confirmDelete": "Confirm Delete",
     "remove": "Remove message",
-    "deleteUpToHere": "Delete up to here"
+    "deleteUpToHere": "Delete up to here",
+    "ephemeralGroupTooltip": "This thread/group is ephemeral — it won't be saved with the task and will disappear after reload"
   },
   "errors": {
     "frozenTitle": "AIDER FROZEN?",
@@ -1269,6 +1272,8 @@
     "useGitEnabled": "Git enabled - Click to use filesystem",
     "useGitDisabled": "Filesystem enabled - Click to use Git",
     "revertFile": "Revert changes",
+    "expandContext": "Expand context",
+    "collapseContext": "Collapse context",
     "addFileToGit": "Add file to Git",
     "fileHasConflicts": "File has merge conflicts",
     "confirmRevertTitle": "Revert file changes?",
@@ -1293,6 +1298,8 @@
     "uncommitted": "Uncommitted",
     "group": "Group {{hash}}",
     "updatedFilesWindowTitle": "Updated Files - {{name}}",
+    "largeDiffMessage": "This file has {{count}} changed lines - loading the full diff may be slow.",
+    "largeDiffLoad": "Load diff",
     "commentsPanel": "Change Requests",
     "noComments": "No change requests yet. Click on a line in the diff viewer to add one.",
     "editComment": "Edit",
@@ -1352,6 +1359,7 @@
     "reloadServer": "Reload server",
     "reload": "Reload",
     "tools": "Tools",
+    "all": "All",
     "oauth": {
       "connect": "Connect",
       "reopen": "Reopen",
@@ -1976,6 +1984,7 @@
     "rebasePausedDueToConflicts": "Rebase paused due to conflicts. Resolve them and continue the rebase, or abort it to restore the worktree.",
     "rebaseConflictsResolvedDescription": "Conflicts have been resolved and staged. You can now continue the rebase.",
     "switchToLocalRebaseInProgress": "Cannot switch to local mode while a rebase is in progress. Continue or abort the rebase first.",
+    "switchToLocalUncommittedChanges": "Worktree has uncommitted changes. Merge them first or explicitly discard them before switching to local mode.",
     "confirmRebaseTitle": "Rebase worktree",
     "confirmRebaseMessage": "This will rebase your worktree onto the selected branch. If there are conflicts, you will need to resolve them.",
     "confirmAbortRebaseTitle": "Abort rebase",
@@ -2119,6 +2128,10 @@
     "remoteBranches": "Remote",
     "newBranch": "New Branch",
     "newBranchNamePlaceholder": "New branch name",
+    "initializeGit": "Initialize Git",
+    "initializeGitTooltip": "This project has no git repository. Initialize one to use branches, worktrees and version tracking.",
+    "initializingGit": "Initializing...",
+    "gitInitialized": "Git repository initialized",
     "branchCreated": "Branch '{{branch}}' created",
     "checkedOutBranch": "Checked out '{{branch}}'",
     "confirmCheckoutTitle": "Checkout branch",

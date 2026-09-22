@@ -334,7 +334,9 @@
     "modelName": "模型",
     "baseUrlPlaceholder": "例如 http://localhost:8080/v1",
     "useWebSearch": "使用网络搜索",
-    "useWebSearchTooltip": "启用后，模型将使用 OpenAI 的网络搜索工具来访问互联网上的当前信息。"
+    "useWebSearchTooltip": "启用后，模型将使用 OpenAI 的网络搜索工具来访问互联网上的当前信息。",
+    "storeResponses": "存储响应",
+    "storeResponsesTooltip": "启用后，OpenAI 会在服务端存储响应，恢复任务时将通过 ID 引用这些响应。如果您的 OpenAI 组织使用零数据保留（ZDR），请禁用此选项——ZDR 组织不会持久化存储的项目，恢复任务将失败并提示“找不到具有该 ID 的项目”。禁用后，请求将以无状态模式运行，通过加密内容回放推理数据。"
   },
   "ollama": {
     "baseUrl": "基础 URL",
@@ -1057,7 +1059,8 @@
     "unarchive": "取消归档",
     "confirmDelete": "确认删除",
     "remove": "移除消息",
-    "deleteUpToHere": "删除到此为止"
+    "deleteUpToHere": "删除到此为止",
+    "ephemeralGroupTooltip": "此线程/群组是临时性的——不会随任务保存，重新加载后将消失"
   },
   "errors": {
     "frozenTitle": "AIDER冻结了?",
@@ -1202,6 +1205,8 @@
     "useGitEnabled": "Git 已启用 - 点击使用文件系统",
     "useGitDisabled": "文件系统已启用 - 点击使用 Git",
     "revertFile": "恢复更改",
+    "expandContext": "展开上下文",
+    "collapseContext": "折叠上下文",
     "addFileToGit": "添加文件到 Git",
     "fileHasConflicts": "文件存在合并冲突",
     "confirmRevertTitle": "恢复文件更改？",
@@ -1226,6 +1231,8 @@
     "uncommitted": "未提交",
     "group": "分组 {{hash}}",
     "updatedFilesWindowTitle": "已更新文件 - {{name}}",
+    "largeDiffMessage": "该文件有 {{count}} 行变更，加载完整差异可能较慢。",
+    "largeDiffLoad": "加载差异",
     "commentsPanel": "变更请求",
     "noComments": "暂无变更请求。点击差异查看器中的行以添加请求。",
     "editComment": "编辑",
@@ -1306,6 +1313,7 @@
       "ask": "询问"
     },
     "tools": "工具",
+    "all": "全部",
     "oauth": {
       "connect": "连接",
       "reopen": "重新打开",
@@ -1984,6 +1992,7 @@
     "rebasePausedDueToConflicts": "变基因冲突而暂停。请解决冲突后继续变基，或中止变基以恢复工作树。",
     "rebaseConflictsResolvedDescription": "冲突已解决并暂存。你现在可以继续变基。",
     "switchToLocalRebaseInProgress": "变基进行中时无法切换到本地模式。请先继续或中止变基。",
+    "switchToLocalUncommittedChanges": "工作树有未提交的更改。请先合并它们，或在切换到本地模式前明确丢弃这些更改。",
     "confirmRebaseTitle": "变基工作树",
     "confirmRebaseMessage": "这将把工作树变基到所选分支上。如有冲突，需要你进行解决。",
     "confirmAbortRebaseTitle": "中止变基",
@@ -2127,6 +2136,10 @@
     "remoteBranches": "远程分支",
     "newBranch": "新建分支",
     "newBranchNamePlaceholder": "新分支名称",
+    "initializeGit": "初始化 Git",
+    "initializeGitTooltip": "该项目尚未初始化 Git 仓库。初始化后即可使用分支、工作树和版本跟踪功能。",
+    "initializingGit": "初始化中...",
+    "gitInitialized": "Git 仓库已初始化",
     "branchCreated": "分支 '{{branch}}' 已创建",
     "checkedOutBranch": "已切换到 '{{branch}}'",
     "confirmCheckoutTitle": "检出分支",

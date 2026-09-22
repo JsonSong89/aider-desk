@@ -317,6 +317,7 @@ const SwitchToLocalWorkingModeSchema = z.object({
   mergeBeforeSwitch: z.boolean().optional(),
   targetBranch: z.string().optional(),
   switchAllInWorktree: z.boolean().optional(),
+  discardWorktreeChanges: z.boolean().optional(),
 });
 
 const SwitchToWorktreeWorkingModeSchema = z.object({
@@ -443,6 +444,11 @@ const GitPullSchema = z.object({
   projectDir: z.string().min(1, 'Project directory is required'),
   taskId: z.string().min(1, 'Task id is required'),
   rebase: z.boolean().optional(),
+});
+
+const GitRepositorySchema = z.object({
+  projectDir: z.string().min(1, 'Project directory is required'),
+  taskId: z.string().min(1, 'Task id is required'),
 });
 
 const UpdateGitBranchSchema = z.object({
@@ -1046,8 +1052,8 @@ export class ProjectApi extends BaseApi {
           return;
         }
 
-        const { projectDir, taskId, mergeBeforeSwitch, targetBranch, switchAllInWorktree } = parsed;
-        await this.eventsHandler.switchToLocalWorkingMode(projectDir, taskId, { mergeBeforeSwitch, targetBranch, switchAllInWorktree });
+        const { projectDir, taskId, mergeBeforeSwitch, targetBranch, switchAllInWorktree, discardWorktreeChanges } = parsed;
+        await this.eventsHandler.switchToLocalWorkingMode(projectDir, taskId, { mergeBeforeSwitch, targetBranch, switchAllInWorktree, discardWorktreeChanges });
         res.status(200).json({ message: 'Switched to local working mode' });
       }),
     );
@@ -1364,6 +1370,36 @@ export class ProjectApi extends BaseApi {
         const { projectDir, taskId, rebase } = parsed;
         const result = await this.eventsHandler.gitPull(projectDir, taskId, rebase);
         res.status(200).json(result);
+      }),
+    );
+
+    // Check whether the project has a git repository
+    router.get(
+      '/project/git/is-repo',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(GitRepositorySchema, req.query, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId } = parsed;
+        const isRepo = await this.eventsHandler.isGitRepository(projectDir, taskId);
+        res.status(200).json(isRepo);
+      }),
+    );
+
+    // Initialize a git repository for the project
+    router.post(
+      '/project/git/init',
+      this.handleRequest(async (req, res) => {
+        const parsed = this.validateRequest(GitRepositorySchema, req.body, res);
+        if (!parsed) {
+          return;
+        }
+
+        const { projectDir, taskId } = parsed;
+        await this.eventsHandler.initializeGitRepository(projectDir, taskId);
+        res.status(200).json({ success: true });
       }),
     );
 

@@ -16,7 +16,7 @@ import {
   AgentProfile,
   ChangeRequestItem,
 } from '@common/types';
-import { ipcMain, clipboard, nativeImage } from 'electron';
+import { ipcMain, clipboard, ClipboardItem } from 'electron';
 
 import { EventsHandler } from './events-handler';
 
@@ -171,6 +171,14 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle('get-updated-files', async (_, baseDir: string, taskId: string) => {
     return await eventsHandler.getUpdatedFiles(baseDir, taskId);
+  });
+
+  ipcMain.handle('get-updated-file-diff', async (_, baseDir: string, taskId: string, filePath: string, commitHash?: string) => {
+    return await eventsHandler.getUpdatedFileDiff(baseDir, taskId, filePath, commitHash);
+  });
+
+  ipcMain.handle('get-updated-file-contents', async (_, baseDir: string, taskId: string, filePath: string, commitHash?: string) => {
+    return await eventsHandler.getUpdatedFileContents(baseDir, taskId, filePath, commitHash);
   });
 
   ipcMain.handle('refresh-context-files', async (_, baseDir: string, taskId: string) => {
@@ -518,8 +526,8 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
     return eventsHandler.getCustomModes(baseDir);
   });
 
-  ipcMain.handle('run-custom-command', async (_, baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode) => {
-    await eventsHandler.runCustomCommand(baseDir, taskId, commandName, args, mode);
+  ipcMain.handle('run-custom-command', async (_, baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode, images?: string[]) => {
+    await eventsHandler.runCustomCommand(baseDir, taskId, commandName, args, mode, images);
   });
 
   // Terminal handlers
@@ -558,7 +566,12 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle(
     'switch-to-local-working-mode',
-    async (_, baseDir: string, taskId: string, options?: { mergeBeforeSwitch?: boolean; targetBranch?: string; switchAllInWorktree?: boolean }) => {
+    async (
+      _,
+      baseDir: string,
+      taskId: string,
+      options?: { mergeBeforeSwitch?: boolean; targetBranch?: string; switchAllInWorktree?: boolean; discardWorktreeChanges?: boolean },
+    ) => {
       await eventsHandler.switchToLocalWorkingMode(baseDir, taskId, options);
     },
   );
@@ -645,6 +658,14 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
 
   ipcMain.handle('update-git-branch', async (_, baseDir: string, taskId: string, branchName: string) => {
     return await eventsHandler.updateGitBranch(baseDir, taskId, branchName);
+  });
+
+  ipcMain.handle('git-is-repo', async (_, baseDir: string, taskId: string) => {
+    return await eventsHandler.isGitRepository(baseDir, taskId);
+  });
+
+  ipcMain.handle('git-init-repo', async (_, baseDir: string, taskId: string) => {
+    return await eventsHandler.initializeGitRepository(baseDir, taskId);
   });
 
   ipcMain.handle('git-pull', async (_, baseDir: string, taskId: string, rebase?: boolean) => {
@@ -788,7 +809,8 @@ export const setupIpcHandlers = (eventsHandler: EventsHandler, serverController:
   });
 
   ipcMain.handle('clipboard-write-image', async (_, dataUrl: string) => {
-    clipboard.writeImage(nativeImage.createFromDataURL(dataUrl));
+    const blob = await (await fetch(dataUrl)).blob();
+    await clipboard.write([new ClipboardItem({ 'image/png': blob })]);
   });
 
   // System logs handlers

@@ -1,5 +1,43 @@
 # Changelog
 
+## [UNRELEASED]
+
+- added find in file support to the file editor with a themed search panel opened via Ctrl+F / Cmd+F
+- fixed duplicate keys in git branches popup rows causing React rendering issues
+- fixed crash with React error #185 (maximum update depth exceeded) during message streaming by ensuring message list item ids are always unique and updating @legendapp/list to 3.3.11
+- fixed committing deleted files failing to stage by retrying with `git add -A -f`
+- added passing images attached to the prompt to custom extension commands, allowing extensions to include the screenshot in the prompt they run
+
+## [0.84.0]
+
+- improved updated files diff performance by loading diffs lazily on demand instead of computing them with the file list
+- fixed updated files diff modal file ordering to match the sidebar tree order
+- fixed markdown numbered lists starting mid-paragraph being rendered as plain text by inserting required blank lines
+- improved workspace file trees rendering performance by migrating to headless-tree with virtualized rows
+- improved background projects to not load a task until the first activation
+- improved tooltips rendering performance
+- fixed agent stopping when model finished with 'stop' but produced no messages or only reasoning content by retrying the step
+- fixed creating a task worktree when its branch is already checked out in another worktree by creating a unique sibling branch
+- fixed diff viewer showing 'no changes' while streaming by hiding content until diff is complete
+- fixed switching to local mode silently discarding changes by blocking the switch when the worktree has uncommitted changes
+- added OpenAI store responses setting to support Zero Data Retention organizations by running requests in stateless mode
+- fixed model library temperature column being too narrow to fit its values
+- fixed messages scroll container not always detected for in-chat search by reporting it via a dedicated callback instead of the ref
+- added ephemeral indicator for transient message groups
+- added bulk tool approval setting for MCP servers with an "All" select in the server tools list
+- fixed task branch being renamed when its worktree is shared with other tasks
+- improved commit error messages in updated files diff modal by stripping the IPC wrapper prefix and making the error text selectable
+- added initializing a git repository for non-git projects to enable branches, worktrees and version tracking
+- fixed uncommitted diff missing in repositories with no commits yet by diffing against the empty tree and including untracked files
+- fixed React "missing key" console warning when rendering custom command blocks by wrapping parsed content in a keyed fragment
+- added auto-focus to the extensions search field when opening extensions settings
+- added keyboard navigation to the git branches dropdown with arrow keys, submenu controls, and Escape to close
+- added fetching full old and new file contents on demand for the updated files diff modal
+- updated toast notifications styling with a more visible border, using the error color for error toasts
+- fixed ignored files failing to stage by retrying staging with --force
+- updated Electron to 44.3.0
+- added task ID to the messages database for per-task usage tracking
+
 ## [0.83.0]
 
 - added Copy Task ID to command palette

@@ -78,6 +78,7 @@ describe('GitManager - createWorktree', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     gitManager = new GitManager();
+    vi.spyOn(gitManager, 'isGitRepository').mockResolvedValue(true);
   });
 
   it('prunes stale worktree registrations and removes existing worktree before adding', async () => {
@@ -108,6 +109,99 @@ describe('GitManager - createWorktree', () => {
     const worktree = await gitManager.createWorktree(projectPath, taskId, 'task-branch');
 
     expect(worktree.path).toBe(worktreePath);
+    expect(worktree.branch).toBe('task-branch');
+  });
+
+  it('creates a unique sibling branch when the branch is already checked out in another worktree', async () => {
+    (execWithShellPath as Mock).mockImplementation(async (command: string) => {
+      if (command === 'git rev-parse --is-inside-work-tree') {
+        return { stdout: 'true\n', stderr: '' };
+      }
+      if (command === 'git worktree prune') {
+        return { stdout: '', stderr: '' };
+      }
+      if (command.startsWith('git worktree remove')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (command === 'git rev-parse HEAD') {
+        return { stdout: 'abc123\n', stderr: '' };
+      }
+      if (command === 'git show-ref --verify --quiet refs/heads/task-branch') {
+        return { stdout: '', stderr: '' };
+      }
+      if (command === 'git worktree list --porcelain') {
+        return {
+          stdout: 'worktree /other/project\nbranch refs/heads/task-branch\n\nworktree /main\nbranch refs/heads/main\n',
+          stderr: '',
+        };
+      }
+      if (command === 'git show-ref --verify --quiet refs/heads/task-branch-2') {
+        throw new Error('branch does not exist');
+      }
+      if (command === 'git branch') {
+        return { stdout: '* task-branch\n', stderr: '' };
+      }
+      if (command.startsWith('git for-each-ref')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (command.startsWith('git worktree add')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (command === 'git rev-parse task-branch-2' || command === 'git rev-parse task-branch') {
+        return { stdout: 'def456\n', stderr: '' };
+      }
+      if (command === 'git rev-parse --abbrev-ref HEAD') {
+        return { stdout: 'main\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const worktree = await gitManager.createWorktree(projectPath, taskId, 'task-branch');
+
+    expect(getCommands()).toContain(`git worktree add -b task-branch-2 "${worktreePath}" task-branch`);
+    expect(worktree).toEqual({
+      path: worktreePath,
+      baseCommit: 'def456',
+      baseBranch: 'main',
+      branch: 'task-branch-2',
+    });
+  });
+
+  it('reuses the branch when it is checked out in other worktrees but resumes this task own worktree path', async () => {
+    (execWithShellPath as Mock).mockImplementation(async (command: string) => {
+      if (command === 'git rev-parse --is-inside-work-tree') {
+        return { stdout: 'true\n', stderr: '' };
+      }
+      if (command === 'git worktree prune') {
+        return { stdout: '', stderr: '' };
+      }
+      if (command.startsWith('git worktree remove')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (command === 'git rev-parse HEAD') {
+        return { stdout: 'abc123\n', stderr: '' };
+      }
+      if (command === 'git show-ref --verify --quiet refs/heads/task-branch') {
+        return { stdout: '', stderr: '' };
+      }
+      if (command === 'git worktree list --porcelain') {
+        return {
+          stdout: `worktree ${worktreePath}\nbranch refs/heads/task-branch\n`,
+          stderr: '',
+        };
+      }
+      if (command.startsWith('git worktree add')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (command === 'git rev-parse task-branch') {
+        return { stdout: 'def456\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const worktree = await gitManager.createWorktree(projectPath, taskId, 'task-branch');
+
+    expect(getCommands()).toContain(`git worktree add "${worktreePath}" task-branch`);
     expect(worktree.branch).toBe('task-branch');
   });
 

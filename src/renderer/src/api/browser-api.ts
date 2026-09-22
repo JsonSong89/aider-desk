@@ -81,7 +81,7 @@ import {
   SkillsUpdatedData,
   ExtensionOperationResult,
 } from '@common/types';
-import { ApplicationAPI } from '@common/api';
+import { ApplicationAPI, RendererProcessMemoryInfo } from '@common/api';
 import { type AxiosInstance, create } from 'axios';
 import { io, Socket } from 'socket.io-client';
 import { compareBaseDirs } from '@common/utils';
@@ -358,6 +358,9 @@ export class BrowserApi implements ApplicationAPI {
     return response.data;
   }
 
+  getRendererProcessMemoryInfo(): Promise<RendererProcessMemoryInfo | null> {
+    return Promise.resolve(null);
+  }
   isOpenLogsDirectorySupported(): boolean {
     return false;
   }
@@ -542,6 +545,25 @@ export class BrowserApi implements ApplicationAPI {
   }
   getUpdatedFiles(baseDir: string, taskId: string): Promise<{ path: string; additions: number; deletions: number }[]> {
     return this.post('/get-updated-files', { projectDir: baseDir, taskId });
+  }
+  getUpdatedFileDiff(baseDir: string, taskId: string, filePath: string, commitHash?: string): Promise<string> {
+    return this.post<{ projectDir: string; taskId: string; filePath: string; commitHash?: string }, { diff: string }>('/get-updated-file-diff', {
+      projectDir: baseDir,
+      taskId,
+      filePath,
+      commitHash,
+    }).then((res) => res.diff);
+  }
+  getUpdatedFileContents(baseDir: string, taskId: string, filePath: string, commitHash?: string): Promise<{ oldContent: string; newContent: string }> {
+    return this.post<{ projectDir: string; taskId: string; filePath: string; commitHash?: string }, { oldContent: string; newContent: string }>(
+      '/get-updated-file-contents',
+      {
+        projectDir: baseDir,
+        taskId,
+        filePath,
+        commitHash,
+      },
+    );
   }
   async generateCommitMessage(baseDir: string, taskId: string, filePaths?: string[]): Promise<string> {
     const res = await this.post<{ projectDir: string; taskId: string; filePaths?: string[] }, { message: string }>(
@@ -1042,13 +1064,14 @@ export class BrowserApi implements ApplicationAPI {
   getCustomModes(baseDir: string): Promise<ModeDefinition[]> {
     return this.get<ModeDefinition[]>('/project/custom-modes', { projectDir: baseDir });
   }
-  runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode): Promise<void> {
+  runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode, images?: string[]): Promise<void> {
     return this.post('/project/custom-commands', {
       projectDir: baseDir,
       taskId,
       commandName,
       args,
       mode,
+      images,
     });
   }
   isTerminalSupported(): boolean {
@@ -1176,6 +1199,7 @@ export class BrowserApi implements ApplicationAPI {
       mergeBeforeSwitch: options?.mergeBeforeSwitch,
       targetBranch: options?.targetBranch,
       switchAllInWorktree: options?.switchAllInWorktree,
+      discardWorktreeChanges: options?.discardWorktreeChanges,
     });
   }
 
@@ -1315,6 +1339,20 @@ export class BrowserApi implements ApplicationAPI {
       projectDir: baseDir,
       taskId,
       branchName,
+    });
+  }
+
+  isGitRepository(baseDir: string, taskId: string): Promise<boolean> {
+    return this.get('/project/git/is-repo', {
+      projectDir: baseDir,
+      taskId,
+    });
+  }
+
+  initializeGitRepository(baseDir: string, taskId: string): Promise<void> {
+    return this.post('/project/git/init', {
+      projectDir: baseDir,
+      taskId,
     });
   }
 

@@ -52,6 +52,7 @@ import { compareBaseDirs } from '@common/utils';
 import './index.d';
 
 const api: ApplicationAPI = {
+  getRendererProcessMemoryInfo: () => process.getProcessMemoryInfo(),
   isOpenLogsDirectorySupported: () => true,
   openLogsDirectory: () => ipcRenderer.invoke('open-logs-directory'),
   loadSettings: () => ipcRenderer.invoke('load-settings'),
@@ -100,6 +101,8 @@ const api: ApplicationAPI = {
   getAllFiles: (baseDir, taskId, useGit = true) => ipcRenderer.invoke('get-all-files', baseDir, taskId, useGit),
   refreshContextFiles: (baseDir, taskId) => ipcRenderer.invoke('refresh-context-files', baseDir, taskId),
   getUpdatedFiles: (baseDir, taskId) => ipcRenderer.invoke('get-updated-files', baseDir, taskId),
+  getUpdatedFileDiff: (baseDir, taskId, filePath, commitHash) => ipcRenderer.invoke('get-updated-file-diff', baseDir, taskId, filePath, commitHash),
+  getUpdatedFileContents: (baseDir, taskId, filePath, commitHash) => ipcRenderer.invoke('get-updated-file-contents', baseDir, taskId, filePath, commitHash),
   addFileToGit: (baseDir, taskId, filePath) => ipcRenderer.invoke('add-file-to-git', baseDir, taskId, filePath),
   restoreFile: (baseDir, taskId, filePath) => ipcRenderer.invoke('restore-file', baseDir, taskId, filePath),
   readFile: (baseDir, taskId, filePath) => ipcRenderer.invoke('read-file', baseDir, taskId, filePath),
@@ -732,7 +735,8 @@ const api: ApplicationAPI = {
 
   getCommands: (baseDir) => ipcRenderer.invoke('get-commands', baseDir),
   getCustomModes: (baseDir) => ipcRenderer.invoke('get-custom-modes', baseDir),
-  runCustomCommand: (baseDir, taskId, commandName, args, mode) => ipcRenderer.invoke('run-custom-command', baseDir, taskId, commandName, args, mode),
+  runCustomCommand: (baseDir, taskId, commandName, args, mode, images) =>
+    ipcRenderer.invoke('run-custom-command', baseDir, taskId, commandName, args, mode, images),
 
   // Terminal operations
   isTerminalSupported: () => true,
@@ -771,6 +775,9 @@ const api: ApplicationAPI = {
   mergeIntoCurrentBranch: (baseDir, taskId, branch) => ipcRenderer.invoke('merge-into-current-branch', baseDir, taskId, branch),
   rebaseOntoBranch: (baseDir, taskId, branch) => ipcRenderer.invoke('rebase-onto-branch', baseDir, taskId, branch),
   updateGitBranch: (baseDir, taskId, branchName) => ipcRenderer.invoke('update-git-branch', baseDir, taskId, branchName),
+  isGitRepository: (baseDir, taskId) => ipcRenderer.invoke('git-is-repo', baseDir, taskId),
+  initializeGitRepository: (baseDir, taskId) => ipcRenderer.invoke('git-init-repo', baseDir, taskId),
+
   gitPull: (baseDir, taskId, rebase) => ipcRenderer.invoke('git-pull', baseDir, taskId, rebase),
   gitPush: (baseDir, taskId, force, setUpstream) => ipcRenderer.invoke('git-push', baseDir, taskId, force, setUpstream),
   resolveGitErrorWithAgent: (baseDir, taskId) => ipcRenderer.invoke('resolve-git-error-with-agent', baseDir, taskId),

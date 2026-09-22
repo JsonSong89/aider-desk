@@ -88,7 +88,14 @@ export type ExtensionDisplayAPI = Pick<
   'getExtensionUIComponents' | 'getUIExtensionData' | 'executeUIExtensionAction' | 'onExtensionUIRefresh' | 'loadExtensionLibrary'
 >;
 
+export type RendererProcessMemoryInfo = {
+  private: number;
+  residentSet: number;
+  shared: number;
+};
+
 export interface ApplicationAPI {
+  getRendererProcessMemoryInfo: () => Promise<RendererProcessMemoryInfo | null>;
   isOpenLogsDirectorySupported: () => boolean;
   openLogsDirectory: () => Promise<boolean>;
   loadSettings: () => Promise<SettingsData>;
@@ -136,6 +143,8 @@ export interface ApplicationAPI {
   getAllFiles: (baseDir: string, taskId: string, useGit?: boolean) => Promise<string[]>;
   refreshContextFiles: (baseDir: string, taskId: string) => Promise<void>;
   getUpdatedFiles: (baseDir: string, taskId: string) => Promise<UpdatedFile[]>;
+  getUpdatedFileDiff: (baseDir: string, taskId: string, filePath: string, commitHash?: string) => Promise<string>;
+  getUpdatedFileContents: (baseDir: string, taskId: string, filePath: string, commitHash?: string) => Promise<{ oldContent: string; newContent: string }>;
   addFileToGit: (baseDir: string, taskId: string, filePath: string) => Promise<void>;
   restoreFile: (baseDir: string, taskId: string, filePath: string) => Promise<void>;
   readFile: (baseDir: string, taskId: string, filePath: string) => Promise<string>;
@@ -298,7 +307,7 @@ export interface ApplicationAPI {
 
   getCommands: (baseDir: string) => Promise<CommandsData>;
   getCustomModes: (baseDir: string) => Promise<ModeDefinition[]>;
-  runCustomCommand: (baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode) => Promise<void>;
+  runCustomCommand: (baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode, images?: string[]) => Promise<void>;
 
   // Terminal operations
   isTerminalSupported: () => boolean;
@@ -335,6 +344,8 @@ export interface ApplicationAPI {
   mergeIntoCurrentBranch: (baseDir: string, taskId: string, branch: string) => Promise<{ conflictedFiles?: string[] }>;
   rebaseOntoBranch: (baseDir: string, taskId: string, branch: string) => Promise<{ conflictedFiles?: string[] }>;
   updateGitBranch: (baseDir: string, taskId: string, branchName: string) => Promise<{ output: string }>;
+  isGitRepository: (baseDir: string, taskId: string) => Promise<boolean>;
+  initializeGitRepository: (baseDir: string, taskId: string) => Promise<void>;
   gitPull: (baseDir: string, taskId: string, rebase?: boolean) => Promise<{ output: string }>;
   gitPush: (baseDir: string, taskId: string, force?: boolean, setUpstream?: boolean) => Promise<{ output: string }>;
   resolveGitErrorWithAgent: (baseDir: string, taskId: string) => Promise<void>;
