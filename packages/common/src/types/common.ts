@@ -434,6 +434,7 @@ export const ProjectSettingsSchema = z.object({
   autonomyModeLocked: z.boolean().optional(),
   updatedFilesGroupMode: z.enum(['grouped', 'flat']).default('flat'),
   disabledRuleFiles: z.array(z.string()).default([]),
+  disabledSkills: z.array(z.string()).default([]),
   contextSidebarSectionsOrder: z.array(z.string()).default([]),
   contextSidebarSectionsHidden: z.array(z.string()).default([]),
 });
@@ -1366,6 +1367,8 @@ export interface SkillDefinition {
   dirPath?: string;
   content?: string;
   activated?: boolean;
+  disableModelInvocation?: boolean;
+  userInvocable?: boolean;
 }
 
 export interface SkillsUpdatedData {

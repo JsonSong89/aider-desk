@@ -65,6 +65,7 @@ const COMMANDS = [
   '/reset',
   '/drop',
   '/redo',
+  '/resume',
   '/edit-last',
   '/compact',
   '/smart-compact',
@@ -246,6 +247,8 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
       return getProfiles(baseDir).filter((p) => p.subagent.enabled);
     }, [getProfiles, baseDir]);
 
+    const userInvocableSkills = useMemo(() => skills.filter((skill) => skill.userInvocable !== false), [skills]);
+
     const {
       isRecording,
       isProcessing,
@@ -391,7 +394,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
             if (/^\/skill:\S*$/.test(text)) {
               return {
                 from: 0,
-                options: skills.map((skill) => ({
+                options: userInvocableSkills.map((skill) => ({
                   label: `${SKILL_COMMAND_PREFIX}${skill.name}`,
                   type: 'keyword',
                 })),
@@ -402,9 +405,10 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
             // Add custom and extension commands to the list
             const allCommands = [...customCommands, ...extensionCommands];
             const customCmds = allCommands.map((cmd) => `/${cmd.name}`);
+            const skillCmds = userInvocableSkills.map((skill) => `${SKILL_COMMAND_PREFIX}${skill.name}`);
             return {
               from: 0,
-              options: [...COMMANDS, SKILL_COMMAND_PREFIX, ...customCmds].map((cmd) => {
+              options: [...COMMANDS, SKILL_COMMAND_PREFIX, ...customCmds, ...skillCmds].map((cmd) => {
                 const option: Completion = { label: cmd, type: 'keyword' };
 
                 // Re-open the completion menu to show skill names right after accepting /skill:
@@ -429,7 +433,7 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
           options: [...words, ...allFiles].map((w) => ({ label: w, type: 'text' })),
         };
       },
-      [customCommands, extensionCommands, promptBehavior.suggestionMode, allFiles, api, baseDir, taskId, words, subagentProfiles, skills],
+      [customCommands, extensionCommands, promptBehavior.suggestionMode, allFiles, api, baseDir, taskId, words, subagentProfiles, userInvocableSkills],
     );
 
     const allHistoryItems = useMemo(
@@ -564,6 +568,10 @@ export const PromptField = forwardRef<PromptFieldRef, Props>(
           case '/redo':
             prepareForNextPrompt();
             redoLastUserPrompt();
+            break;
+          case '/resume':
+            prepareForNextPrompt();
+            void api.resumeTask(baseDir, taskId);
             break;
           case '/edit-last':
             prepareForNextPrompt();

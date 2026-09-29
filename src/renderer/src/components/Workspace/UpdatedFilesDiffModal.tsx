@@ -10,8 +10,8 @@ import { clsx } from 'clsx';
 
 import { sortFilesByTreeOrder } from './group-files';
 
-import { IconButton } from '@/components/common/IconButton';
 import { ModalOverlayLayout } from '@/components/common/ModalOverlayLayout';
+import { IconButton } from '@/components/common/IconButton';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { DiffLineCommentPanel, PierreDiffViewer, PierreLineClickInfo, type DiffComment } from '@/components/common/DiffViewer';
 import { CompactSelect } from '@/components/common/CompactSelect';
@@ -85,6 +85,12 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const programmaticScrollRef = useRef(false);
   const isScrollDrivenUpdateRef = useRef(false);
+
+  // Full file context for the current file (single-file view), loaded on demand via the header button.
+  // Tracks which file is expanded so switching files collapses automatically.
+  const { contents: currentFileContents, loading: contentsLoading, load: loadCurrentFileContents } = useUpdatedFileContents(baseDir, taskId, currentFile);
+  // Lazily fetched diff for the current file (single-file view)
+  const currentFileDiff = useUpdatedFileDiff(baseDir, taskId, currentFile);
 
   // Sort each group's files to match the sidebar tree order so the all-files view,
   // navigation and scroll spy agree with the sidebar
@@ -389,9 +395,9 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
             const computeTargetTop = (): number => {
               const rect = element.getBoundingClientRect();
               const containerRect = container.getBoundingClientRect();
-              const header = container.querySelector<HTMLElement>('.sticky.top-0');
+              const header = container.querySelector<HTMLElement>('.sticky.top-0.z-10');
               const headerHeight = header?.getBoundingClientRect().height ?? 0;
-              return container.scrollTop + rect.top - containerRect.top - headerHeight - 8;
+              return container.scrollTop + rect.top - containerRect.top - headerHeight - (header ? 8 : 0);
             };
 
             programmaticScrollRef.current = true;
@@ -460,15 +466,10 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
     [t],
   );
 
-  // Lazily fetched diff for the current file (single-file view)
-  const currentFileDiff = useUpdatedFileDiff(baseDir, taskId, currentFile);
-
-  // Full file context for the current file (single-file view), loaded on demand via the header button.
   // Tracks which file is expanded so switching files collapses automatically.
   const [expandedFileKey, setExpandedFileKey] = useState<string | null>(null);
   const currentFileKey = currentFile ? `${currentFile.commitHash ?? 'uncommitted'}:${currentFile.path}` : null;
   const showFullContext = expandedFileKey !== null && expandedFileKey === currentFileKey;
-  const { contents: currentFileContents, loading: contentsLoading, load: loadCurrentFileContents } = useUpdatedFileContents(baseDir, taskId, currentFile);
 
   const handleToggleExpandContext = useCallback(() => {
     if (!showFullContext) {
@@ -537,9 +538,9 @@ export const UpdatedFilesDiffModal = ({ groups, initialFile, onClose, baseDir, t
       }
 
       const containerRect = container.getBoundingClientRect();
-      const header = container.querySelector<HTMLElement>('.sticky.top-0');
+      const header = container.querySelector<HTMLElement>('.sticky.top-0.z-10');
       const headerHeight = header?.getBoundingClientRect().height ?? 0;
-      const threshold = containerRect.top + headerHeight + 8;
+      const threshold = containerRect.top + headerHeight + (header ? 8 : 0);
 
       let bestIdx = -1;
 

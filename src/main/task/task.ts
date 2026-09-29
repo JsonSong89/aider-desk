@@ -88,6 +88,7 @@ import { isEqual } from 'lodash';
 import type { z } from 'zod';
 import type { ToolContent, JSONValue } from '@common/types';
 import type { RegisteredCommand } from '@/extensions/extension-manager';
+import type { WatchHandle } from '@/file-watcher-manager';
 
 import { ExtensionEventMap, ExtensionManager } from '@/extensions/extension-manager';
 import { getAllFiles, isValidProjectFile } from '@/utils/file-system';
@@ -184,6 +185,8 @@ export class Task {
   private tokensInfo: TokensInfoData;
   private queuedPrompts: QueuedPromptData[] = [];
   private pendingCommandImages?: string[];
+  private fileWatchHandle: WatchHandle | null = null;
+  private fileWatchGeneration = 0;
   private isCompacting = false;
   private lastSmartCompactionMessageCount = 0;
   private smartCompactionLevel = CompactionLevel.One;
@@ -224,7 +227,7 @@ export class Task {
     };
     this.taskDataPath = path.join(this.project.baseDir, AIDER_DESK_TASKS_DIR, this.taskId, 'settings.json');
     this.contextManager = new ContextManager(this, this.taskId);
-    this.skillManager = new SkillManager(project.baseDir, extensionManager);
+    this.skillManager = new SkillManager(project, extensionManager);
     this.agent = new Agent(
       this.store,
       this.agentProfileManager,
@@ -463,6 +466,8 @@ export class Task {
       return this.task;
     }
 
+    const previousTaskState = this.task.state;
+
     logger.debug('Saving task data', {
       baseDir: this.project.baseDir,
       taskId: this.taskId,
@@ -496,6 +501,7 @@ export class Task {
     }
 
     this.eventManager.sendTaskUpdated(this.task);
+    this.syncFileWatching(previousTaskState);
 
     logger.debug('Saved task data', {
       baseDir: this.project.baseDir,
@@ -504,6 +510,59 @@ export class Task {
     });
 
     return this.task;
+  }
+
+  /**
+   * Starts/stops watching the task dir for file changes while the task is in progress.
+   */
+  private syncFileWatching(previousTaskState: TaskData['state'] | undefined) {
+    const wasWatching = previousTaskState === DefaultTaskState.InProgress;
+    const shouldBeWatching = this.task.state === DefaultTaskState.InProgress;
+
+    if (wasWatching === shouldBeWatching) {
+      return;
+    }
+
+    this.stopFileWatching();
+    const generation = this.fileWatchGeneration;
+    if (shouldBeWatching) {
+      logger.debug('Starting file watching', { baseDir: this.project.baseDir, taskId: this.taskId });
+      void this.project
+        .getFileWatcherManager()
+        .watch(this.getTaskDir(), () => this.onWatchedFilesChanged())
+        .then((handle) => {
+          if (generation === this.fileWatchGeneration && this.task.state === DefaultTaskState.InProgress) {
+            this.fileWatchHandle = handle;
+          } else {
+            handle.unwatch();
+          }
+        })
+        .catch((error) =>
+          logger.error('Failed to start file watching', {
+            baseDir: this.project.baseDir,
+            taskId: this.taskId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+    } else {
+      logger.debug('Stopping file watching', { baseDir: this.project.baseDir, taskId: this.taskId });
+    }
+  }
+
+  private stopFileWatching() {
+    this.fileWatchGeneration++;
+    this.fileWatchHandle?.unwatch();
+    this.fileWatchHandle = null;
+  }
+
+  public async onWatchedFilesChanged() {
+    if (this.task.state !== DefaultTaskState.InProgress) {
+      return;
+    }
+
+    await this.sendUpdatedFilesUpdated();
+    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.updateAutocompletionData(undefined, true);
   }
 
   public async init(readonly = false) {
@@ -780,6 +839,7 @@ export class Task {
   }
 
   public async close(clearContext = false, cleanupEmptyTask = true) {
+    this.stopFileWatching();
     if (!this.initialized) {
       return;
     }
@@ -796,6 +856,7 @@ export class Task {
     this.resolveAgentRunPromises();
     this.cleanupChunkBuffers();
 
+    this.stopFileWatching();
     await this.aiderManager.kill();
     if (cleanupEmptyTask) {
       await this.cleanUpEmptyTask();
@@ -2709,6 +2770,12 @@ export class Task {
   }
 
   public async activateSkill(skillName: string): Promise<[ContextAssistantMessage, ContextToolMessage] | null> {
+    const skills = await this.getSkills();
+    const skill = skills.find((s) => s.name === skillName);
+    if (!skill || skill.userInvocable === false) {
+      throw new Error(`Skill '${skillName}' cannot be invoked manually (user-invocable: false)`);
+    }
+
     const messages = await this.createSkillMessages(skillName);
     if (!messages) {
       return null;
@@ -3844,12 +3911,16 @@ export class Task {
     const modeChanged = oldSettings.currentMode !== newSettings.currentMode;
     const agentProfileIdChanged = oldSettings.agentProfileId !== newSettings.agentProfileId;
     const disabledRulesChanged = JSON.stringify(oldSettings.disabledRuleFiles) !== JSON.stringify(newSettings.disabledRuleFiles);
+    const disabledSkillsChanged = JSON.stringify(oldSettings.disabledSkills) !== JSON.stringify(newSettings.disabledSkills);
 
     if (agentProfileIdChanged || modeChanged || disabledRulesChanged) {
       void this.sendContextFilesUpdated();
     }
     if (disabledRulesChanged) {
       void this.updateAgentEstimatedTokens();
+    }
+    if (disabledSkillsChanged) {
+      void this.sendSkillsUpdated();
     }
   }
 
@@ -5481,7 +5552,13 @@ ${error.stderr}`,
 
       const isConflict = error instanceof GitError && error.gitOutput?.includes('Resolve all conflicts manually');
 
-      if (!isConflict) {
+      // The 'Continuing rebase...' loading message must be closed explicitly,
+      // otherwise it stays visible forever when the rebase pauses on conflicts
+      this.addLogMessage('loading', undefined, true);
+
+      if (isConflict) {
+        this.addLogMessage('info', 'worktree.rebasePausedDueToConflicts', true);
+      } else {
         this.addLogMessage(
           'error',
           error instanceof GitError ? error.getErrorDetails() : `Failed to continue rebase: ${error instanceof Error ? error.message : String(error)}`,

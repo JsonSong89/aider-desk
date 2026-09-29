@@ -1,12 +1,31 @@
 # Changelog
 
-## [UNRELEASED]
+## [0.85.0]
 
-- added find in file support to the file editor with a themed search panel opened via Ctrl+F / Cmd+F
-- fixed duplicate keys in git branches popup rows causing React rendering issues
-- fixed crash with React error #185 (maximum update depth exceeded) during message streaming by ensuring message list item ids are always unique and updating @legendapp/list to 3.3.11
-- fixed committing deleted files failing to stage by retrying with `git add -A -f`
-- added passing images attached to the prompt to custom extension commands, allowing extensions to include the screenshot in the prompt they run
+- added file watcher for refreshing task files, worktree status and autocompletion while a task runs
+- added find in file support to the file editor with Ctrl+F / Cmd+F
+- fixed duplicate keys in git branches popup rows
+- fixed crash during message streaming (React maximum update depth exceeded)
+- fixed committing deleted files with `git add -A -f` retry
+- added passing prompt-attached images to custom extension commands
+- fixed in-progress tasks being evicted from the task mount pool when switching tasks
+- fixed find in file shortcut being swallowed by inactive background project task views
+- updated default models for built-in providers to their latest versions
+- added built-in skill names to the `/` command autocompletion
+- improved task sidebar spinner visibility for collapsed parent subtasks
+- clarified worktree to local mode switch dialog for shared worktrees
+- added command palette actions to show or hide archived tasks
+- added context menu action to open project folder from project tabs
+- added low reasoning effort option for Z.ai plan provider
+- fixed code highlighting fallback when auto-detected language yields no matches
+- added disable-model-invocation and user-invocable skill frontmatter options
+- fixed wrong scroll offset in updated files diff modal when tracking headers were not found
+- fixed provider options leaking into task context messages
+- fixed partial commits including unrelated staged files by committing only selected files via pathspec mode
+- added `/resume` command to prompt autocompletion for resuming tasks
+- added option to disable skills per project
+- added LLM API provider
+- added task-message-bar-menu extension UI placement for message dropdown menu actions
 
 ## [0.84.0]
 

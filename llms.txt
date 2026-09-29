@@ -52,6 +52,7 @@ resources/
   connector/
     connector.py
 scripts/
+  after-pack.js
   before-pack.js
   download-probe.mjs
   test-proxy-server.mjs
@@ -136,6 +137,7 @@ src/
         groq.ts
         kimi-plan.ts
         litellm.ts
+        llmapi.ts
         lm-studio.ts
         minimax.ts
         mistral.ts
@@ -261,6 +263,7 @@ src/
     app.ts
     constants.ts
     events-handler.ts
+    file-watcher-manager.ts
     index.ts
     ipc-handlers.ts
     logger.ts
@@ -442,6 +445,7 @@ src/
             index.ts
             KimiPlanParameters.tsx
             LitellmParameters.tsx
+            LlmApiParameters.tsx
             LmStudioParameters.tsx
             MinimaxParameters.tsx
             MistralParameters.tsx
@@ -729,6 +733,7 @@ src/
         index.ts
         KimiPlanIcon.tsx
         LitellmIcon.tsx
+        LlmApiIcon.tsx
         LmStudioIcon.tsx
         MinimaxIcon.tsx
         MistralIcon.tsx
@@ -762,6 +767,7 @@ src/
         settingsNavigationStore.ts
         settingsStore.ts
         taskFilesStore.ts
+        taskSidebarStore.ts
         taskStore.ts
         terminalStore.ts
       themes/
@@ -1575,11 +1581,32 @@ posthog_api_key = os.getenv("POSTHOG_API_KEY")
 # Set OpenRouter site and app name
 
 ================
+File: scripts/after-pack.js
+================
+const restore = (dir, rel) =>
+⋮----
+// Moves everything packaged-pruned in scripts/before-pack.js back into node_modules,
+// so the dev environment and other platform builds keep all platform binaries.
+
+================
 File: scripts/before-pack.js
 ================
-// Copy all files from source directory to target directory
+const nodePlatform = (platformName)
 ⋮----
-// Copy all files from source directory to target directory
+const pruneToBackup = (nodeModulesDir, relPaths, key) =>
+⋮----
+const pruneOnnxruntimeNode = (nodeModulesDir, nodePlatformName, nodeArch, key) =>
+⋮----
+// CUDA and TensorRT execution providers are loaded dynamically and are not used (embeddings run on CPU); they add ~344MB on linux/x64.
+⋮----
+const pruneLanceDb = (nodeModulesDir, nodePlatformName, nodeArch, key) =>
+⋮----
+// lancedb ships glibc (gnu) and musl builds; our Linux targets (AppImage/deb/rpm) use glibc, so only keep the gnu flavor
+⋮----
+// only prune when we found a matching subpackage for the current platform/arch, otherwise keep everything to be safe
+⋮----
+// Moves platform-mismatched native binaries away from node_modules for the duration of packaging,
+// so they are not included in the bundle; restored again in scripts/after-pack.js.
 
 ================
 File: scripts/download-probe.mjs
@@ -1996,7 +2023,17 @@ import {
   TASKS_TOOL_SEARCH_TASK,
   TOOL_GROUP_NAME_SEPARATOR,
 } from '@common/tools';
-import { AgentProfile, AutonomyMode, DefaultTaskState, PromptContext, SettingsData, TaskData, TaskExecutionMode, ToolApprovalState } from '@common/types';
+import {
+  AgentProfile,
+  AutonomyMode,
+  ContextMessage,
+  DefaultTaskState,
+  PromptContext,
+  SettingsData,
+  TaskData,
+  TaskExecutionMode,
+  ToolApprovalState,
+} from '@common/types';
 import { fileExists, isUuid } from '@common/utils';
 ⋮----
 import { ApprovalManager } from './approval-manager';
@@ -2007,6 +2044,8 @@ import logger from '@/logger';
 import { isAbortError } from '@/utils/errors';
 import { deriveDirName } from '@/utils';
 import { Task } from '@/task';
+⋮----
+const stripProviderOptions = (content: ContextMessage['content']): ContextMessage['content']
 ⋮----
 export const createTasksToolset = (settings: SettingsData, task: Task, profile: AgentProfile, promptContext?: PromptContext): ToolSet =>
 ⋮----
@@ -4835,7 +4874,7 @@ validateUIComponentDefinition(component: UIComponentDefinition):
 ⋮----
 async updateAgentProfile(profile: AgentProfile): Promise<AgentProfile | null>
 ⋮----
-async executeCommand(commandName: string, args: string[], project: Project, task?: Task): Promise<void>
+async executeCommand(commandName: string, args: string[], project: Project, task?: Task, images?: string[]): Promise<void>
 ⋮----
 /**
    * Fetch available extensions from a repository URL
@@ -5169,7 +5208,7 @@ async setTodos(items: TodoItem[], initialUserPrompt = ''): Promise<void>
 ⋮----
 // Execution
 ⋮----
-async runPrompt(prompt: string, mode?: string): Promise<void>
+async runPrompt(prompt: string, mode?: string, images?: string[]): Promise<void>
 ⋮----
 async runPromptInAgent(
     profile: AgentProfile,
@@ -6016,10 +6055,10 @@ private async markConflictingFiles(worktreePath: string, files: UpdatedFile[]): 
 ⋮----
 async addFileToGit(worktreePath: string, filePath: string): Promise<void>
 ⋮----
-// Files explicitly added by the user should be staged even when ignored (e.g. .aider-desk rules)
-⋮----
-// git check-ignore is unreliable here: negation rules under an excluded parent directory
-// (e.g. .aider* + !.aider-desk/rules) report "not ignored" but git add still refuses
+// Files explicitly added by the user should always be staged: -f handles ignored files
+// (git check-ignore is unreliable here: negation rules under an excluded parent directory,
+// e.g. .aider* + !.aider-desk/rules, report "not ignored" but git add still refuses),
+// -A stages deletions (git add fails with "pathspec did not match any files" for files removed on disk)
 ⋮----
 async stageFile(worktreePath: string, filePath: string): Promise<boolean>
 ⋮----
@@ -6057,15 +6096,28 @@ async commitChanges(worktreePath: string, message: string, amend: boolean, fileP
 ⋮----
 // Get the list of updated files (unstaged changes that are shown in the UI)
 ⋮----
-// Stage updated files before committing
+// Stage updated files before committing. With a file selection the commit runs in the
+// --only pathspec form (see below), which takes tracked files directly from the working
+// tree — so staging is only needed for files not yet tracked (untracked, incl. ignored ones).
+// Without a selection (full commit / amend) everything must be staged, because a plain
+// `git commit` only takes what is in the index.
 ⋮----
-// Retry with --force: files explicitly selected in the UI should be staged even
-// when ignored (git check-ignore misses directory-traversal exclusions like
-// .aider* ignoring .aider-desk/rules despite a negation pattern)
+// A selection that covers all updated files is effectively a full commit — keep the
+// plain index commit (shorter command, everything is committed anyway)
+⋮----
+// Retry with -A -f: untracked files must always be staged for the commit.
+// -A stages deletions (git add fails with "pathspec did not match any files" for
+// files removed on disk), -f handles ignored files (git check-ignore misses
+// directory-traversal exclusions like .aider* ignoring .aider-desk/rules
+// despite a negation pattern)
 ⋮----
 // Escape the commit message for shell
 ⋮----
 // If amending and message is empty, use --no-edit to keep previous message
+⋮----
+// When a file selection is provided, commit only those paths (--only pathspec form).
+// Plain `git commit` would also include any other files already staged in the index,
+// which breaks partial commits when edited files are left staged.
 ⋮----
 async getRebaseState(worktreePath: string): Promise<RebaseState>
 ⋮----
@@ -7102,6 +7154,61 @@ apiKey = 'sk-dummy'; // Dummy key for OpenAI-compatible client which expects a k
 // Model discovery functions
 
 ================
+File: src/main/models/providers/llmapi.ts
+================
+import { Model, ProviderProfile, SettingsData, UsageReportData } from '@common/types';
+import { isLlmApiProvider, LlmApiProvider } from '@common/agent';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+⋮----
+import type { LanguageModel, LanguageModelUsage } from 'ai';
+⋮----
+import { AIDER_DESK_TITLE, AIDER_DESK_WEBSITE } from '@/constants';
+import { AiderModelMapping, LlmProviderStrategy, LoadModelsResponse } from '@/models';
+import logger from '@/logger';
+import { getEffectiveEnvironmentVariable } from '@/utils';
+import { getDefaultUsageReport } from '@/models/providers/default';
+import { Task } from '@/task/task';
+⋮----
+interface LlmApiPricing {
+  prompt?: string;
+  completion?: string;
+  input_cache_read?: string;
+  input_cache_write?: string;
+}
+⋮----
+interface LlmApiModel {
+  id: string;
+  context_length?: number;
+  pricing: LlmApiPricing;
+}
+⋮----
+interface LlmApiModelsResponse {
+  data: LlmApiModel[];
+}
+⋮----
+const parsePrice = (price: string | undefined): number | undefined =>
+⋮----
+const loadLlmApiModels = async (profile: ProviderProfile, settings: SettingsData): Promise<LoadModelsResponse> =>
+⋮----
+export const hasLlmApiEnvVars = (settings: SettingsData): boolean =>
+⋮----
+export const getLlmApiAiderMapping = (provider: ProviderProfile, modelId: string, settings: SettingsData, projectDir: string): AiderModelMapping =>
+⋮----
+// LLMAPI is OpenAI-compatible, so we use the OpenAI endpoint for Aider
+⋮----
+// === LLM Creation Functions ===
+export const createLlmApiLlm = (profile: ProviderProfile, model: Model, settings: SettingsData, projectDir: string): LanguageModel =>
+⋮----
+// === Cost and Usage Functions ===
+export const getLlmApiUsageReport = (task: Task, provider: ProviderProfile, model: Model, usage: LanguageModelUsage): UsageReportData
+⋮----
+// === Complete Strategy Implementation ===
+⋮----
+// Core LLM functions
+⋮----
+// Model discovery functions
+
+================
 File: src/main/models/providers/lm-studio.ts
 ================
 import { Model, ProviderProfile, SettingsData } from '@common/types';
@@ -7986,6 +8093,7 @@ import { groqProviderStrategy } from './providers/groq';
 import { alibabaPlanProviderStrategy } from './providers/alibaba-plan';
 import { kimiPlanProviderStrategy } from './providers/kimi-plan';
 import { litellmProviderStrategy } from './providers/litellm';
+import { llmApiProviderStrategy } from './providers/llmapi';
 import { lmStudioProviderStrategy } from './providers/lm-studio';
 import { minimaxProviderStrategy } from './providers/minimax';
 import { mistralProviderStrategy } from './providers/mistral';
@@ -8571,6 +8679,7 @@ import { ExtensionManager } from '@/extensions/extension-manager';
 import { AIDER_DESK_TASKS_DIR, AIDER_DESK_WATCH_FILES_LOCK } from '@/constants';
 import { PythonDependenciesInstaller } from '@/python-dependencies-installer';
 import { determineMainModel, determineWeakModel } from '@/utils';
+import { FileWatcherManager } from '@/file-watcher-manager';
 ⋮----
 export class Project
 ⋮----
@@ -8692,6 +8801,8 @@ private async reloadTasksInternal(): Promise<TaskData[]>
 forEachTask(callback: (task: Task) => void, initializedOnly = true)
 ⋮----
 async settingsChanged(oldSettings: SettingsData, newSettings: SettingsData)
+⋮----
+public getFileWatcherManager(): FileWatcherManager
 ⋮----
 async projectSettingsChanged(oldSettings: ProjectSettings, newSettings: ProjectSettings)
 ⋮----
@@ -9903,6 +10014,8 @@ import type { Task } from '@/task';
 import { AIDER_DESK_BUILTIN_SKILLS_DIR, AIDER_DESK_DIR, AIDER_DESK_HOME_DIR } from '@/constants';
 import { ExtensionManager } from '@/extensions/extension-manager';
 ⋮----
+const parseBooleanFrontMatterField = (value: unknown, defaultValue: boolean): boolean =>
+⋮----
 const parseSkillFrontMatter = (markdown: string):
 ⋮----
 const safeReadDir = async (dirPath: string): Promise<string[]> =>
@@ -9913,11 +10026,13 @@ const loadSkillsFromDir = async (skillsRootDir: string, location: SkillLocation)
 ⋮----
 export class SkillManager
 ⋮----
-constructor(projectDir: string, extensionManager?: ExtensionManager)
+constructor(project: Project, extensionManager?: ExtensionManager)
 ⋮----
 async loadAllSkills(): Promise<Skill[]>
 ⋮----
 async getSkills(contextMessages?: ContextMessage[]): Promise<Skill[]>
+⋮----
+async getEnabledSkills(): Promise<Skill[]>
 ⋮----
 async getSkillContent(skillName: string): Promise<string | null>
 ⋮----
@@ -10821,6 +10936,7 @@ import { isEqual } from 'lodash';
 import type { z } from 'zod';
 import type { ToolContent, JSONValue } from '@common/types';
 import type { RegisteredCommand } from '@/extensions/extension-manager';
+import type { WatchHandle } from '@/file-watcher-manager';
 ⋮----
 import { ExtensionEventMap, ExtensionManager } from '@/extensions/extension-manager';
 import { getAllFiles, isValidProjectFile } from '@/utils/file-system';
@@ -10943,6 +11059,15 @@ public async saveTask(updates?: Partial<TaskData>, updateTimestamps = true): Pro
 // Allow extensions to modify task data before saving
 ⋮----
 // only save if task is not new
+⋮----
+/**
+   * Starts/stops watching the task dir for file changes while the task is in progress.
+   */
+private syncFileWatching(previousTaskState: TaskData['state'] | undefined)
+⋮----
+private stopFileWatching()
+⋮----
+public async onWatchedFilesChanged()
 ⋮----
 public async init(readonly = false)
 ⋮----
@@ -11546,11 +11671,16 @@ async initProjectAgentsFile(args?: string): Promise<void>
 ⋮----
 // Check if the AGENTS.md file was created
 ⋮----
-private async runExtensionCommand(extensionCommand: RegisteredCommand, args: string[], mode: Mode): Promise<void>
+private async runExtensionCommand(extensionCommand: RegisteredCommand, args: string[], mode: Mode, images?: string[]): Promise<void>
+⋮----
+// Images attached to the prompt are automatically included in the first prompt submitted
+// by the extension (via runPrompt/runPromptInAgent), unless it passes images explicitly
 ⋮----
 // Execute the command - extension is fully responsible for its logic
 ⋮----
-public async runCustomCommand(commandName: string, args: string[], mode: Mode = 'agent'): Promise<void>
+takePendingCommandImages(): string[] | undefined
+⋮----
+public async runCustomCommand(commandName: string, args: string[], mode: Mode = 'agent', images?: string[]): Promise<void>
 ⋮----
 // Queue the custom command for later execution
 ⋮----
@@ -11726,6 +11856,9 @@ public async resolveGitErrorWithAgent(): Promise<void>
 public async continueWorktreeRebase(): Promise<void>
 ⋮----
 // Clear any remaining merge state after successful rebase continuation
+⋮----
+// The 'Continuing rebase...' loading message must be closed explicitly,
+// otherwise it stays visible forever when the rebase pauses on conflicts
 ⋮----
 public async duplicateFrom(sourceTask: Task): Promise<void>
 ⋮----
@@ -13014,7 +13147,7 @@ async getCommands(baseDir: string): Promise<CommandsData>
 ⋮----
 async getCustomModes(baseDir: string): Promise<ModeDefinition[]>
 ⋮----
-async runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode): Promise<void>
+async runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode, images?: string[]): Promise<void>
 ⋮----
 async updateMainModel(baseDir: string, taskId: string, mainModel: string): Promise<void>
 ⋮----
@@ -13316,6 +13449,95 @@ getExtensionConfigComponent(extensionId: string, projectDir?: string): Extension
 async getExtensionConfig(extensionId: string, projectDir?: string): Promise<unknown>
 ⋮----
 async saveExtensionConfig(extensionId: string, configData: unknown, projectDir?: string): Promise<unknown>
+
+================
+File: src/main/file-watcher-manager.ts
+================
+import fs from 'fs/promises';
+import path from 'path';
+⋮----
+import { FSWatcher, watch } from 'chokidar';
+import debounce from 'lodash/debounce';
+import { simpleGit } from 'simple-git';
+⋮----
+import type { Store } from '@/store';
+⋮----
+import { shouldUsePolling } from '@/utils/file-watch';
+import logger from '@/logger';
+⋮----
+export type FileWatchOptions = {
+  ignored?: (string | RegExp)[] | ((matchingPath: string) => boolean);
+  debounceMs?: number;
+};
+⋮----
+export interface WatchHandle {
+  unwatch: () => void;
+}
+⋮----
+type WatcherEntry = {
+  dir: string;
+  watcher: FSWatcher | null;
+  handles: Set<() => Promise<void>>;
+  notify: (() => void) & { cancel: () => void };
+  loggedEnospc?: boolean;
+};
+⋮----
+// Heavy directories excluded from watching by default
+⋮----
+const getErrorMessage = (error: unknown): string
+⋮----
+const tryCatchAsync = async (fn: () => void | Promise<void>, context: string) =>
+⋮----
+/**
+ * Lists paths ignored by git rules (collapsed to top-level entries), e.g. `out/`, `.aider-desk/tmp/`.
+ * Returns paths relative to `dir` (dirs end with `/`), or an empty list for non-git dirs / failures.
+ */
+const getGitIgnoredEntries = async (dir: string): Promise<string[]> =>
+⋮----
+const countWatchedEntries = async (dir: string, isIgnored: (watcherPath: string) => boolean, isCancelled: () => boolean): Promise<number> =>
+⋮----
+export class FileWatcherManager
+⋮----
+constructor(private readonly store: Store)
+⋮----
+/**
+   * Starts watching `dir` (one shared chokidar watcher per dir + options combination,
+   * handles are ref-counted) and returns a handle that must be released with `unwatch()`.
+   * The debounced `onChange` is invoked for file changes (add/change/unlink).
+   *
+   * Watching is skipped (no-op handle) when the directory tree is too large to watch safely.
+   */
+async watch(dir: string, onChange: () => void | Promise<void>, options: FileWatchOptions =
+⋮----
+const handler = () => tryCatchAsync(onChange, `watch '$
+⋮----
+const isCancelled = ()
+⋮----
+async dispose(): Promise<void>
+⋮----
+private createIgnoredList(dir: string, gitIgnoredEntries: string[], userIgnored?: FileWatchOptions['ignored']): ((watcherPath: string) => boolean)[]
+⋮----
+const matcher = (relativePath: string): boolean =>
+⋮----
+// path itself or one of its ancestors matches a gitignored entry
+⋮----
+const matchFn = (watcherPath: string): boolean =>
+⋮----
+private getWatchKey(dir: string, options: FileWatchOptions): string
+⋮----
+private createEntry(dir: string, options: FileWatchOptions, ignoredForWatcher: ((watcherPath: string) => boolean)[]): WatcherEntry
+⋮----
+private bindWatcherEvents(entry: WatcherEntry)
+⋮----
+private handleWatcherError(entry: WatcherEntry, error: unknown): void
+⋮----
+// Log once per watcher instead of spamming an error for every unwatchable path
+⋮----
+private async closeEntry(entry: WatcherEntry): Promise<void>
+⋮----
+private deleteEntry(entry: WatcherEntry): void
+⋮----
+private async closeWatcher(entry: WatcherEntry): Promise<void>
 
 ================
 File: src/main/index.ts
@@ -14721,7 +14943,7 @@ addContextMenuListener(callback: (params: ContextMenuParams) => void): () => voi
 addShowViewListener(callback: (viewId: string) => void): () => void
 async getCommands(baseDir: string): Promise<CommandsData>
 getCustomModes(baseDir: string): Promise<ModeDefinition[]>
-runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode): Promise<void>
+runCustomCommand(baseDir: string, taskId: string, commandName: string, args: string[], mode: Mode, images?: string[]): Promise<void>
 isTerminalSupported(): boolean
 async createTerminal(baseDir: string, taskId: string, cols?: number, rows?: number): Promise<string>
 async writeToTerminal(terminalId: string, data: string): Promise<boolean>
@@ -15791,24 +16013,6 @@ type Props = {
   additionalAction?: AdditionalAction;
   enableFocusTrap?: boolean;
 };
-⋮----
-export const ConfirmDialog = ({
-  title,
-  onConfirm,
-  onCancel,
-  confirmButtonText,
-  cancelButtonText,
-  contentClass,
-  children,
-  disabled = false,
-  confirmButtonClass,
-  confirmButtonColor,
-  width,
-  closeOnEscape = false,
-  footerAdditionalComponents,
-  additionalAction,
-  enableFocusTrap,
-}: Props) =>
 
 ================
 File: src/renderer/src/components/common/DatePicker.css
@@ -15906,8 +16110,6 @@ type Props = {
   minHeight?: number;
   className?: string;
 };
-⋮----
-onDragStop=
 ⋮----
 icon=
 ⋮----
@@ -16982,7 +17184,6 @@ checked=
 {/* Auto-scroll */}
 ⋮----
 {/* Clear logs button */}
-<Button onClick=
 ⋮----
 {/* Clear confirmation dialog */}
 ⋮----
@@ -17286,9 +17487,6 @@ const handleUnarchiveClick = () =>
 ⋮----
 const renderSection = (icon: ReactNode, text: string, actions: ReactNode) =>
 ⋮----
-
-⋮----
-onClose=
 
 ================
 File: src/renderer/src/components/message/DeleteMemoryToolMessage.tsx
@@ -17857,6 +18055,7 @@ import { UsageInfo } from './UsageInfo';
 import { useApi } from '@/contexts/ApiContext';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { ExtensionComponentWrapper } from '@/components/extensions/ExtensionComponentWrapper';
+import { useExtensionComponentsWrapper } from '@/components/extensions/useExtensionComponentsWrapper';
 import { includeMessageProperty } from '@/components/message/utils';
 ⋮----
 type MenuPosition = {
@@ -18896,6 +19095,10 @@ export const includeMessageProperty = (message: Message): boolean =>
  */
 export const groupAssistantMessages = (messages: Message[]): Message[] =>
 ⋮----
+const nextUniqueId = (message: Message): string =>
+⋮----
+const pushWithUniqueId = (message: Message) =>
+⋮----
 const flushCurrentGroup = () =>
 ⋮----
 // Create an AssistantGroupMessage
@@ -18922,6 +19125,9 @@ export const areMessagesEqual = (prevMessage: Message, nextMessage: Message): bo
 ⋮----
 // Check args for ToolMessage
 ⋮----
+// LegendList keys items by id; duplicate ids in the list data cause a
+// measurement/re-render feedback loop that crashes with React error #185,
+// so every item pushed here must have a unique id.
 export const groupMessagesByPromptContext = (messages: Message[]): Message[] =>
 ⋮----
 // First pass: collect messages with groups
@@ -19066,6 +19272,8 @@ type Props = {
   provider: AnthropicCompatibleProvider;
   onChange: (updated: AnthropicCompatibleProvider) => void;
 };
+⋮----
+export const AnthropicCompatibleParameters = (
 ⋮----
 const handleBaseUrlChange = (e: ChangeEvent<HTMLInputElement>) =>
 ⋮----
@@ -19420,6 +19628,8 @@ type Props = {
   onChange: (updated: GpustackProvider) => void;
 };
 ⋮----
+export const GpustackParameters = (
+⋮----
 const handleBaseUrlChange = (e: ChangeEvent<HTMLInputElement>) =>
 ⋮----
 const handleApiKeyChange = (e: ChangeEvent<HTMLInputElement>) =>
@@ -19488,7 +19698,28 @@ type Props = {
   onChange: (updated: LitellmProvider) => void;
 };
 ⋮----
+export const LitellmParameters = (
+⋮----
 const handleBaseUrlChange = (e: ChangeEvent<HTMLInputElement>) =>
+⋮----
+const handleApiKeyChange = (e: ChangeEvent<HTMLInputElement>) =>
+⋮----
+label=
+
+================
+File: src/renderer/src/components/ModelLibrary/providers/LlmApiParameters.tsx
+================
+import { ChangeEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import { LlmApiProvider } from '@common/agent';
+⋮----
+import { Input } from '@/components/common/Input';
+import { useEffectiveEnvironmentVariable } from '@/hooks/useEffectiveEnvironmentVariable';
+⋮----
+type Props = {
+  provider: LlmApiProvider;
+  onChange: (updated: LlmApiProvider) => void;
+};
 ⋮----
 const handleApiKeyChange = (e: ChangeEvent<HTMLInputElement>) =>
 ⋮----
@@ -19508,6 +19739,8 @@ type Props = {
   provider: LmStudioProvider;
   onChange: (updated: LmStudioProvider) => void;
 };
+⋮----
+export const LmStudioParameters = (
 ⋮----
 const handleBaseUrlChange = (e: ChangeEvent<HTMLInputElement>) =>
 ⋮----
@@ -19633,6 +19866,8 @@ type Props = {
   onChange: (updated: OllamaProvider) => void;
 };
 ⋮----
+export const OllamaParameters = (
+⋮----
 const handleBaseUrlChange = (e: ChangeEvent<HTMLInputElement>) =>
 ⋮----
 label=
@@ -19737,6 +19972,8 @@ type Props = {
   provider: OpenAiCompatibleProvider;
   onChange: (updated: OpenAiCompatibleProvider) => void;
 };
+⋮----
+export const OpenAiCompatibleParameters = (
 ⋮----
 const handleBaseUrlChange = (e: ChangeEvent<HTMLInputElement>) =>
 ⋮----
@@ -20471,6 +20708,8 @@ const handleBulkToggleHidden = async (modelIds: string[], isHidden: boolean) =>
 <ModalOverlayLayout title=
 ⋮----
 // Show provider configuration form
+⋮----
+onCancel=
 
 ================
 File: src/renderer/src/components/ModelLibrary/ModelParameterOverrides.tsx
@@ -20637,6 +20876,7 @@ import {
   GpustackIcon,
   GroqIcon,
   LitellmIcon,
+  LlmApiIcon,
   LmStudioIcon,
   MinimaxIcon,
   MistralIcon,
@@ -20744,6 +20984,7 @@ import {
   AlibabaPlanParameters,
   KimiPlanParameters,
   LitellmParameters,
+  LlmApiParameters,
   LmStudioParameters,
   MinimaxParameters,
   MistralParameters,
@@ -20838,6 +21079,7 @@ import {
   GroqIcon,
   KimiPlanIcon,
   LitellmIcon,
+  LlmApiIcon,
   LmStudioIcon,
   MinimaxIcon,
   MistralIcon,
@@ -20971,6 +21213,7 @@ type Props = {
   isExpanded: boolean;
   onToggleExpand: (taskId: string) => void;
   hasChildren: boolean;
+  showSpinner: boolean;
   draggedTaskIds: Set<string>;
   dragOverTaskId: string | null;
   onDragStart: (taskId: string) => void;
@@ -21147,6 +21390,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { Checkbox } from '@/components/common/Checkbox';
 import { Toggle } from '@/components/common/Toggle';
 import { getTaskStateLabel, getStateTextClass } from '@/components/common/TaskStateChip';
+import { useTaskSidebarStore } from '@/stores/taskSidebarStore';
 ⋮----
 type Props = {
   loading: boolean;
@@ -21190,6 +21434,9 @@ const handleMultiselectClose = () =>
 const handleKeyDown = (e: globalThis.KeyboardEvent) =>
 ⋮----
 // Handle click outside for multiselect menu
+⋮----
+// propagate through the whole chain of collapsed ancestors so that
+// the closest visible ancestor of the in-progress subtask shows the spinner
 ⋮----
 // eslint-disable-next-line react-hooks/incompatible-library
 ⋮----
@@ -21299,6 +21546,7 @@ type Props = {
   taskId: string;
   state?: string;
   isCollapsed?: boolean;
+  showSpinner?: boolean;
 };
 ⋮----
 export const TaskStatusIcon = (
@@ -21434,25 +21682,6 @@ type Props = {
   refreshContextFiles: () => Promise<void>;
   onToggleFilesSidebarCollapse?: () => void;
 };
-⋮----
-export const FilesContextInfoContent = ({
-  baseDir,
-  taskId,
-  allFiles,
-  contextFiles,
-  aiderTotalCost,
-  maxInputTokens,
-  clearMessages,
-  runCommand,
-  resetTask,
-  mode,
-  showFileDialog,
-  task,
-  updateTask,
-  refreshAllFiles,
-  refreshContextFiles,
-  onToggleFilesSidebarCollapse,
-}: Props) =>
 
 ================
 File: src/renderer/src/components/project/GitBranchesButton.tsx
@@ -21616,7 +21845,7 @@ label=
 ================
 File: src/renderer/src/components/project/GitBranchesPopup.tsx
 ================
-import { MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CgSpinner } from 'react-icons/cg';
 import { FaChevronDown, FaChevronRight, FaFolder, FaFolderOpen, FaMagnifyingGlass } from 'react-icons/fa6';
@@ -21656,23 +21885,13 @@ const buildBranchTree = (branches: BranchInfo[]): BranchTreeNode[] =>
 ⋮----
 const rowKey = (row?: RowItem) =>
 ⋮----
-const isFolderCollapsed = (fullPath: string) =>
-⋮----
 // Collapsed by default; only folders on the current branch's path start expanded
 ⋮----
 const walk = (nodes: BranchTreeNode[], depth: number) =>
 ⋮----
-// eslint-disable-next-line react-hooks/exhaustive-deps
-⋮----
-const getSubmenuItems = (branch: BranchInfo) =>
-⋮----
-// eslint-disable-next-line react-hooks/exhaustive-deps
-⋮----
 const handleFilterChange = (value: string) =>
 ⋮----
 const toggleFolder = (fullPath: string, currentlyCollapsed: boolean) =>
-⋮----
-const openSubmenuFor = (branch: BranchInfo, e?: MouseEvent<HTMLElement>) =>
 ⋮----
 className=
 ⋮----
@@ -21681,6 +21900,8 @@ className=
 const handleKeyDown = (e: KeyboardEvent) =>
 ⋮----
 return <div key=
+⋮----
+<div key=
 ⋮----
 setOpenSubmenu(null);
 item.action();
@@ -21798,8 +22019,6 @@ export const MobileSidebar = ({
 className=
 ⋮----
 <div onClick=
-⋮----
-showFileDialog=
 
 ================
 File: src/renderer/src/components/project/MountedTaskView.tsx
@@ -21817,6 +22036,7 @@ type Props = {
   projectDir: string;
   task: TaskData;
   isActive: boolean;
+  isProjectActive: boolean;
   inputHistory: string[];
   shouldFocusPrompt: boolean;
   updateTask: (taskId: string, updates: Partial<TaskData>, useOptimistic?: boolean) => void;
@@ -22046,7 +22266,8 @@ type Props = {
 };
 ⋮----
 // Keep recently-active tasks mounted (LRU) so switching back is instant. The active task is
-// always at the front and therefore never evicted.
+// always at the front and therefore never evicted. In-progress tasks are never evicted
+// either, so a running task stays mounted while other tasks are used.
 ⋮----
 // eslint-disable-next-line no-console
 ⋮----
@@ -22091,6 +22312,8 @@ const initProject = async () =>
 // Startup-on-first-activation: background projects do not load any task until they are first
 // activated, then the configured startup mode is applied once (also serving as a self-healing
 // fallback if the startup race was lost or task creation failed).
+⋮----
+// Track in-progress task ids so the mount pool can protect them from eviction.
 ⋮----
 // Release backend/store state for tasks evicted from the mount pool (mirrors unmount cleanup).
 ⋮----
@@ -22325,14 +22548,14 @@ const handleSwitchToWorktree = () =>
 ⋮----
 const handleCancelCommit = () =>
 ⋮----
-title=
-⋮----
 <Button onClick=
-
 ⋮----
 onChange=
 ⋮----
 <div className="font-medium">
+⋮----
+title=
+⋮----
 
 ================
 File: src/renderer/src/components/project/TaskView.tsx
@@ -22430,6 +22653,7 @@ type Props = {
   updateOptimisticTaskState: (taskId: string, taskState: string) => void;
   inputHistory: string[];
   isActive?: boolean;
+  isProjectActive?: boolean;
   shouldFocusPrompt?: boolean;
   onArchiveTask?: () => void;
   onUnarchiveTask?: () => void;
@@ -23106,6 +23330,8 @@ type Props = {
 const load = async () =>
 ⋮----
 const handleSelectTask = (taskId: string) =>
+⋮----
+messages=
 
 ================
 File: src/renderer/src/components/readonly/ReadonlyTaskSidebar.tsx
@@ -24334,6 +24560,8 @@ const handleConfirm = () =>
 ⋮----
 title=
 ⋮----
+value=
+⋮----
 // Parse the value into an array of shortcuts
 ⋮----
 const handleAddShortcut = () =>
@@ -25430,8 +25658,6 @@ const expandFolders = (treeData: Record<string, TreeItem>, files: ContextFile[])
 const checkChild = (childKey: string | number) =>
 ⋮----
 <Tooltip content=
-⋮----
-onFileDiffClick=
 
 ================
 File: src/renderer/src/components/Workspace/ContextFilesSectionInner.tsx
@@ -25578,6 +25804,10 @@ eq(other: WidgetType): boolean
 ⋮----
 toDOM(): HTMLElement
 ⋮----
+onEdit=
+⋮----
+onRemove=
+⋮----
 destroy(dom: HTMLElement): void
 ⋮----
 ignoreEvent(): boolean
@@ -25597,6 +25827,8 @@ import { MdLibraryAddCheck, MdSave } from 'react-icons/md';
 import { useHotkeys, useHotkeysContext } from 'react-hotkeys-hook';
 import { LanguageDescription } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
+import { openSearchPanel } from '@codemirror/search';
+import { Prec } from '@codemirror/state';
 import { EditorView, GutterMarker, gutter, lineNumbers } from '@codemirror/view';
 import { githubDarkInit } from '@uiw/codemirror-theme-github';
 import CodeMirror, { type Extension } from '@uiw/react-codemirror';
@@ -25984,7 +26216,7 @@ import { SkillDefinition } from '@common/types';
 import { Activity, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HiX } from 'react-icons/hi';
-import { MdOutlinePublic, MdOutlineRefresh } from 'react-icons/md';
+import { MdOutlinePublic, MdOutlineRefresh, MdOutlineSmartToy, MdOutlineTouchApp } from 'react-icons/md';
 import { RiPlayCircleLine, RiRocketLine, RiRobot2Line } from 'react-icons/ri';
 import { VscFileCode } from 'react-icons/vsc';
 import { motion } from 'framer-motion';
@@ -25994,7 +26226,9 @@ import { SectionHeader } from './SectionHeader';
 import { SectionLoading } from './SectionLoading';
 ⋮----
 import { Tooltip } from '@/components/ui/Tooltip';
+import { TriStateCheckbox } from '@/components/common/TriStateCheckbox';
 import { useApi } from '@/contexts/ApiContext';
+import { useProjectSettings } from '@/contexts/ProjectSettingsContext';
 import { useFileEditorStore } from '@/stores/fileEditorStore';
 ⋮----
 className=
@@ -26003,6 +26237,8 @@ className=
 ⋮----
 if (skill.dirPath)
 openFile(baseDir, `$
+⋮----
+
 ⋮----
 onClick=
 
@@ -26151,8 +26387,8 @@ import { clsx } from 'clsx';
 ⋮----
 import { sortFilesByTreeOrder } from './group-files';
 ⋮----
-import { IconButton } from '@/components/common/IconButton';
 import { ModalOverlayLayout } from '@/components/common/ModalOverlayLayout';
+import { IconButton } from '@/components/common/IconButton';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { DiffLineCommentPanel, PierreDiffViewer, PierreLineClickInfo, type DiffComment } from '@/components/common/DiffViewer';
 import { CompactSelect } from '@/components/common/CompactSelect';
@@ -26192,6 +26428,11 @@ type Props = {
   openInWindowUrl?: string;
   openInWindowTitle?: string;
 };
+⋮----
+// Full file context for the current file (single-file view), loaded on demand via the header button.
+// Tracks which file is expanded so switching files collapses automatically.
+⋮----
+// Lazily fetched diff for the current file (single-file view)
 ⋮----
 // Sort each group's files to match the sidebar tree order so the all-files view,
 // navigation and scroll spy agree with the sidebar
@@ -26239,9 +26480,6 @@ const cancelPin = () =>
 ⋮----
 const pinScroll = () =>
 ⋮----
-// Lazily fetched diff for the current file (single-file view)
-⋮----
-// Full file context for the current file (single-file view), loaded on demand via the header button.
 // Tracks which file is expanded so switching files collapses automatically.
 ⋮----
 // Sync currentFile when initialFile prop changes (user clicks a different file)
@@ -26369,8 +26607,6 @@ className=
                               section={'updated' as SectionType}
                               treeData={tree}
                               expandedItems={expanded}
-setExpandedItems=
-⋮----
 setExpandedItems=
 ⋮----
 onClose=
@@ -27390,6 +27626,7 @@ import { useConfiguredHotkeys } from '@/hooks/useConfiguredHotkeys';
 import { invokeAction, registerAction, unregisterAction } from '@/stores/actionsStore';
 import { openSettingsPage } from '@/stores/settingsNavigationStore';
 import { PaletteItem, PaletteItemType, useCommandPaletteStore } from '@/stores/commandPaletteStore';
+import { useTaskSidebarStore } from '@/stores/taskSidebarStore';
 ⋮----
 const buildShortcuts = (hotkeys: ReturnType<typeof useConfiguredHotkeys>): Record<string, string> => (
 ⋮----
@@ -27512,6 +27749,9 @@ import { IconButton } from '@/components/common/IconButton';
 // Remove highlight from previous element
 ⋮----
 const handleKeyDown = (event: KeyboardEvent) =>
+⋮----
+// Ignore the event when disabled without preventing default, so the
+// enabled (visible) instance can still handle it.
 ⋮----
 // Clear previous search when opening
 ⋮----
@@ -28182,6 +28422,98 @@ export const LitellmIcon = ({ width = 64, height = 64, className }: Props) => (
     }}
   >
     <div style={{ fontSize: `${width * 0.6}px` }}>🚅</div>
+  </div>
+);
+
+================
+File: src/renderer/src/icons/LlmApiIcon.tsx
+================
+type Props = {
+  width?: number;
+  height?: number;
+  className?: string;
+};
+⋮----
+export const LlmApiIcon = ({ width = 64, height = 64, className }: Props) => (
+  <div
+    aria-label="LLM API"
+    className={`flex items-center justify-center rounded-md ${className || ''}`}
+    style={{
+      backgroundColor: '#3578FF',
+      height: `${height}px`,
+      width: `${width}px`,
+    }}
+  >
+    <svg viewBox="0 0 40 40" width={width} height={height} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <title>LLM API</title>
+      <path d="M13.4093 18.8597L6.6792 15.0605L13.4093 11.2612L20.1394 15.0605L13.4093 18.8597Z" fill="white" />
+      <path
+        d="M13.2819 10.7731C13.407 10.7405 13.5415 10.7568 13.657 10.822L20.3875 14.6206C20.5461 14.7101 20.6438 14.879 20.6438 15.0611C20.6437 15.2431 20.546 15.4111 20.3875 15.5006L13.657 19.2992C13.5029 19.3861 13.315 19.3862 13.1609 19.2992L6.43042 15.5006C6.27201 15.4111 6.17424 15.2431 6.17407 15.0611C6.17407 14.879 6.27183 14.7102 6.43042 14.6206L13.1609 10.822L13.2819 10.7731ZM7.70661 15.06L13.4084 18.2794L19.1113 15.06L13.4084 11.8407L7.70661 15.06Z"
+        fill="black"
+      />
+      <path d="M6.6792 15.0608V24.5112L13.4093 28.3104V23.7513V18.86L6.6792 15.0608Z" fill="black" />
+      <path
+        d="M12.9046 19.1552L7.18393 15.9259V24.2167L12.9046 27.446V19.1552ZM13.9144 28.3105C13.9144 28.49 13.8187 28.6572 13.6636 28.7477C13.5087 28.838 13.3172 28.8391 13.1609 28.751L6.43042 24.9513C6.272 24.8617 6.17411 24.6939 6.17407 24.5118V15.0614C6.17407 14.8818 6.2698 14.7158 6.42487 14.6253C6.57988 14.5349 6.77133 14.5337 6.92758 14.6219L13.657 18.4205C13.8156 18.5101 13.9144 18.6789 13.9144 18.8611V28.3105Z"
+        fill="black"
+      />
+      <path d="M20.1395 15.0608V24.5112L13.4094 28.3104V23.7513V18.86L20.1395 15.0608Z" fill="white" />
+      <path
+        d="M19.8912 14.622C20.0475 14.5338 20.2388 14.5349 20.3939 14.6254C20.5489 14.7159 20.6447 14.8819 20.6447 15.0615V24.5119C20.6446 24.6941 20.5458 24.8618 20.3872 24.9514L13.6578 28.7511C13.5016 28.8393 13.3101 28.838 13.1551 28.7478C13 28.6572 12.9043 28.4901 12.9043 28.3105V18.8612C12.9043 18.679 13.0021 18.5102 13.1606 18.4206L19.8912 14.622ZM13.9142 27.445L19.6348 24.2167V15.9248L13.9142 19.1553V27.445Z"
+        fill="black"
+      />
+      <path d="M26.8695 18.8597L20.1394 15.0605L26.8695 11.2612L33.5996 15.0605L26.8695 18.8597Z" fill="white" />
+      <path
+        d="M26.7419 10.7731C26.867 10.7405 27.0014 10.7568 27.1169 10.822L33.8475 14.6206C34.0061 14.7101 34.1038 14.879 34.1038 15.0611C34.1036 15.2431 34.006 15.4111 33.8475 15.5006L27.1169 19.2992C26.9629 19.3861 26.775 19.3862 26.6209 19.2992L19.8904 15.5006C19.732 15.4111 19.6342 15.2431 19.634 15.0611C19.634 14.879 19.7318 14.7102 19.8904 14.6206L26.6209 10.822L26.7419 10.7731ZM21.1666 15.06L26.8684 18.2794L32.5713 15.06L26.8684 11.8407L21.1666 15.06Z"
+        fill="black"
+      />
+      <path d="M33.5997 15.0608V24.5112L26.8696 28.3104V23.7513V18.86L33.5997 15.0608Z" fill="white" />
+      <path
+        d="M33.3514 14.622C33.5077 14.5338 33.699 14.5349 33.8541 14.6254C34.0091 14.7159 34.1049 14.8819 34.1049 15.0615V24.5119C34.1048 24.6941 34.006 24.8618 33.8474 24.9514L27.118 28.7511C26.9618 28.8393 26.7703 28.838 26.6153 28.7478C26.4602 28.6572 26.3645 28.4901 26.3645 28.3105V18.8612C26.3645 18.679 26.4623 18.5102 26.6208 18.4206L33.3514 14.622ZM27.3744 27.445L33.095 24.2167V15.9248L27.3744 19.1553V27.445Z"
+        fill="black"
+      />
+      <path d="M13.4093 26.4557L6.6792 22.6564L13.4093 18.8572L20.1394 22.6564L13.4093 26.4557Z" fill="white" />
+      <path
+        d="M13.2819 18.3693C13.407 18.3367 13.5415 18.353 13.657 18.4182L20.3875 22.2168C20.5461 22.3063 20.6438 22.4751 20.6438 22.6573C20.6437 22.8393 20.546 23.0073 20.3875 23.0968L13.657 26.8954C13.5029 26.9823 13.315 26.9824 13.1609 26.8954L6.43042 23.0968C6.27201 23.0073 6.17424 22.8393 6.17407 22.6573C6.17407 22.4752 6.27183 22.3063 6.43042 22.2168L13.1609 18.4182L13.2819 18.3693ZM7.70661 22.6562L13.4084 25.8756L19.1113 22.6562L13.4084 19.4369L7.70661 22.6562Z"
+        fill="black"
+      />
+      <path d="M6.6792 22.657V32.1095L13.4093 35.9088V31.3497V26.4562L6.6792 22.657Z" fill="black" />
+      <path
+        d="M12.9046 26.7514L7.18393 23.5221V31.8151L12.9046 35.0444V26.7514ZM13.9144 35.9089C13.9144 36.0884 13.8186 36.2544 13.6636 36.345C13.5086 36.4355 13.3173 36.4376 13.1609 36.3494L6.43042 32.5497C6.272 32.4601 6.17412 32.2923 6.17407 32.1103V22.6576C6.17407 22.478 6.2698 22.312 6.42487 22.2215C6.57988 22.1311 6.77133 22.1299 6.92758 22.2181L13.657 26.0167C13.8156 26.1063 13.9144 26.2751 13.9144 26.4573V35.9089Z"
+        fill="black"
+      />
+      <path d="M20.1395 22.657V32.1095L13.4094 35.9088V31.3497V26.4562L20.1395 22.657Z" fill="white" />
+      <path
+        d="M19.8912 22.2182C20.0475 22.13 20.2388 22.131 20.3939 22.2215C20.5489 22.3121 20.6447 22.4781 20.6447 22.6577V32.1103C20.6446 32.2925 20.5458 32.4603 20.3872 32.5498L13.6578 36.3495C13.5015 36.4378 13.3101 36.4355 13.1551 36.3451C13 36.2545 12.9043 36.0885 12.9043 35.909V26.4574C12.9043 26.2752 13.0021 26.1064 13.1606 26.0168L19.8912 22.2182ZM13.9142 35.0434L19.6348 31.8152V23.521L13.9142 26.7515V35.0434Z"
+        fill="black"
+      />
+      <path d="M26.8695 26.4557L20.1394 22.6564L26.8695 18.8572L33.5996 22.6564L26.8695 26.4557Z" fill="white" />
+      <path
+        d="M26.7419 18.3693C26.867 18.3367 27.0014 18.353 27.1169 18.4182L33.8475 22.2168C34.0061 22.3063 34.1038 22.4751 34.1038 22.6573C34.1036 22.8393 34.006 23.0073 33.8475 23.0968L27.1169 26.8954C26.9629 26.9823 26.775 26.9824 26.6209 26.8954L19.8904 23.0968C19.732 23.0073 19.6342 22.8393 19.634 22.6573C19.634 22.4752 19.7318 22.3063 19.8904 22.2168L26.6209 18.4182L26.7419 18.3693ZM21.1666 22.6562L26.8684 25.8756L32.5713 22.6562L26.8684 19.4369L21.1666 22.6562Z"
+        fill="black"
+      />
+      <path d="M20.1394 22.657V32.1095L26.8695 35.9088V31.3497V26.4562L20.1394 22.657Z" fill="black" />
+      <path
+        d="M26.3645 26.7514L20.6439 23.5221V31.8151L26.3645 35.0444V26.7514ZM27.3744 35.9089C27.3744 36.0884 27.2786 36.2544 27.1236 36.345C26.9686 36.4355 26.7772 36.4376 26.6209 36.3494L19.8904 32.5497C19.732 32.4601 19.6341 32.2923 19.634 32.1103V22.6576C19.634 22.478 19.7298 22.312 19.8848 22.2215C20.0398 22.1311 20.2313 22.1299 20.3875 22.2181L27.1169 26.0167C27.2756 26.1063 27.3744 26.2751 27.3744 26.4573V35.9089Z"
+        fill="black"
+      />
+      <path d="M33.5997 22.657V32.1095L26.8696 35.9088V31.3497V26.4562L33.5997 22.657Z" fill="white" />
+      <path
+        d="M33.3514 22.2182C33.5077 22.13 33.699 22.131 33.8541 22.2215C34.0091 22.3121 34.1049 22.4781 34.1049 22.6577V32.1103C34.1048 32.2925 34.006 32.4603 33.8474 32.5498L27.118 36.3495C26.9617 36.4378 26.7703 36.4355 26.6153 36.3451C26.4602 36.2545 26.3645 36.0885 26.3645 35.909V26.4574C26.3645 26.2752 26.4623 26.1064 26.6208 26.0168L33.3514 22.2182ZM27.3744 35.0434L33.095 31.8152V23.521L27.3744 26.7515V35.0434Z"
+        fill="black"
+      />
+      <path
+        d="M19.9649 22.2719C24.9857 22.2719 29.0558 18.2018 29.0558 13.181C29.0558 8.16023 24.9857 4.09009 19.9649 4.09009C14.9442 4.09009 10.874 8.16023 10.874 13.181C10.874 18.2018 14.9442 22.2719 19.9649 22.2719Z"
+        fill="white"
+      />
+      <path
+        d="M28.5507 13.1818C28.5507 8.43993 24.7066 4.59579 19.9647 4.59579C15.2229 4.59579 11.3788 8.43993 11.3788 13.1818C11.3788 17.9236 15.2229 21.7678 19.9647 21.7678C24.7066 21.7678 28.5507 17.9236 28.5507 13.1818ZM29.5606 13.1818C29.5606 18.4815 25.2644 22.7776 19.9647 22.7776C14.665 22.7776 10.3689 18.4815 10.3689 13.1818C10.3689 7.88207 14.665 3.58594 19.9647 3.58594C25.2644 3.58594 29.5606 7.88207 29.5606 13.1818Z"
+        fill="black"
+      />
+      <path d="M14.0549 12.8784H17.6913V16.5148H14.0549V12.8784Z" fill="black" />
+      <path d="M15.1921 14.0149H16.5558V16.5149H15.1921V14.0149Z" fill="white" />
+      <path d="M22.2368 12.8784H25.8732V16.5148H22.2368V12.8784Z" fill="black" />
+      <path d="M23.3733 14.0149H24.7369V16.5149H23.3733V14.0149Z" fill="white" />
+    </svg>
   </div>
 );
 
@@ -29332,6 +29664,17 @@ export const releaseTaskFiles = (taskId: string)
 export const useTaskAllFiles = (taskDir: string | undefined)
 ⋮----
 export const useTaskAutocompletionWords = (taskDir: string | undefined)
+
+================
+File: src/renderer/src/stores/taskSidebarStore.ts
+================
+import { devtools } from 'zustand/middleware';
+import { createWithEqualityFn } from 'zustand/traditional';
+⋮----
+type TaskSidebarStore = {
+  showArchived: boolean;
+  setShowArchived: (show: boolean) => void;
+};
 
 ================
 File: src/renderer/src/stores/taskStore.ts
@@ -32452,6 +32795,10 @@ files:
   - '!.aider-desk/*'
   - '!llms.txt'
   - '!packages/*'
+  - '!node_modules/react-icons/**'
+  - '!node_modules/mermaid/**'
+  - '!node_modules/@mermaid-js/**'
+  - '!node_modules/@shikijs/**'
 extraResources:
   - from: ./resources/connector
     to: connector
@@ -32466,6 +32813,7 @@ extraResources:
     filter:
       - '**/*'
 beforePack: scripts/before-pack.js
+afterPack: scripts/after-pack.js
 win:
   executableName: aider-desk
   icon: resources/icon.png
@@ -32536,7 +32884,7 @@ File: package.json
 ================
 {
   "name": "aider-desk",
-  "version": "0.84.0-dev",
+  "version": "0.86.0-dev",
   "description": "Aider desktop application wrapper",
   "main": "./out/main/index.js",
   "author": "Hotovo",
@@ -32565,7 +32913,7 @@ File: package.json
     "build:server": "vite build --config vite.config.server.ts && mkdir -p out/resources && cp -r resources/* out/resources",
     "postbuild:server": "npm rebuild",
     "build": "npm run typecheck && electron-vite build",
-    "postinstall": "electron-builder install-app-deps && node scripts/download-probe.mjs && patch-package && npm run build:extensions",
+    "postinstall": "electron-builder install-app-deps && node node_modules/electron/install.js && node scripts/download-probe.mjs && patch-package && npm run build:extensions",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
@@ -32610,6 +32958,7 @@ File: package.json
     "@codemirror/autocomplete": "6.20.0",
     "@codemirror/language": "6.12.2",
     "@codemirror/language-data": "6.5.2",
+    "@codemirror/search": "6.6.0",
     "@codemirror/state": "6.5.4",
     "@codemirror/view": "6.39.14",
     "@dnd-kit/core": "6.3.1",
@@ -32620,17 +32969,19 @@ File: package.json
     "@electron-toolkit/utils": "4.0.0",
     "@google-cloud/aiplatform": "5.14.0",
     "@google/genai": "1.52.0",
+    "@headless-tree/core": "1.7.0",
+    "@headless-tree/react": "1.7.0",
     "@headlessui/react": "2.2.9",
     "@homebridge/node-pty-prebuilt-multiarch": "0.13.1",
     "@huggingface/transformers": "3.8.1",
     "@lancedb/lancedb": "0.22.3",
-    "@legendapp/list": "3.3.7",
+    "@legendapp/list": "3.3.11",
     "@openrouter/ai-sdk-provider": "3.0.0",
     "@opentelemetry/auto-instrumentations-node": "0.79.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.219.0",
     "@opentelemetry/sdk-node": "0.221.0",
     "@opentelemetry/sdk-trace-base": "2.10.0",
-    "@pierre/diffs": "1.2.12",
+    "@pierre/diffs": "1.4.3",
     "@posthog/ai": "8.4.0",
     "@radix-ui/react-tooltip": "1.2.8",
     "@reactuses/core": "6.1.11",
@@ -32688,8 +33039,6 @@ File: package.json
     "os-name": "6.1.0",
     "patch-package": "8.0.1",
     "posthog-node": "5.29.1",
-    "@headless-tree/core": "1.7.0",
-    "@headless-tree/react": "1.7.0",
     "prismjs": "1.30.0",
     "react-country-flag": "3.1.0",
     "react-datepicker": "8.10.0",
