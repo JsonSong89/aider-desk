@@ -51,8 +51,10 @@ import {
   UserMessageData,
   SwitchToLocalOptions,
   SwitchToWorktreeOptions,
+  TaskGitStatus,
+  TaskGitWorktreeStatus,
   WorkingMode,
-  WorktreeUncommittedFiles,
+  UncommittedFiles,
 } from '@common/types';
 import { parsePartialJson } from 'ai';
 import {
@@ -89,9 +91,12 @@ import type { z } from 'zod';
 import type { ToolContent, JSONValue } from '@common/types';
 import type { RegisteredCommand } from '@/extensions/extension-manager';
 import type { WatchHandle } from '@/file-watcher-manager';
+import type { SmartCompactionPassSelection } from '@/agent/smart-compaction';
+import type { SmartCompactionOptions } from '@common/extensions';
 
 import { ExtensionEventMap, ExtensionManager } from '@/extensions/extension-manager';
 import { getAllFiles, isValidProjectFile } from '@/utils/file-system';
+import { atomicWriteJsonFile } from '@/utils/atomic-write';
 import {
   AIDER_DESK_GLOBAL_RULES_DIR,
   AIDER_DESK_PROJECT_RULES_DIR,
@@ -496,8 +501,7 @@ export class Task {
 
     if (this.task.createdAt) {
       // only save if task is not new
-      await fs.mkdir(path.dirname(this.taskDataPath), { recursive: true });
-      await fs.writeFile(this.taskDataPath, JSON.stringify(this.task, null, 2), 'utf8');
+      await atomicWriteJsonFile(this.taskDataPath, this.task);
     }
 
     this.eventManager.sendTaskUpdated(this.task);
@@ -561,7 +565,7 @@ export class Task {
     }
 
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
     await this.updateAutocompletionData(undefined, true);
   }
 
@@ -629,7 +633,7 @@ export class Task {
         // Create a default worktree for this task
         await this.initWorktree();
         void this.sendUpdatedFilesUpdated();
-        void this.sendWorktreeIntegrationStatusUpdated();
+        void this.sendTaskGitStatusUpdated();
       }
     } else if (workingMode === 'local') {
       // Check if worktree exists and set worktreeEnabled accordingly
@@ -640,7 +644,7 @@ export class Task {
           await this.gitManager.removeWorktree(this.project.baseDir, existingWorktree, true);
         }
         void this.sendUpdatedFilesUpdated();
-        void this.sendWorktreeIntegrationStatusUpdated();
+        void this.sendTaskGitStatusUpdated();
       }
     } else {
       logger.debug('Empty workingMode, setting to local', {
@@ -668,7 +672,7 @@ export class Task {
     const worktreeBaseBranchResolved = await this.resolveMissingWorktreeBaseBranch();
 
     if (worktreeBaseBranchResolved && this.task.worktree) {
-      void this.sendWorktreeIntegrationStatusUpdated();
+      void this.sendTaskGitStatusUpdated();
     }
 
     await this.loadContext();
@@ -942,7 +946,7 @@ export class Task {
 
   public async runPrompt(
     prompt: string,
-    mode: Mode = this.task.currentMode || 'agent',
+    mode: Mode = this.getCurrentMode(),
     addToInputHistory = true,
     userMessageId = uuidv4(),
     sendNotification = true,
@@ -1012,7 +1016,7 @@ export class Task {
     this.addUserMessage(userMessageId, prompt, promptContext, images);
     this.addLogMessage('loading');
 
-    this.telemetryManager.captureRunPrompt(mode);
+    await this.telemetryManager.captureRunPrompt(this, mode);
 
     let responses: ResponseCompletedData[] = [];
     if (!AIDER_MODES.includes(mode)) {
@@ -1248,7 +1252,7 @@ export class Task {
     }
 
     void this.sendRequestContextInfo();
-    void this.sendWorktreeIntegrationStatusUpdated();
+    void this.sendTaskGitStatusUpdated();
     void this.sendUpdatedFilesUpdated();
     void this.sendSkillsUpdated();
 
@@ -1671,7 +1675,7 @@ export class Task {
 
       if (usageReport) {
         logger.debug(`Usage report: ${JSON.stringify(usageReport)}`);
-        this.updateTotalCosts(usageReport);
+        this.updateTotalCosts(usageReport, message.promptContext);
       }
       let data: ResponseCompletedData = {
         type: 'response-completed',
@@ -1966,7 +1970,7 @@ export class Task {
 
   private sendStateUpdated() {
     void this.sendRequestContextInfo();
-    void this.sendWorktreeIntegrationStatusUpdated();
+    void this.sendTaskGitStatusUpdated();
     void this.sendUpdatedFilesUpdated();
     void this.sendContextFilesUpdated();
   }
@@ -2021,7 +2025,7 @@ export class Task {
 
           void this.sendUpdatedFilesUpdated();
           if (this.task.worktree) {
-            void this.sendWorktreeIntegrationStatusUpdated();
+            void this.sendTaskGitStatusUpdated();
           }
 
           logger.info(`Reverted: ${commitMessage} (${commitHash.substring(0, 7)})`);
@@ -2293,6 +2297,14 @@ export class Task {
         resolve(['', undefined]);
       }
     });
+  }
+
+  public getAiderModelsData(): ModelsData | null {
+    return this.aiderManager.getAiderModelsData();
+  }
+
+  public getArchitectModel(): string | null {
+    return this.aiderManager.getArchitectModel();
   }
 
   public updateAiderModels(modelsData: ModelsData) {
@@ -3190,22 +3202,35 @@ export class Task {
 
     // Update total costs when adding the tool message
     if (usageReport) {
-      this.updateTotalCosts(usageReport);
+      this.updateTotalCosts(usageReport, promptContext);
     }
 
     this.eventManager.sendTool(data);
   }
 
-  private updateTotalCosts(usageReport: UsageReportData) {
+  private updateTotalCosts(usageReport: UsageReportData, promptContext?: PromptContext) {
     if (usageReport.agentTotalCost !== undefined) {
       this.task.agentTotalCost = usageReport.agentTotalCost;
 
-      this.updateTokensInfo({
-        agent: {
-          cost: usageReport.agentTotalCost,
-          tokens: usageReport.sentTokens + usageReport.receivedTokens + (usageReport.cacheReadTokens ?? 0),
-        },
-      });
+      if (promptContext?.group) {
+        // Subagent and other grouped runs use their own (different) model/context, so they must
+        // not override the main run's context size — only update the accumulated cost.
+        const existingAgent = this.tokensInfo.agent;
+        this.updateTokensInfo({
+          agent: {
+            ...existingAgent,
+            cost: usageReport.agentTotalCost,
+            tokens: existingAgent?.tokens ?? 0,
+          },
+        });
+      } else {
+        this.updateTokensInfo({
+          agent: {
+            cost: usageReport.agentTotalCost,
+            tokens: usageReport.sentTokens + usageReport.receivedTokens + (usageReport.cacheReadTokens ?? 0),
+          },
+        });
+      }
     }
     if (usageReport.aiderTotalCost) {
       this.task.aiderTotalCost += usageReport.messageCost;
@@ -3481,7 +3506,11 @@ export class Task {
     return skillMessages;
   }
 
-  public async smartCompactConversation(contextMessages?: ContextMessage[], infoMessage = 'Conversation smart-compacted.'): Promise<ContextMessage[]> {
+  public async smartCompactConversation(
+    contextMessages?: ContextMessage[],
+    infoMessage = 'Conversation smart-compacted.',
+    options?: SmartCompactionOptions,
+  ): Promise<ContextMessage[]> {
     if (!contextMessages) {
       contextMessages = await this.contextManager.getContextMessages();
     }
@@ -3494,26 +3523,32 @@ export class Task {
     // backing up the current context before compacting for debugging purposes
     await this.contextManager.backupContext();
 
-    // Determine compaction level based on messages since last compaction
-    const messagesSinceLastCompaction = contextMessages.length - this.lastSmartCompactionMessageCount;
-    if (messagesSinceLastCompaction <= 3) {
-      logger.info('Increasing compaction level to aggressive due to low message count since last compaction.', {
-        messagesSinceLastCompaction,
-        smartCompactionLevel: this.smartCompactionLevel,
-      });
-      this.smartCompactionLevel = Math.min(this.smartCompactionLevel + 1, CompactionLevel.Max) as CompactionLevel;
-    } else if (messagesSinceLastCompaction > 5 && this.smartCompactionLevel > CompactionLevel.One) {
-      logger.info('Decreasing compaction level to mild due to high message count since last compaction.', {
-        messagesSinceLastCompaction,
-      });
-      this.smartCompactionLevel = Math.max(this.smartCompactionLevel - 1, CompactionLevel.One) as CompactionLevel;
+    if (options?.compactionLevel !== undefined) {
+      this.smartCompactionLevel = Math.min(Math.max(Math.round(options.compactionLevel), 1), CompactionLevel.Max) as CompactionLevel;
+    } else if (!options) {
+      // Determine compaction level based on messages since last compaction
+      const messagesSinceLastCompaction = contextMessages.length - this.lastSmartCompactionMessageCount;
+      if (messagesSinceLastCompaction <= 3) {
+        logger.info('Increasing compaction level to aggressive due to low message count since last compaction.', {
+          messagesSinceLastCompaction,
+          smartCompactionLevel: this.smartCompactionLevel,
+        });
+        this.smartCompactionLevel = Math.min(this.smartCompactionLevel + 1, CompactionLevel.Max) as CompactionLevel;
+      } else if (messagesSinceLastCompaction > 5 && this.smartCompactionLevel > CompactionLevel.One) {
+        logger.info('Decreasing compaction level to mild due to high message count since last compaction.', {
+          messagesSinceLastCompaction,
+        });
+        this.smartCompactionLevel = Math.max(this.smartCompactionLevel - 1, CompactionLevel.One) as CompactionLevel;
+      }
+      // else: 4-5 messages since last compaction → keep current level
     }
-    // else: 4-5 messages since last compaction → keep current level
 
     logger.debug('Current compaction level:', {
       smartCompactionLevel: this.smartCompactionLevel,
     });
-    const compactedMessages = await smartCompactMessages(contextMessages, 10, this.smartCompactionLevel);
+    const protectedMessageCount = options?.protectedMessageCount ?? 10;
+    const passes: SmartCompactionPassSelection | undefined = options?.passes;
+    const compactedMessages = await smartCompactMessages(contextMessages, protectedMessageCount, this.smartCompactionLevel, passes);
 
     this.lastSmartCompactionMessageCount = compactedMessages.length;
 
@@ -3844,6 +3879,14 @@ export class Task {
     });
   }, 500);
 
+  public async getEstimatedTokens(): Promise<number> {
+    const agentProfile = await this.getTaskAgentProfile();
+    if (!agentProfile) {
+      return 0;
+    }
+    return this.agent.estimateTokens(this, agentProfile);
+  }
+
   async settingsChanged(oldSettings: SettingsData, newSettings: SettingsData) {
     // For old profile, we can't easily get it from old settings since they're now file-based
     // We'll just use null for old profile comparison
@@ -3949,9 +3992,7 @@ export class Task {
   }
 
   public async writeTodoFile(data: { initialUserPrompt: string; items: TodoItem[] }): Promise<void> {
-    const todoFilePath = this.getTodoFilePath();
-    await fs.mkdir(path.dirname(todoFilePath), { recursive: true });
-    await fs.writeFile(todoFilePath, JSON.stringify(data, null, 2), 'utf8');
+    await atomicWriteJsonFile(this.getTodoFilePath(), data);
   }
 
   public async getTodos(): Promise<TodoItem[]> {
@@ -4297,24 +4338,26 @@ ${error.stderr}`,
     return this.saveTask(updates, !!this.task.createdAt);
   }
 
-  private async sendWorktreeIntegrationStatusUpdated() {
+  private async sendTaskGitStatusUpdated() {
     // These methods are often invoked fire-and-forget (void); never let them produce unhandled rejections
     try {
-      this.eventManager.sendWorktreeIntegrationStatusUpdated(this.project.baseDir, this.taskId, await this.getWorktreeIntegrationStatus());
+      this.eventManager.sendTaskGitStatusUpdated(this.project.baseDir, this.taskId, await this.getTaskGitStatus());
     } catch (error) {
-      logger.error('Failed to send worktree integration status update:', error);
+      logger.error('Failed to send task git status update:', error);
     }
   }
 
   public async sendUpdatedFilesUpdated() {
     try {
       const updatedFiles = await this.getUpdatedFiles();
+      const taskDir = this.getTaskDir();
       logger.debug('Sending updated files', {
         baseDir: this.project.baseDir,
         taskId: this.taskId,
+        taskDir,
         updatedFiles: updatedFiles.map((f) => f.path),
       });
-      this.eventManager.sendUpdatedFilesUpdated(this.project.baseDir, this.taskId, updatedFiles);
+      this.eventManager.sendUpdatedFilesUpdated(this.project.baseDir, this.taskId, taskDir, updatedFiles);
     } catch (error) {
       logger.error('Failed to send updated files update:', error);
     }
@@ -4413,7 +4456,7 @@ ${error.stderr}`,
     }
 
     void this.sendUpdatedFilesUpdated();
-    void this.sendWorktreeIntegrationStatusUpdated();
+    void this.sendTaskGitStatusUpdated();
     await this.updateAutocompletionData(undefined, true);
 
     return true;
@@ -4520,7 +4563,7 @@ ${error.stderr}`,
     }
 
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   public async switchToLocalWorkingMode(options?: SwitchToLocalOptions): Promise<void> {
@@ -4603,7 +4646,7 @@ ${error.stderr}`,
         );
 
         await this.sendUpdatedFilesUpdated();
-        await this.sendWorktreeIntegrationStatusUpdated();
+        await this.sendTaskGitStatusUpdated();
 
         throw error;
       }
@@ -4754,7 +4797,7 @@ ${error.stderr}`,
     await this.updateAutocompletionData(undefined, true);
   }
 
-  public async getLocalUncommittedFiles(): Promise<WorktreeUncommittedFiles> {
+  public async getLocalUncommittedFiles(): Promise<UncommittedFiles> {
     return await this.gitManager.getUncommittedFiles(this.project.baseDir);
   }
 
@@ -4800,7 +4843,7 @@ ${error.stderr}`,
     }
 
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   public async mergeWorktreeToWorktree(targetWorktreeDir: string, includeUncommitted = false): Promise<void> {
@@ -4860,7 +4903,7 @@ ${error.stderr}`,
     }
 
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   public async addFileToGit(filePath: string): Promise<void> {
@@ -4872,7 +4915,7 @@ ${error.stderr}`,
 
     await this.gitManager.addFileToGit(this.getTaskDir(), filePath);
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   public async restoreFile(filePath: string): Promise<void> {
@@ -4884,7 +4927,7 @@ ${error.stderr}`,
 
     await this.gitManager.restoreFile(this.getTaskDir(), filePath);
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   public async generateCommitMessage(filePaths?: string[]): Promise<string> {
@@ -4939,25 +4982,26 @@ ${error.stderr}`,
     return commitMessage.trim();
   }
 
-  public async commitChanges(message: string, amend: boolean, filePaths?: string[]): Promise<void> {
+  public async commitChanges(message: string, amend: boolean, skipGitHooks: boolean, filePaths?: string[]): Promise<void> {
     logger.info('Committing changes', {
       baseDir: this.project.baseDir,
       taskId: this.taskId,
       amend,
     });
 
-    const beforeResult = await this.extensionManager.dispatchEvent('onBeforeCommit', { message, amend }, this.project, this);
+    const beforeResult = await this.extensionManager.dispatchEvent('onBeforeCommit', { message, amend, skipGitHooks }, this.project, this);
     if (beforeResult.blocked) {
       logger.debug('Commit blocked by extension');
       return;
     }
     message = beforeResult.message;
     amend = beforeResult.amend;
+    skipGitHooks = beforeResult.skipGitHooks ?? skipGitHooks;
 
     const taskDir = this.getTaskDir();
-    const committed = await this.gitManager.commitChanges(taskDir, message, amend, filePaths);
+    const committed = await this.gitManager.commitChanges(taskDir, message, amend, skipGitHooks, filePaths);
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
 
     if (committed) {
       await this.extensionManager.dispatchEvent('onAfterCommit', { message, amend }, this.project, this);
@@ -4971,48 +5015,53 @@ ${error.stderr}`,
     this.gitManager.cancelCommitChanges(taskDir);
   }
 
-  public async getWorktreeIntegrationStatus(targetBranch?: string) {
-    if (!this.task.worktree) {
-      return null;
+  public async getTaskGitStatus(targetBranch?: string): Promise<TaskGitStatus | null> {
+    const taskDir = this.getTaskDir();
+    const worktree = this.task.worktree;
+
+    let worktreeStatus: TaskGitWorktreeStatus | undefined;
+    if (worktree) {
+      const effectiveTargetBranch =
+        targetBranch || worktree.baseBranch || (await this.gitManager.getProjectMainBranch(this.project.baseDir).catch(() => undefined));
+      if (!effectiveTargetBranch) {
+        logger.warn('Unable to determine target branch for worktree integration status, skipping check', {
+          baseDir: this.project.baseDir,
+          taskId: this.taskId,
+        });
+        return null;
+      }
+      const worktreePath = worktree.path;
+      if (!(await isDirectory(worktreePath))) {
+        logger.debug(`Worktree ${worktreePath} no longer exists, skipping integration status check`);
+        return null;
+      }
+      const settings = this.store.getSettings();
+      const symlinkFolders = settings.taskSettings.worktreeSymlinkFolders || [];
+
+      const [unmergedWork, predictedConflicts] = await Promise.all([
+        this.gitManager.checkWorktreeForUnmergedWork(this.project.baseDir, worktreePath, effectiveTargetBranch, symlinkFolders),
+        this.gitManager.checkForRebaseConflicts(worktreePath, effectiveTargetBranch),
+      ]);
+
+      worktreeStatus = {
+        baseBranch: worktree.baseBranch || '',
+        targetBranch: effectiveTargetBranch,
+        aheadCommits: {
+          count: unmergedWork.unmergedCommitCount,
+          commits: unmergedWork.unmergedCommits,
+        },
+        predictedConflicts,
+      };
     }
 
-    const effectiveTargetBranch =
-      targetBranch || this.task.worktree.baseBranch || (await this.gitManager.getProjectMainBranch(this.project.baseDir).catch(() => undefined));
-    if (!effectiveTargetBranch) {
-      logger.warn('Unable to determine target branch for worktree integration status, skipping check', {
-        baseDir: this.project.baseDir,
-        taskId: this.taskId,
-      });
-      return null;
-    }
-    const worktreePath = this.task.worktree.path;
-    if (!(await isDirectory(worktreePath))) {
-      logger.debug(`Worktree ${worktreePath} no longer exists, skipping integration status check`);
-      return null;
-    }
-    const settings = this.store.getSettings();
-    const symlinkFolders = settings.taskSettings.worktreeSymlinkFolders || [];
-
-    const [unmergedWork, predictedConflicts, rebaseState] = await Promise.all([
-      this.gitManager.checkWorktreeForUnmergedWork(this.project.baseDir, worktreePath, effectiveTargetBranch, symlinkFolders),
-      this.gitManager.checkForRebaseConflicts(worktreePath, effectiveTargetBranch),
-      this.gitManager.getRebaseState(worktreePath),
-    ]);
+    const rebaseState = await this.gitManager.getRebaseState(taskDir);
+    const uncommittedFiles = await this.gitManager.getUncommittedFiles(taskDir);
 
     return {
-      currentBranch: this.task.worktree.branch || '',
-      baseBranch: this.task.worktree.baseBranch || '',
-      targetBranch: effectiveTargetBranch,
-      aheadCommits: {
-        count: unmergedWork.unmergedCommitCount,
-        commits: unmergedWork.unmergedCommits,
-      },
-      uncommittedFiles: {
-        count: unmergedWork.uncommittedFiles?.length || 0,
-        files: unmergedWork.uncommittedFiles || [],
-      },
-      predictedConflicts,
+      currentBranch: worktree?.branch || (await this.gitManager.getProjectMainBranch(taskDir).catch(() => '')),
+      uncommittedFiles,
       rebaseState,
+      worktree: worktreeStatus,
     };
   }
 
@@ -5102,22 +5151,18 @@ ${error.stderr}`,
         // keep the marker if we cannot determine the rebase state
       }
     } finally {
-      await this.sendWorktreeIntegrationStatusUpdated();
+      await this.sendTaskGitStatusUpdated();
       await this.sendUpdatedFilesUpdated();
     }
   }
 
-  public async abortWorktreeRebase(): Promise<void> {
-    if (!this.task.worktree) {
-      throw new Error('No worktree exists for this task');
-    }
-
+  public async abortRebase(): Promise<void> {
     await this.waitForCurrentPromptToFinish();
 
     try {
       this.addLogMessage('loading', 'Aborting rebase...');
-      await this.gitManager.abortRebase(this.task.worktree.path);
-      if (this.task.worktree.pendingRebaseFromBranch) {
+      await this.gitManager.abortRebase(this.getTaskDir());
+      if (this.task.worktree?.pendingRebaseFromBranch) {
         await this.saveTask({ worktree: { ...this.task.worktree, pendingRebaseFromBranch: undefined } });
       }
       this.addLogMessage('info', 'Rebase aborted', true);
@@ -5131,7 +5176,7 @@ ${error.stderr}`,
     }
 
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   public async renameBranch(newBranchName: string): Promise<void> {
@@ -5152,7 +5197,7 @@ ${error.stderr}`,
       const actualBranchName = await this.gitManager.renameBranch(this.project.baseDir, oldBranchName, newBranchName);
       this.task.worktree.branch = actualBranchName;
       await this.saveTask({ worktree: this.task.worktree });
-      void this.sendWorktreeIntegrationStatusUpdated();
+      void this.sendTaskGitStatusUpdated();
     } else {
       const branches = await this.gitManager.listBranches(this.project.baseDir);
       const currentBranch = branches.find((b) => b.isCurrent)?.name;
@@ -5180,7 +5225,7 @@ ${error.stderr}`,
   public async initializeGitRepository(): Promise<void> {
     await this.gitManager.initRepository(this.project.baseDir);
     void this.sendUpdatedFilesUpdated();
-    void this.sendWorktreeIntegrationStatusUpdated();
+    void this.sendTaskGitStatusUpdated();
   }
 
   public async getSyncCommits(targetBranch?: string): Promise<GitSyncCommits> {
@@ -5247,7 +5292,7 @@ ${error.stderr}`,
       }
       throw error;
     } finally {
-      void this.sendWorktreeIntegrationStatusUpdated();
+      void this.sendTaskGitStatusUpdated();
     }
   }
 
@@ -5381,7 +5426,7 @@ ${error.stderr}`,
       await this.saveTask({ state: previousTaskState });
     }
 
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   private isConflictError(error: unknown): boolean {
@@ -5515,35 +5560,33 @@ ${error.stderr}`,
     }
   }
 
-  public async continueWorktreeRebase(): Promise<void> {
-    if (!this.task.worktree) {
-      throw new Error('No worktree exists for this task');
-    }
-
-    const pendingFromBranch = this.task.worktree.pendingRebaseFromBranch;
+  public async continueRebase(): Promise<void> {
+    const pendingFromBranch = this.task.worktree?.pendingRebaseFromBranch;
 
     await this.waitForCurrentPromptToFinish();
 
     try {
       this.addLogMessage('loading', 'Continuing rebase...');
-      const { ontoCommit, ontoBranch } = await this.gitManager.continueRebase(this.task.worktree.path);
+      const { ontoCommit, ontoBranch } = await this.gitManager.continueRebase(this.getTaskDir());
 
-      if (ontoCommit) {
-        await this.saveTask({
-          lastMergeState: undefined,
-          worktree: {
-            ...this.task.worktree,
-            baseCommit: ontoCommit,
-            baseBranch: pendingFromBranch || ontoBranch || this.task.worktree.baseBranch,
-            pendingRebaseFromBranch: undefined,
-          },
-        });
-      } else {
-        // Clear any remaining merge state after successful rebase continuation
-        await this.saveTask({
-          lastMergeState: undefined,
-          worktree: { ...this.task.worktree, pendingRebaseFromBranch: undefined },
-        });
+      if (this.task.worktree) {
+        if (ontoCommit) {
+          await this.saveTask({
+            lastMergeState: undefined,
+            worktree: {
+              ...this.task.worktree,
+              baseCommit: ontoCommit,
+              baseBranch: pendingFromBranch || ontoBranch || this.task.worktree.baseBranch,
+              pendingRebaseFromBranch: undefined,
+            },
+          });
+        } else {
+          // Clear any remaining merge state after successful rebase continuation
+          await this.saveTask({
+            lastMergeState: undefined,
+            worktree: { ...this.task.worktree, pendingRebaseFromBranch: undefined },
+          });
+        }
       }
 
       this.addLogMessage('info', 'Rebase completed', true);
@@ -5568,7 +5611,7 @@ ${error.stderr}`,
     }
 
     await this.sendUpdatedFilesUpdated();
-    await this.sendWorktreeIntegrationStatusUpdated();
+    await this.sendTaskGitStatusUpdated();
   }
 
   public async duplicateFrom(sourceTask: Task): Promise<void> {

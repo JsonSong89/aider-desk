@@ -128,7 +128,32 @@
       "aider": "Aider",
       "agent": "AI Agent",
       "providers": "Providers",
-      "finish": "Finish"
+      "finish": "Finish",
+      "choosePath": "Choose Path",
+      "configure": "Configure"
+    },
+    "choice": {
+      "title": "How will you use AiderDesk?",
+      "description": "This tailors your setup and sets your default mode. You can change it anytime in Settings → General.",
+      "recommended": "Recommended",
+      "agent": {
+        "title": "Agent-first",
+        "subtitle": "Default",
+        "description": "Autonomous agent with full tool access. Describe the outcome — it plans and executes.",
+        "feature1": "Multi-step planning and file edits",
+        "feature2": "Power tools, MCP servers and skills",
+        "feature3": "Aider modes still one switch away",
+        "modeLabel": "Sets default mode → Agent"
+      },
+      "aider": {
+        "title": "Coming from Aider",
+        "subtitle": "Aider modes primary",
+        "description": "You already know aider — keep Code, Ask and Architect front and center.",
+        "feature1": "Aider settings set up in-line",
+        "feature2": "Edit formats, auto-commits, env vars",
+        "feature3": "Agent mode available when you want it",
+        "modeLabel": "Sets default mode → Code"
+      }
     },
     "language": {
       "title": "Choose Your Language",
@@ -145,7 +170,8 @@
       "configureLater": "You can also do that later in the Settings.",
       "fineTuneTitle": "Fine-Tune Aider (Optional)",
       "fineTuneDescription": "Advanced users can configure additional Aider settings and environment variables. This step is completely optional and can be safely skipped.",
-      "fineTuneNote": "Note: These settings are for advanced users who want to customize Aider's behavior. Most users can skip this step and configure these later in Settings if needed."
+      "fineTuneNote": "Note: These settings are for advanced users who want to customize Aider's behavior. Most users can skip this step and configure these later in Settings if needed.",
+      "agentSwitchNote": "Tip: Agent mode is one switch away — use the mode picker above the prompt anytime you want full autonomy."
     },
     "providers": {
       "title": "Model Providers",
@@ -192,7 +218,24 @@
       "title": "Setup Complete!",
       "description": "Congratulations! You've successfully set up AiderDesk. You're now ready to steer AI-assisted development with full transparency and control.",
       "ready": "Click 'Finish Setup' to begin your coding journey.",
-      "success": "Onboarding completed successfully! Welcome to AiderDesk."
+      "success": "Onboarding completed successfully! Welcome to AiderDesk.",
+      "mode": "New tasks will start in {{mode}} mode — you can change this anytime in Settings → General.",
+      "modeAgent": "Agent",
+      "modeCode": "Code",
+      "customizeTitle": "Make AiderDesk yours",
+      "customizeDescription": "There's more to explore — a few places worth a look:",
+      "general": {
+        "title": "Settings → General",
+        "description": "Appearance, language, default mode and startup behavior"
+      },
+      "mcp": {
+        "title": "Settings → MCP",
+        "description": "Connect MCP servers to give the agent more tools"
+      },
+      "tasks": {
+        "title": "Settings → Tasks",
+        "description": "Task behavior, automation and smart states"
+      }
     },
     "errors": {
       "navigationFailed": "Navigation failed. Please try again.",
@@ -695,6 +738,11 @@
       "autoGenerateTaskNameTooltip": "When enabled, the model generates a concise task name from your prompt. When disabled, the first 5 words of your prompt will be used as the task name.",
       "showTaskStateActions": "Show Task State Actions",
       "showTaskStateActionsTooltip": "When enabled, task state actions are displayed at the bottom of messages. Disable to hide these actions.",
+      "defaultTaskMode": "Default Mode for New Tasks",
+      "defaultTaskModeTooltip": "Used when a new task is created in a project that already has tasks. 'Use latest task's mode' keeps the mode from the most recent task.",
+      "defaultTaskModeLast": "Use latest task's mode",
+      "defaultProjectMode": "Default Mode for New Projects",
+      "defaultProjectModeTooltip": "Used as the initial mode for a project's first task (when there are no previous tasks to inherit from). Set automatically during onboarding.",
       "contextManagement": "Context Management",
       "contextCompactingThreshold": "Auto-compact Threshold",
       "contextCompactingThresholdTooltip": "When token usage exceeds this threshold, the conversation will be automatically managed according to the selected compaction type. Set to 0 to disable.",
@@ -800,6 +848,9 @@
       "includeFilesTooltip": "Adds content of context files into the chat of agent. This will increase token usage.",
       "includeRepoMap": "Include repository map",
       "includeRepoMapTooltip": "Include the repository map from Aider in the agent's context. This can help the agent understand the project structure, but will increase token usage.",
+      "memory": "Memory",
+      "useAgentMemoryScope": "Isolate memories by agent",
+      "useAgentMemoryScopeTooltip": "When enabled, this agent stores and retrieves memories in its own scope instead of the project directory. These memories are shared across all projects where this agent is used.",
       "autonomyMode": "Autonomy mode",
       "override": "Override",
       "clearOverride": "Clear Override",
@@ -821,6 +872,7 @@
       "envVarFoundPlaceholder": "Found in: {{source}}",
       "createNewProfile": "Create New",
       "genericTools": "Tools",
+      "extensionTools": "Extension tools",
       "noGenericToolsConfigured": "No tools configured.",
       "todoTools": "Todo tools",
       "includeTodoToolsTooltip": "Allows the agent to manage a list of todo items, including setting, getting, updating, and clearing them.",
@@ -1045,7 +1097,8 @@
       "viewModeFull": "Full",
       "viewModeCompact": "Compact",
       "fullMessageRendering": "Use full message rendering (Legacy)",
-      "fullMessageRenderingTooltip": "Renders all messages in the DOM without virtualization. May impact performance with large conversation histories."
+      "fullMessageRenderingTooltip": "Renders all messages in the DOM without virtualization. May impact performance with large conversation histories.",
+      "messageMap": "Show message map"
     },
     "memory": {
       "configuration": "Configuration",
@@ -1072,8 +1125,8 @@
       },
       "memories": {
         "title": "Memories",
-        "project": "Project",
-        "allProjects": "All projects",
+        "scope": "Scope",
+        "all": "All",
         "loading": "Loading memories...",
         "empty": "No memories found.",
         "delete": "Delete",
@@ -1082,6 +1135,9 @@
         "deleteDialogText": "Delete memory",
         "deleteProjectDialogTitle": "Delete project memories",
         "deleteProjectDialogText": "Delete all memories for project",
+        "deleteAllForAgent": "Delete all for agent",
+        "deleteAgentMemoriesDialogTitle": "Delete agent memories",
+        "deleteAgentMemoriesDialogText": "Delete all memories for agent",
         "projectId": "projectId",
         "id": "id"
       }
@@ -1116,6 +1172,14 @@
     "scrollToBottom": "Scroll to bottom",
     "previousUserMessage": "Previous user message",
     "nextUserMessage": "Next user message",
+    "map": {
+      "title": "Message map",
+      "turn": "Turn {{number}}",
+      "userPrompt": "Your prompt",
+      "assistantReply": "Last reply",
+      "emptyPreview": "No text preview",
+      "goToMessage": "Go to {{label}} in turn {{number}}"
+    },
     "messageBar": "Message Bar",
     "execute": "Execute",
     "resume": "Resume",
@@ -1297,6 +1361,8 @@
     "generateMessage": "Generate Message",
     "amend": "Amend",
     "amendTooltip": "Amend the last commit instead of creating a new one",
+    "skipGitHooks": "Skip Git hooks",
+    "skipGitHooksTooltip": "Create the commit without running Git hooks (git commit --no-verify)",
     "commit": "Commit",
     "generatingMessage": "Generating...",
     "committing": "Committing...",
@@ -1893,8 +1959,7 @@
     "tabLabel": "Terminal",
     "copyOutput": "Copy terminal output to prompt",
     "minimize": "Minimize terminal",
-    "addTerminal": "Add new terminal",
-    "restartHint": "Session ended. Press any key to restart."
+    "addTerminal": "Add new terminal"
   },
   "contextMenu": {
     "copy": "Copy",

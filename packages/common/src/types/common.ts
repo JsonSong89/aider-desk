@@ -45,17 +45,17 @@ export const MergeStateSchema = z.object({
 
 export type MergeState = z.infer<typeof MergeStateSchema>;
 
-export interface WorktreeAheadCommits {
+export interface GitAheadCommits {
   count: number;
   commits: string[];
 }
 
 export interface GitSyncCommits {
-  outgoing: WorktreeAheadCommits;
-  incoming: WorktreeAheadCommits;
+  outgoing: GitAheadCommits;
+  incoming: GitAheadCommits;
 }
 
-export interface WorktreeUncommittedFiles {
+export interface UncommittedFiles {
   count: number;
   files: string[];
 }
@@ -74,12 +74,10 @@ export interface ConflictResolutionFileContext {
   current?: string;
 }
 
-export interface WorktreeIntegrationStatus {
-  currentBranch: string;
+export interface TaskGitWorktreeStatus {
   baseBranch: string;
   targetBranch: string;
-  aheadCommits: WorktreeAheadCommits;
-  uncommittedFiles: WorktreeUncommittedFiles;
+  aheadCommits: GitAheadCommits;
   predictedConflicts: {
     hasConflicts: boolean;
     conflictingFiles?: string[];
@@ -89,20 +87,26 @@ export interface WorktreeIntegrationStatus {
     };
     canAutoMerge?: boolean;
   };
-  rebaseState: RebaseState;
 }
 
-export interface WorktreeIntegrationStatusUpdatedData {
+export interface TaskGitStatus {
+  currentBranch: string;
+  uncommittedFiles: UncommittedFiles;
+  rebaseState: RebaseState;
+  worktree?: TaskGitWorktreeStatus;
+}
+
+export interface TaskGitStatusUpdatedData {
   baseDir: string;
   taskId: string;
-  status: WorktreeIntegrationStatus | null;
+  status: TaskGitStatus | null;
 }
 
 export interface ModeDefinition {
   name: Mode;
   label: string;
   description?: string;
-  /** Icon name from react-icons (e.g., 'GoCodeReview', 'FiLayers') */
+  /** Full react-icons component name including pack prefix (e.g., 'FiTerminal', 'GoCodeReview') */
   icon?: string;
 }
 
@@ -338,6 +342,7 @@ export interface UpdatedFile {
 export interface UpdatedFilesUpdatedData {
   baseDir: string;
   taskId: string;
+  taskDir: string;
   files: UpdatedFile[];
 }
 
@@ -461,6 +466,7 @@ export interface ReadonlyDisplaySettings {
   renderMarkdown: boolean;
   fullMessageRendering: boolean;
   messageViewMode?: MessageViewMode;
+  showMessageMap?: boolean;
   enableExtensionUi: boolean;
 }
 
@@ -574,6 +580,7 @@ export interface AgentProfile {
   useTaskTools: boolean;
   useMemoryTools: boolean;
   useSkillsTools: boolean;
+  useAgentMemoryScope?: boolean; // when true, memory tools use a per-agent scope instead of the project directory
   useExtensionTools: boolean;
   disabledExtensionTools: string[]; // Array of extension IDs whose tools are disabled
   customInstructions: string;
@@ -736,6 +743,8 @@ export interface TaskSettings {
   taskStateModel?: string | null;
   commitMessageModel?: string | null;
   defaultWorkingMode: WorkingMode;
+  defaultTaskMode?: Mode | 'last';
+  defaultProjectMode?: Mode;
   worktreeBranchPrefix: string;
   renameBranchOnNameGeneration: boolean;
 }
@@ -783,6 +792,7 @@ export interface SettingsData {
   aiderDeskAutoUpdate: boolean;
   diffViewMode?: DiffViewMode;
   messageViewMode?: MessageViewMode;
+  showMessageMap?: boolean;
   aider: {
     options: string;
     environmentVariables: string;
@@ -1297,6 +1307,10 @@ export interface ExtensionUIRefreshData {
   componentId?: string;
   taskId?: string;
   reloadComponents?: boolean;
+}
+
+export interface ExtensionsUpdatedData {
+  projectDir?: string;
 }
 
 export type OpenDialogProperty = 'openFile' | 'openDirectory' | 'multiSelections';

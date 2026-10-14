@@ -13,8 +13,8 @@ import {
   UpdatedFilesGroupMode,
   WorkingMode,
   Worktree,
-  WorktreeAheadCommits,
-  WorktreeUncommittedFiles,
+  GitAheadCommits,
+  UncommittedFiles,
 } from '@common/types';
 // @ts-expect-error istextorbinary library does not provide TypeScript definitions
 import { isBinary } from 'istextorbinary';
@@ -1241,33 +1241,35 @@ export class GitManager {
   }
 
   async abortRebase(worktreePath: string): Promise<void> {
-    try {
-      // Check if we're in the middle of a rebase
-      const statusCommand = 'git status --porcelain=v1';
-      await execWithShellPath(statusCommand, { cwd: worktreePath });
+    await withLock(`git-rebase-${worktreePath}`, async () => {
+      try {
+        // Check if we're in the middle of a rebase
+        const statusCommand = 'git status --porcelain=v1';
+        await execWithShellPath(statusCommand, { cwd: worktreePath });
 
-      // Abort the rebase
-      const command = 'git rebase --abort';
-      const { stderr } = await execWithShellPath(command, {
-        cwd: worktreePath,
-      });
+        // Abort the rebase
+        const command = 'git rebase --abort';
+        const { stdout: abortStdout, stderr: abortStderr } = await execWithShellPath(command, {
+          cwd: worktreePath,
+        });
 
-      if (stderr && !stderr.includes('No rebase in progress')) {
-        throw new Error(`Failed to abort rebase: ${stderr}`);
+        if (abortStderr && !abortStderr.includes('No rebase in progress')) {
+          throw new Error(`Failed to abort rebase: ${abortStderr}`);
+        }
+
+        // Always try to reset temporary commit if it exists
+        await this.resetTempCommitIfExists(worktreePath);
+        logger.info(`Successfully aborted rebase: ${abortStdout}`);
+      } catch (error: unknown) {
+        const err = error as Error;
+        logger.error('Error aborting rebase:', err);
+        throw new Error(`Failed to abort rebase: ${err.message}`);
       }
-
-      // Always try to reset temporary commit if it exists
-      await this.resetTempCommitIfExists(worktreePath);
-      logger.info('Successfully handled temporary commit after abort rebase');
-    } catch (error: unknown) {
-      const err = error as Error;
-      logger.error('Error aborting rebase:', err);
-      throw new Error(`Failed to abort rebase: ${err.message}`);
-    }
+    });
   }
 
   async continueRebase(worktreePath: string): Promise<{ ontoCommit?: string; ontoBranch?: string }> {
-    return await withLock(`git-rebase-continue-${worktreePath}`, async () => {
+    return await withLock(`git-rebase-${worktreePath}`, async () => {
       const executedCommands: string[] = [];
       let lastOutput = '';
 
@@ -2407,7 +2409,7 @@ export class GitManager {
     }
   }
 
-  async getAheadCommits(worktreePath: string, targetBranch: string): Promise<WorktreeAheadCommits> {
+  async getAheadCommits(worktreePath: string, targetBranch: string): Promise<GitAheadCommits> {
     const { stdout } = await execWithShellPath(`git log --oneline ${targetBranch}..HEAD`, { cwd: worktreePath });
     const commits = stdout
       .trim()
@@ -2486,7 +2488,7 @@ export class GitManager {
     }
   }
 
-  async getUncommittedFiles(worktreePath: string): Promise<WorktreeUncommittedFiles> {
+  async getUncommittedFiles(worktreePath: string): Promise<UncommittedFiles> {
     if (!(await this.ensureGitRepository(worktreePath, 'get uncommitted files'))) {
       return { count: 0, files: [] };
     }
@@ -3111,7 +3113,17 @@ export class GitManager {
       await execWithShellPath(`git add -- "${escapedPath}"`, { cwd: worktreePath });
     } catch (error) {
       logger.debug(`Failed to stage ${filePath}, retrying with -A -f (file may be deleted or gitignored):`, error);
-      await execWithShellPath(`git add -A -f -- "${escapedPath}"`, { cwd: worktreePath });
+      try {
+        await execWithShellPath(`git add -A -f -- "${escapedPath}"`, { cwd: worktreePath });
+      } catch (retryError) {
+        if (retryError instanceof Error && retryError.message.includes('did not match any files')) {
+          // The file exists neither on disk nor in the index (e.g. an already-staged deletion):
+          // there is nothing to stage, so treat it as a no-op instead of failing
+          logger.info(`Nothing to stage for ${filePath} (file deleted and not in index), skipping`);
+          return;
+        }
+        throw retryError;
+      }
     }
   }
 
@@ -3271,7 +3283,7 @@ export class GitManager {
     return true;
   }
 
-  async commitChanges(worktreePath: string, message: string, amend: boolean, filePaths?: string[]): Promise<boolean> {
+  async commitChanges(worktreePath: string, message: string, amend: boolean, skipGitHooks: boolean, filePaths?: string[]): Promise<boolean> {
     if (!(await this.ensureGitRepository(worktreePath, 'commit changes'))) {
       return false;
     }
@@ -3281,7 +3293,7 @@ export class GitManager {
     const options = { cwd: worktreePath, signal: cancelController.signal, killSignal: 'SIGINT' as const };
 
     try {
-      logger.info(`Committing changes${amend ? ' (amend)' : ''}`, { worktreePath });
+      logger.info(`Committing changes${amend ? ' (amend)' : ''}${skipGitHooks ? ' (skip git hooks)' : ''}`, { worktreePath });
 
       // Get the list of updated files (unstaged changes that are shown in the UI)
       const updatedFiles = await this.getUpdatedFiles(worktreePath);
@@ -3327,7 +3339,18 @@ export class GitManager {
             // directory-traversal exclusions like .aider* ignoring .aider-desk/rules
             // despite a negation pattern)
             logger.debug(`Failed to stage ${file.path}, retrying with -A -f (file may be deleted or gitignored):`, error);
-            await execWithShellPath(`git add -A -f -- "${escapedPath}"`, options);
+            try {
+              await execWithShellPath(`git add -A -f -- "${escapedPath}"`, options);
+            } catch (retryError) {
+              if (retryError instanceof Error && retryError.message.includes('did not match any files')) {
+                // The file exists neither on disk nor in the index (e.g. an already-staged
+                // deletion): there is nothing to stage, the commit picks up the staged
+                // deletion from the index, so skip instead of aborting the commit
+                logger.info(`Nothing to stage for ${file.path} (file deleted and not in index), skipping`);
+                continue;
+              }
+              throw retryError;
+            }
           }
         }
         if (filesToStage.length > 0) {
@@ -3343,8 +3366,10 @@ export class GitManager {
       // Escape the commit message for shell
       const escapedMessage = message.replace(/"/g, '\\"');
       const amendFlag = amend ? ' --amend' : '';
+      const noVerifyFlag = skipGitHooks ? ' --no-verify' : '';
       // If amending and message is empty, use --no-edit to keep previous message
-      let commitCommand = amend && !message.trim() ? 'git commit --amend --no-edit' : `git commit${amendFlag} -m "${escapedMessage}"`;
+      let commitCommand =
+        amend && !message.trim() ? `git commit --amend${noVerifyFlag} --no-edit` : `git commit${amendFlag}${noVerifyFlag} -m "${escapedMessage}"`;
       // When a file selection is provided, commit only those paths (--only pathspec form).
       // Plain `git commit` would also include any other files already staged in the index,
       // which breaks partial commits when edited files are left staged.
@@ -3353,7 +3378,7 @@ export class GitManager {
       }
       await execWithShellPath(commitCommand, options);
 
-      logger.info(`Successfully committed changes${amend ? ' (amended)' : ''}`);
+      logger.info(`Successfully committed changes${amend ? ' (amended)' : ''}${skipGitHooks ? ' (hooks skipped)' : ''}`);
       return true;
     } catch (error) {
       if (isAbortError(error)) {
